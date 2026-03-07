@@ -39,3 +39,8 @@ See `ARCHITECTURE.md` for structure and quality standards.
 GitHub Actions runs `ruff`, `mypy`, and `pytest` on every pull request
 and on every push to `master` (including merged PRs).
 
+## AI contributor policy
+
+AI coding agents must run the full quality gate before committing.
+See `AGENTS.md` and `CONTRIBUTING.md` for mandatory rules and
+hook installation.
