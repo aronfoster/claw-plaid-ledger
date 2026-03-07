@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import cast
 
 import typer
+from claw_plaid_ledger.config import ConfigError, load_config
+from claw_plaid_ledger.db import initialize_database
 
 app = typer.Typer(
     help_text=(
@@ -24,6 +26,19 @@ def doctor(
         return
 
     typer.echo("doctor: basic checks passed")
+
+
+@app.command()
+def init_db() -> None:
+    """Create the SQLite database file and initialize schema."""
+    try:
+        config = load_config()
+    except ConfigError as error:
+        typer.echo(f"init-db: {error}")
+        raise SystemExit(2) from error
+
+    initialize_database(config.db_path)
+    typer.echo(f"init-db: initialized database at {config.db_path}")
 
 
 def main() -> None:
