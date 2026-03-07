@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -117,19 +117,22 @@ def test_transactions_sync_builds_request_and_calls_sdk(
         captured["cursor"] = cursor
         return {"access_token": access_token, "cursor": cursor}
 
+    sentinel_response = object()
+
     class FakeClient:
-        def transactions_sync(self, request: dict[str, Any]) -> str:
+        def transactions_sync(self, request: dict[str, Any]) -> object:
             captured["request"] = request
-            return "sync-response"
+            return sentinel_response
 
     monkeypatch.setattr(
         "claw_plaid_ledger.plaid_client.TransactionsSyncRequest",
         fake_request,
     )
 
-    result = transactions_sync(FakeClient(), "access-token", None)
+    client = cast("Any", FakeClient())
+    result = transactions_sync(client, "access-token", None)
 
-    assert result == "sync-response"
+    assert result is sentinel_response
     assert captured == {
         "access_token": "access-token",
         "cursor": None,

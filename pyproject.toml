@@ -61,7 +61,7 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = true
 warn_unused_configs = true
-mypy_path = ["src"]
+mypy_path = ["src", "typings"]
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]

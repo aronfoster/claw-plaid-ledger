@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from plaid import (  # type: ignore[import-untyped]
+from plaid import (
     ApiClient,
     Configuration,
     Environment,
 )
-from plaid.api import plaid_api  # type: ignore[import-untyped]
-from plaid.model.transactions_sync_request import (  # type: ignore[import-untyped]
+from plaid.api import plaid_api
+from plaid.model.transactions_sync_request import (
     TransactionsSyncRequest,
 )
 
 if TYPE_CHECKING:
-    from plaid.model.transactions_sync_response import (  # type: ignore[import-untyped]
+    from plaid.model.transactions_sync_response import (
         TransactionsSyncResponse,
     )
 
