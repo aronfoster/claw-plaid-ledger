@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 CREATE TABLE IF NOT EXISTS sync_state (
     id INTEGER PRIMARY KEY,
+    item_id TEXT NOT NULL UNIQUE,
     cursor TEXT,
-    updated_at TEXT NOT NULL
+    last_synced_at TEXT
 );
