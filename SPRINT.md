@@ -1,10 +1,16 @@
 # Sprint 1
 
 ## Sprint goal
-Establish the minimum vertical slice: import transactions from Plaid into SQLite.
+
+Establish the minimum vertical slice: import transactions from Plaid into
+SQLite.
 
 ## In progress
-- [ ] Define project layout
+
+- [x] Define project layout
+- [x] Establish Python 3.12 + uv tooling baseline
+- [x] Add Typer CLI entrypoint with `doctor` command
+- [x] Configure strict quality tooling (ruff, mypy, pytest)
 - [ ] Add config loader
 - [ ] Create SQLite schema
 - [ ] Implement initial Plaid client wrapper
@@ -13,6 +19,7 @@ Establish the minimum vertical slice: import transactions from Plaid into SQLite
 - [ ] Add tests for schema and sync state
 
 ## Acceptance criteria
+
 - User can configure Plaid credentials locally
 - Running sync creates a SQLite DB
 - Transactions are stored with stable unique IDs
@@ -20,6 +27,7 @@ Establish the minimum vertical slice: import transactions from Plaid into SQLite
 - Re-running sync does not duplicate transactions
 
 ## Deferred
+
 - Markdown exports
 - OpenClaw wake-up
 - Merchant rules
