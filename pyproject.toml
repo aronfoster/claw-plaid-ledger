@@ -1,0 +1,70 @@
+[project]
+name = "claw-plaid-ledger"
+version = "0.1.0"
+description = "Local-first Plaid-to-SQLite ledger with CLI workflows"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "claw-plaid-ledger contributors" }]
+dependencies = [
+  "typer>=0.12.3,<1.0.0",
+]
+
+[project.scripts]
+ledger = "claw_plaid_ledger.cli:app"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.11.0,<2.0.0",
+  "pytest>=8.3.0,<9.0.0",
+  "ruff>=0.6.0,<1.0.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # formatter-compatible trailing-comma rules
+  "D100",   # public module docstring (relaxed at package edges)
+  "D104",   # public package docstring (relaxed for __init__.py)
+  "D203",   # no-blank-line-before-class (incompatible with D211)
+  "D212",   # multi-line-summary-first-line (with D213)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "ANN201", # test return annotation noise
+  "S101",   # assert statements are standard in pytest
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+mypy_path = ["src"]
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+check_untyped_defs = true
