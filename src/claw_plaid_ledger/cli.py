@@ -2,52 +2,36 @@
 
 from __future__ import annotations
 
-import argparse
-import sys
+import typer
+
+app = typer.Typer(
+    help_text=(
+        "Local-first finance ledger CLI for syncing Plaid data into SQLite "
+        "and exporting agent-friendly artifacts."
+    ),
+)
 
 
-def doctor(*, verbose: int = 0) -> None:
+@app.command()
+def doctor(
+    verbose: object = typer.Option(0, "--verbose", "-v", count=True),
+) -> None:
     """Show environment and setup diagnostics for this project."""
-    if verbose > 0:
-        sys.stdout.write("doctor: verbose diagnostics not implemented yet\n")
+    if not isinstance(verbose, int):
+        msg = "verbose must be an integer count"
+        raise TypeError(msg)
+
+    verbosity = verbose
+    if verbosity > 0:
+        typer.echo("doctor: verbose diagnostics not implemented yet")
         return
 
-    sys.stdout.write("doctor: basic checks passed\n")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Build the root CLI parser."""
-    parser = argparse.ArgumentParser(
-        prog="ledger",
-        description=(
-            "Local-first finance ledger CLI for syncing Plaid data into "
-            "SQLite and exporting agent-friendly artifacts."
-        ),
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    doctor_parser = subparsers.add_parser(
-        "doctor",
-        help="Show project setup diagnostics.",
-    )
-    doctor_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="Increase diagnostics verbosity.",
-    )
-
-    return parser
+    typer.echo("doctor: basic checks passed")
 
 
 def main() -> None:
     """Run the CLI."""
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.command == "doctor":
-        doctor(verbose=args.verbose)
+    app()
 
 
 if __name__ == "__main__":
