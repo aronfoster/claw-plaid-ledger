@@ -7,7 +7,7 @@ prepares deterministic outputs for OpenClaw.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for environment, dependency, and task flow
-- [Typer](https://typer.tiangolo.com/) for CLI UX
+- standard-library `argparse` for CLI UX
 - `sqlite3` as the local source-of-truth datastore
 - [pytest](https://docs.pytest.org/) for tests
 - [Ruff](https://docs.astral.sh/ruff/) for linting and formatting

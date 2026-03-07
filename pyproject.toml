@@ -6,12 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "claw-plaid-ledger contributors" }]
-dependencies = [
-  "typer>=0.12.3,<1.0.0",
-]
+dependencies = []
 
 [project.scripts]
-ledger = "claw_plaid_ledger.cli:app"
+ledger = "claw_plaid_ledger.cli:main"
 
 [dependency-groups]
 dev = [

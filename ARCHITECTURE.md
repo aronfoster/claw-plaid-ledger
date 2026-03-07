@@ -41,7 +41,7 @@ Plaid -> sync engine -> SQLite -> markdown exporter -> OpenClaw trigger
 
 - Python: 3.12+
 - Environment/dependency management: `uv`
-- CLI framework: `Typer`
+- CLI framework: standard-library `argparse`
 - Datastore: standard-library `sqlite3`
 - Testing: `pytest`
 - Formatting/linting: `ruff format` + `ruff check`

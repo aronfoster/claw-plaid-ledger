@@ -6,7 +6,7 @@ Repo structure, config, logging, CLI entrypoints, docs.
 
 ### Status
 
-In progress. Python/uv/Typer + strict quality tooling baseline is now in place.
+In progress. Python/uv + strict quality tooling baseline is now in place.
 
 ## M1 - Plaid connection and initial sync
 
