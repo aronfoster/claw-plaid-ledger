@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "claw-plaid-ledger contributors" }]
-dependencies = []
+dependencies = [
+  "plaid-python",
+]
 
 [project.scripts]
 ledger = "claw_plaid_ledger.cli:main"
