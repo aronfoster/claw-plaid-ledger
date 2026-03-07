@@ -6,15 +6,18 @@ Repo structure, config, logging, CLI entrypoints, docs.
 
 ### Status
 
-In progress. Python/uv + strict quality tooling baseline is now in place.
+Complete. Python + uv baseline, strict quality tooling, environment-backed
+configuration, and SQLite schema bootstrap are in place.
 
 ## M1 - Plaid connection and initial sync
 
-Support Plaid Link flow and first transaction import.
+Add Plaid client integration and implement the first transaction sync path into
+SQLite with cursor-based idempotent reruns.
 
-## M2 - Local ledger
+## M2 - Local ledger hardening
 
-Persist transactions, accounts, and sync cursor in SQLite.
+Expand deterministic persistence behavior for accounts, transactions, and sync
+state; improve operational diagnostics.
 
 ## M3 - Agent-friendly exports
 

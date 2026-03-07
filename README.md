@@ -7,7 +7,7 @@ prepares deterministic outputs for OpenClaw.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) for environment, dependency, and task flow
-- standard-library `argparse` for CLI UX
+- [Typer](https://typer.tiangolo.com/) for CLI UX
 - `sqlite3` as the local source-of-truth datastore
 - [pytest](https://docs.pytest.org/) for tests
 - [Ruff](https://docs.astral.sh/ruff/) for linting and formatting
@@ -19,9 +19,9 @@ prepares deterministic outputs for OpenClaw.
 uv sync
 uv run ledger --help
 uv run pytest
-uv run ruff check .
-uv run ruff format .
-uv run mypy
+uv run --locked ruff format . --check
+uv run --locked ruff check .
+uv run --locked mypy .
 ```
 
 ## Quality defaults
