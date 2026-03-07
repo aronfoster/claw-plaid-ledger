@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "[pre-commit] Running quality gate..."
-uv run --locked ruff format . --check
-uv run --locked ruff check .
-uv run --locked mypy
-uv run --locked pytest
+uv run --no-sync --locked ruff format . --check
+uv run --no-sync --locked ruff check .
+uv run --no-sync --locked mypy
+uv run --no-sync --locked pytest
