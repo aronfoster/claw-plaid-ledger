@@ -34,3 +34,8 @@ uv run mypy
 - Markdown files are documentation and are not part of lint/type checks
 
 See `ARCHITECTURE.md` for structure and quality standards.
+## Continuous integration
+
+GitHub Actions runs `ruff`, `mypy`, and `pytest` on every pull request
+and on every push to `master` (including merged PRs).
+
