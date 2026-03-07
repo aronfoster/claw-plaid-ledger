@@ -17,12 +17,17 @@ app = typer.Typer(
 @app.command()
 def doctor(
     verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Include detailed diagnostics."),
-    ] = False,
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Increase diagnostics verbosity.",
+        ),
+    ] = 0,
 ) -> None:
     """Show environment and setup diagnostics for this project."""
-    if verbose:
+    if verbose > 0:
         typer.echo("doctor: verbose diagnostics not implemented yet")
         return
 
