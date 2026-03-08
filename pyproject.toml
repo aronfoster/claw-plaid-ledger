@@ -46,6 +46,9 @@ ignore = [
   "ANN201", # test return annotation noise
   "S101",   # assert statements are standard in pytest
 ]
+"src/claw_plaid_ledger/plaid_adapter.py" = [
+  "ANN401", # Any is intentional at the untyped Plaid SDK boundary
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -68,3 +71,4 @@ files = ["src", "tests"]
 module = ["tests.*"]
 disallow_untyped_defs = false
 check_untyped_defs = true
+

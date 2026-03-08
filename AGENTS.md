@@ -34,3 +34,18 @@ bash scripts/install-hooks.sh
 ```
 
 The hooks run quality checks and block commits/pushes when checks fail.
+
+## Check bypass policy (strict)
+
+Bypassing checks (lint/type/test/security rules) is prohibited unless it is
+**absolutely necessary** and there is no practical way to structure the code to
+pass the check directly.
+
+If a bypass is unavoidable:
+
+1. Keep the bypass as narrow as possible (single line/symbol/scope).
+2. Add a detailed in-code comment explaining exactly why the bypass is
+   necessary and why the code cannot reasonably be structured to avoid it.
+3. Include that rationale in the PR summary and mention follow-up work, if any.
+
+Broad or silent bypasses are not allowed.
