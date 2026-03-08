@@ -30,13 +30,42 @@ class Config:
     plaid_access_token: str | None
 
 
+def _default_env_file() -> Path:
+    """Return the default per-user environment file path."""
+    return Path("~/.config/claw-plaid-ledger/.env").expanduser()
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a simple .env file into key/value pairs."""
+    if not path.exists():
+        return {}
+
+    parsed: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+
+        parsed[key.strip()] = value.strip().strip("\"'")
+
+    return parsed
+
+
 def load_config(
     environ: dict[str, str] | None = None,
     *,
     require_plaid: bool = False,
+    env_file: Path | None = None,
 ) -> Config:
-    """Load runtime configuration from environment variables."""
-    values = os_environ if environ is None else environ
+    """Load runtime configuration from env vars and optional .env file."""
+    candidate_env_file = _default_env_file() if env_file is None else env_file
+    file_values = _load_env_file(candidate_env_file)
+    runtime_values = dict(os_environ if environ is None else environ)
+    values = {**file_values, **runtime_values}
 
     db_path_raw = values.get("CLAW_PLAID_LEDGER_DB_PATH")
     workspace_raw = values.get("CLAW_PLAID_LEDGER_WORKSPACE_PATH")
