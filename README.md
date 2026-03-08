@@ -24,6 +24,91 @@ uv run --locked ruff check .
 uv run --locked mypy .
 ```
 
+## Local configuration
+
+Claw Plaid Ledger expects secrets and machine-specific paths to live outside
+this repository.
+
+Recommended location on Linux:
+
+```bash
+~/.config/claw-plaid-ledger/.env
+```
+
+This keeps secrets out of git and out of the OpenClaw workspace.
+
+Create the config directory and install the template:
+
+```bash
+mkdir -p ~/.config/claw-plaid-ledger
+chmod 700 ~/.config/claw-plaid-ledger
+cp .env.example ~/.config/claw-plaid-ledger/.env
+chmod 600 ~/.config/claw-plaid-ledger/.env
+```
+
+Then edit:
+
+```bash
+~/.config/claw-plaid-ledger/.env
+```
+
+with your Plaid credentials and local paths.
+
+The app loads configuration from both places:
+
+1. `~/.config/claw-plaid-ledger/.env` (if it exists)
+2. Runtime environment variables
+
+Runtime environment variables override values from the user env file.
+
+## Security model
+
+Keep these boundaries:
+
+- **Repository**: source code only
+- **User config**: secrets and machine-specific settings
+- **Database**: local ledger state in SQLite
+- **OpenClaw workspace**: agent-readable exports only
+
+Never store Plaid secrets:
+
+- in the git repository
+- in committed files
+- in markdown files
+- in the OpenClaw workspace
+
+## Configuration reference
+
+The template file `.env.example` includes all supported keys:
+
+```dotenv
+# Plaid credentials
+PLAID_CLIENT_ID=
+PLAID_SECRET=
+PLAID_ENV=sandbox
+PLAID_ACCESS_TOKEN=
+
+# Local application paths
+CLAW_PLAID_LEDGER_DB_PATH=
+CLAW_PLAID_LEDGER_WORKSPACE_PATH=
+```
+
+Notes:
+
+- `PLAID_ENV` should usually stay `sandbox` during local development.
+- `CLAW_PLAID_LEDGER_DB_PATH` should point to a local SQLite file.
+- `CLAW_PLAID_LEDGER_WORKSPACE_PATH` should be set only when OpenClaw
+  exports are being used.
+
+## Example
+
+After creating your config and syncing dependencies:
+
+```bash
+uv sync --dev --locked
+uv run ledger init-db
+```
+
 ## Quality defaults
 
 - Maximum line length: **79 characters** for Python source
@@ -34,6 +119,7 @@ uv run --locked mypy .
 - Markdown files are documentation and are not part of lint/type checks
 
 See `ARCHITECTURE.md` for structure and quality standards.
+
 ## Continuous integration
 
 GitHub Actions runs `ruff`, `mypy`, and `pytest` on every pull request
