@@ -13,3 +13,6 @@ __pycache__/
 # Local databases and env
 *.db
 .env
+.env.*
+*.env
+!.env.example
