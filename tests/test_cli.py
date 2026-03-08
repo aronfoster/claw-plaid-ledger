@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from contextlib import redirect_stdout
 from io import StringIO
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from claw_plaid_ledger.cli import main
@@ -43,6 +45,7 @@ def test_help() -> None:
     assert "usage: ledger" in output
     assert "doctor" in output
     assert "init-db" in output
+    assert "sync" in output
 
 
 def test_doctor_default() -> None:
@@ -88,3 +91,66 @@ def test_init_db_missing_db_path() -> None:
 
     assert exit_code == INIT_DB_CONFIG_ERROR_EXIT_CODE
     assert "init-db: Missing required environment variable(s):" in output
+
+
+def test_sync_missing_plaid_config(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`sync` fails clearly when Plaid env vars are missing."""
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.delenv("PLAID_CLIENT_ID", raising=False)
+    monkeypatch.delenv("PLAID_SECRET", raising=False)
+    monkeypatch.delenv("PLAID_ENV", raising=False)
+    monkeypatch.delenv("PLAID_ACCESS_TOKEN", raising=False)
+
+    exit_code, output = run_main(["sync"])
+
+    assert exit_code == INIT_DB_CONFIG_ERROR_EXIT_CODE
+    assert "sync: Missing required environment variable(s):" in output
+
+
+def test_sync_success_calls_engine(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`sync` invokes adapter + sync engine and prints a concise summary."""
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setenv("PLAID_CLIENT_ID", "id")
+    monkeypatch.setenv("PLAID_SECRET", "secret")
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    access_token = secrets.token_urlsafe(12)
+    monkeypatch.setenv("PLAID_ACCESS_TOKEN", access_token)
+
+    class DummyAdapter:
+        pass
+
+    def fake_from_config(_config: object) -> DummyAdapter:
+        return DummyAdapter()
+
+    def fake_run_sync(**kwargs: object) -> object:
+        assert kwargs["access_token"] == access_token
+        assert str(kwargs["db_path"]).endswith("ledger.db")
+        assert isinstance(kwargs["adapter"], DummyAdapter)
+        return SimpleNamespace(
+            added=2,
+            modified=1,
+            removed=0,
+            accounts=3,
+            next_cursor="cursor-1",
+        )
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.PlaidClientAdapter.from_config",
+        fake_from_config,
+    )
+    monkeypatch.setattr("claw_plaid_ledger.cli.run_sync", fake_run_sync)
+
+    exit_code, output = run_main(["sync"])
+
+    assert exit_code == 0
+    assert "sync: accounts=3 added=2 modified=1 removed=0" in output

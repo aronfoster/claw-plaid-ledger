@@ -27,6 +27,7 @@ class Config:
     plaid_client_id: str | None
     plaid_secret: str | None
     plaid_env: str | None
+    plaid_access_token: str | None
 
 
 def load_config(
@@ -42,6 +43,7 @@ def load_config(
     plaid_client_id = values.get("PLAID_CLIENT_ID")
     plaid_secret = values.get("PLAID_SECRET")
     plaid_env = values.get("PLAID_ENV")
+    plaid_access_token = values.get("PLAID_ACCESS_TOKEN")
 
     missing = []
     if not db_path_raw:
@@ -54,6 +56,8 @@ def load_config(
             missing.append("PLAID_SECRET")
         if not plaid_env:
             missing.append("PLAID_ENV")
+        if not plaid_access_token:
+            missing.append("PLAID_ACCESS_TOKEN")
 
     if missing:
         raise ConfigError.for_missing_env_vars(missing)
@@ -69,4 +73,5 @@ def load_config(
         plaid_client_id=plaid_client_id,
         plaid_secret=plaid_secret,
         plaid_env=plaid_env,
+        plaid_access_token=plaid_access_token,
     )
