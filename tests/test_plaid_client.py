@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import plaid
+import plaid  # type: ignore[import-untyped]
 import pytest
-from plaid.api.plaid_api import PlaidApi
+from plaid.api.plaid_api import PlaidApi  # type: ignore[import-untyped]
 
 from claw_plaid_ledger.config import Config, ConfigError
 from claw_plaid_ledger.plaid_client import (

@@ -69,6 +69,3 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 check_untyped_defs = true
 
-[[tool.mypy.overrides]]
-module = ["plaid.*"]
-ignore_missing_imports = true

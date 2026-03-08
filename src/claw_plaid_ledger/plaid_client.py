@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import plaid
-from plaid.api import plaid_api
+import plaid  # type: ignore[import-untyped]
+from plaid.api import plaid_api  # type: ignore[import-untyped]
 
 from claw_plaid_ledger.config import Config, ConfigError
 
 if TYPE_CHECKING:
-    from plaid.api.plaid_api import PlaidApi
+    from plaid.api.plaid_api import PlaidApi  # type: ignore[import-untyped]
 
 _ENV_MAP: dict[str, str] = {
     "sandbox": plaid.Environment.Sandbox,
