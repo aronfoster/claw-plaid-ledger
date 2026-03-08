@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from claw_plaid_ledger.db import (
+    delete_transaction,
     get_sync_cursor,
     initialize_database,
     upsert_account,
@@ -56,28 +57,48 @@ def run_sync(
     initialize_database(db_path)
     with sqlite3.connect(db_path) as connection:
         cursor = get_sync_cursor(connection, item_id)
-        result = adapter.sync_transactions(access_token, cursor=cursor)
+        added_count = 0
+        modified_count = 0
+        removed_count = 0
+        account_count = 0
 
-        for account in result.accounts:
-            upsert_account(connection, account)
+        while True:
+            result = adapter.sync_transactions(access_token, cursor=cursor)
 
-        for transaction in result.added:
-            upsert_transaction(connection, transaction)
+            for account in result.accounts:
+                upsert_account(connection, account)
+            account_count += len(result.accounts)
 
-        for transaction in result.modified:
-            upsert_transaction(connection, transaction)
+            for transaction in result.added:
+                upsert_transaction(connection, transaction)
+            added_count += len(result.added)
+
+            for transaction in result.modified:
+                upsert_transaction(connection, transaction)
+            modified_count += len(result.modified)
+
+            for removed_transaction in result.removed:
+                delete_transaction(
+                    connection,
+                    plaid_transaction_id=removed_transaction.plaid_transaction_id,
+                )
+            removed_count += len(result.removed)
+
+            cursor = result.next_cursor
+            if not result.has_more:
+                break
 
         upsert_sync_state(
             connection,
             item_id=item_id,
-            cursor=result.next_cursor,
+            cursor=cursor,
         )
         connection.commit()
 
     return SyncSummary(
-        added=len(result.added),
-        modified=len(result.modified),
-        removed=len(result.removed),
-        accounts=len(result.accounts),
-        next_cursor=result.next_cursor,
+        added=added_count,
+        modified=modified_count,
+        removed=removed_count,
+        accounts=account_count,
+        next_cursor=cursor or "",
     )

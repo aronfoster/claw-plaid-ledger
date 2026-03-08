@@ -180,6 +180,18 @@ def upsert_transaction(
     )
 
 
+def delete_transaction(
+    connection: sqlite3.Connection,
+    *,
+    plaid_transaction_id: str,
+) -> None:
+    """Delete one transaction by Plaid transaction id if it exists."""
+    connection.execute(
+        "DELETE FROM transactions WHERE plaid_transaction_id = ?",
+        (plaid_transaction_id,),
+    )
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:
