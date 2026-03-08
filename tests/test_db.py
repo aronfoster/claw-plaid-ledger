@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import datetime
 import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
 
-from claw_plaid_ledger.db import initialize_database
+from claw_plaid_ledger.db import (
+    get_sync_cursor,
+    initialize_database,
+    normalize_account_for_db,
+    normalize_transaction_for_db,
+    upsert_account,
+    upsert_sync_state,
+    upsert_transaction,
+)
+from claw_plaid_ledger.plaid_models import AccountData, TransactionData
 
 TRANSACTION_INSERT_SQL = (
     "INSERT INTO transactions "
@@ -179,3 +189,177 @@ def test_schema_enforces_required_not_null_columns(tmp_path: Path) -> None:
                 ),
                 (None, "cursor", "2024-01-01T00:00:00Z"),
             )
+
+
+# ---------------------------------------------------------------------------
+# Sync-oriented DB helper behavior
+# ---------------------------------------------------------------------------
+
+
+def _account(
+    *, name: str = "Checking", mask: str | None = "1234"
+) -> AccountData:
+    """Build a representative account fixture for DB helper tests."""
+    return AccountData(
+        plaid_account_id="acc-1",
+        name=name,
+        type="depository",
+        subtype="checking",
+        mask=mask,
+    )
+
+
+def _transaction(
+    *,
+    tx_id: str = "tx-1",
+    amount: float = 10.25,
+    date: datetime.date = datetime.date(2024, 5, 1),
+    pending: bool = False,
+) -> TransactionData:
+    """Build a representative transaction fixture for DB helper tests."""
+    return TransactionData(
+        plaid_transaction_id=tx_id,
+        plaid_account_id="acc-1",
+        amount=amount,
+        date=date,
+        name="Coffee",
+        pending=pending,
+        merchant_name="Bean Co",
+        iso_currency_code="USD",
+    )
+
+
+def test_normalize_account_for_db() -> None:
+    """Account normalization maps typed fields into DB row fields."""
+    row = normalize_account_for_db(_account(), institution_name="Bank")
+    assert row.plaid_account_id == "acc-1"
+    assert row.institution_name == "Bank"
+
+
+def test_normalize_transaction_for_db_pending_false_sets_posted_date() -> None:
+    """Posted transactions write posted_date and no authorized_date."""
+    row = normalize_transaction_for_db(_transaction(pending=False))
+    assert row.pending == 0
+    assert row.authorized_date is None
+    assert row.posted_date == "2024-05-01"
+
+
+def test_normalize_transaction_for_db_pending_true_sets_authorized_date() -> (
+    None
+):
+    """Pending transactions write authorized_date and no posted_date."""
+    row = normalize_transaction_for_db(_transaction(pending=True))
+    assert row.pending == 1
+    assert row.authorized_date == "2024-05-01"
+    assert row.posted_date is None
+
+
+def test_upsert_account_inserts_then_updates(tmp_path: Path) -> None:
+    """Account upserts update existing rows instead of duplicating them."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_account(
+            connection,
+            _account(name="Checking"),
+            now_iso="2024-01-01T00:00:00+00:00",
+        )
+        upsert_account(
+            connection,
+            _account(name="Primary Checking", mask=None),
+            institution_name="Plaid Bank",
+            now_iso="2024-01-02T00:00:00+00:00",
+        )
+
+        rows = connection.execute(
+            "SELECT plaid_account_id, name, mask, institution_name, "
+            "created_at, updated_at FROM accounts"
+        ).fetchall()
+
+    assert len(rows) == 1
+    (
+        plaid_account_id,
+        name,
+        mask,
+        institution_name,
+        created_at,
+        updated_at,
+    ) = rows[0]
+    assert plaid_account_id == "acc-1"
+    assert name == "Primary Checking"
+    assert mask is None
+    assert institution_name == "Plaid Bank"
+    assert created_at == "2024-01-01T00:00:00+00:00"
+    assert updated_at == "2024-01-02T00:00:00+00:00"
+
+
+def test_upsert_transaction_inserts_then_updates(tmp_path: Path) -> None:
+    """Transaction upserts update existing rows instead of duplicating them."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_transaction(
+            connection,
+            _transaction(amount=12.00),
+            now_iso="2024-01-01T00:00:00+00:00",
+        )
+        upsert_transaction(
+            connection,
+            _transaction(amount=18.50, pending=True),
+            now_iso="2024-01-02T00:00:00+00:00",
+        )
+        rows = connection.execute(
+            "SELECT plaid_transaction_id, amount, pending, authorized_date, "
+            "posted_date, created_at, updated_at FROM transactions"
+        ).fetchall()
+
+    assert len(rows) == 1
+    (
+        tx_id,
+        amount,
+        pending,
+        authorized_date,
+        posted_date,
+        created_at,
+        updated_at,
+    ) = rows[0]
+    assert tx_id == "tx-1"
+    assert amount == pytest.approx(18.5)
+    assert pending == 1
+    assert authorized_date == "2024-05-01"
+    assert posted_date is None
+    assert created_at == "2024-01-01T00:00:00+00:00"
+    assert updated_at == "2024-01-02T00:00:00+00:00"
+
+
+def test_sync_state_round_trip_and_rerun(tmp_path: Path) -> None:
+    """Sync state writes are idempotent and the cursor is readable."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert get_sync_cursor(connection, "item-1") is None
+
+        upsert_sync_state(
+            connection,
+            item_id="item-1",
+            cursor="cursor-a",
+            last_synced_at="2024-01-01T00:00:00+00:00",
+        )
+        assert get_sync_cursor(connection, "item-1") == "cursor-a"
+
+        upsert_sync_state(
+            connection,
+            item_id="item-1",
+            cursor="cursor-b",
+            last_synced_at="2024-01-02T00:00:00+00:00",
+        )
+
+        rows = connection.execute(
+            "SELECT item_id, cursor, last_synced_at FROM sync_state"
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0] == ("item-1", "cursor-b", "2024-01-02T00:00:00+00:00")
