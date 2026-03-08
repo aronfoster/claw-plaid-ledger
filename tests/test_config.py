@@ -23,6 +23,7 @@ def test_load_config_success_without_plaid_requirement() -> None:
     assert cfg.plaid_client_id is None
     assert cfg.plaid_secret is None
     assert cfg.plaid_env is None
+    assert cfg.plaid_access_token is None
 
 
 def test_load_config_missing_db_path_raises_clear_error() -> None:
@@ -43,7 +44,7 @@ def test_load_config_requires_plaid_values_when_requested() -> None:
         ConfigError,
         match=(
             r"Missing required environment variable\(s\): "
-            r"PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV"
+            r"PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, PLAID_ACCESS_TOKEN"
         ),
     ):
         load_config(
@@ -56,12 +57,14 @@ def test_load_config_requires_plaid_values_when_requested() -> None:
 
 def test_load_config_success_with_plaid_requirement() -> None:
     """Plaid settings are returned when provided and required."""
+    access_value = "integration-fixture"
     cfg = load_config(
         {
             "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
             "PLAID_CLIENT_ID": "client-id",
             "PLAID_SECRET": "token-value",
             "PLAID_ENV": "sandbox",
+            "PLAID_ACCESS_TOKEN": access_value,
         },
         require_plaid=True,
     )
@@ -70,3 +73,4 @@ def test_load_config_success_with_plaid_requirement() -> None:
     assert cfg.plaid_client_id == "client-id"
     assert cfg.plaid_secret is not None
     assert cfg.plaid_env == "sandbox"
+    assert cfg.plaid_access_token == access_value

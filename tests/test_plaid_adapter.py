@@ -36,6 +36,7 @@ def _make_config(
     plaid_client_id: str | None = "test-client-id",
     plaid_secret: str | None = "test-secret",  # noqa: S107
     plaid_env: str | None = "sandbox",
+    plaid_access_token: str | None = "fixture-token",  # noqa: S107
 ) -> Config:
     """Return a Config with valid Plaid credentials by default."""
     return Config(
@@ -44,6 +45,7 @@ def _make_config(
         plaid_client_id=plaid_client_id,
         plaid_secret=plaid_secret,
         plaid_env=plaid_env,
+        plaid_access_token=plaid_access_token,
     )
 
 
