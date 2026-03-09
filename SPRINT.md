@@ -1,11 +1,13 @@
-# Sprint 4 — M3: Server skeleton and webhook receiver
+# Sprint 5 — M4: Agent API and annotation layer
 
 ## Sprint goal
 
-Stand up a FastAPI server that Plaid can reach, receives
-`SYNC_UPDATES_AVAILABLE` webhooks, triggers the existing sync engine
-asynchronously, and is secured with bearer token auth and Plaid HMAC
-verification from day one.
+Expose a typed REST API so OpenClaw agents can query the transaction ledger
+and write durable annotations — without ever touching SQLite directly.
+This sprint adds three new endpoints (`GET /transactions`,
+`GET /transactions/{id}`, `PUT /annotations/{transaction_id}`), the supporting
+`annotations` table, and updates `ARCHITECTURE.md` to serve as the source of
+truth for the OpenClaw SKILL definition.
 
 ## Working agreements
 
@@ -19,173 +21,434 @@ verification from day one.
 - Use standard-library `sqlite3` for the database layer.
 - Add appropriate unit and integration tests for each task.
 
+## Conventions and data notes
+
+**Transaction identifier in URLs:** use `plaid_transaction_id` (the
+Plaid-issued string, e.g. `"Ax9bz3KQ..."`). This is the stable external key
+already stored as `UNIQUE` in the `transactions` table; it is safe for agents
+to cache and reference across sessions.
+
+**Effective date:** many query operations need a single date per transaction.
+Use `COALESCE(posted_date, authorized_date)` as the effective date. For posted
+transactions `posted_date` is set; for pending ones only `authorized_date` is
+set.
+
+**Amount sign convention:** Plaid uses positive = money leaving the account
+(debit/expense), negative = money entering (credit/income). The API exposes
+amounts exactly as stored — do not invert.
+
+**Tags storage:** tags are stored as a JSON text string in SQLite (e.g.
+`'["food", "recurring"]'`). The API accepts and returns them as a JSON array.
+The server is responsible for `json.dumps` on write and `json.loads` on read.
+
+**Annotation ownership:** the sync engine must never read from or write to
+the `annotations` table. The annotation layer is entirely agent-owned;
+Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) remain
+immutable from the agent's perspective.
+
+**OpenAPI spec:** FastAPI generates `/openapi.json` and `/docs` automatically.
+These are served without authentication (consistent with the local-only
+security posture). The OpenAPI spec becomes the source of truth for the
+OpenClaw SKILL definition.
+
+---
+
 ## Task breakdown
 
-### Task 1: FastAPI dependency and `ledger serve` skeleton ✅ DONE
+### Task 1: `annotations` table and DB helpers
 
 **Scope**
 
-- Add `fastapi` and `uvicorn` to `pyproject.toml` dependencies
-- Add a `server.py` module that creates the FastAPI application instance
-- Add `ledger serve` CLI command that starts uvicorn on host/port
-  configurable via `CLAW_SERVER_HOST` (default `127.0.0.1`) and
-  `CLAW_SERVER_PORT` (default `8000`) — local-only by default
-- Add `GET /health` returning `{"status": "ok"}`; no auth required
-- Document the two new env vars in `.env.example` and `ARCHITECTURE.md`
+Add the `annotations` table to `schema.sql` and the corresponding helpers to
+`db.py`. Nothing else changes in this task.
+
+**Schema** — add to `schema.sql` using `CREATE TABLE IF NOT EXISTS` so
+`init-db` is safe to run against an existing database:
+
+```sql
+CREATE TABLE IF NOT EXISTS annotations (
+    id                   INTEGER PRIMARY KEY,
+    plaid_transaction_id TEXT NOT NULL UNIQUE
+                         REFERENCES transactions(plaid_transaction_id),
+    category             TEXT,
+    note                 TEXT,
+    tags                 TEXT,          -- JSON array stored as text
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+```
+
+**`db.py` additions:**
+
+- `AnnotationRow` frozen dataclass with fields:
+  `plaid_transaction_id: str`, `category: str | None`, `note: str | None`,
+  `tags: str | None`, `created_at: str`, `updated_at: str`
+
+- `upsert_annotation(conn: sqlite3.Connection, row: AnnotationRow) -> None`
+  - `INSERT OR REPLACE` pattern; preserve original `created_at` on update using
+    the same approach as `upsert_transaction` — explicitly pass `created_at`
+    from the existing row when updating, or the current UTC timestamp when
+    inserting
+  - Straightforward implementation: on conflict (UNIQUE on
+    `plaid_transaction_id`), overwrite all fields except `created_at`
+  - Recommended: `INSERT INTO annotations (...) VALUES (...) ON CONFLICT
+    (plaid_transaction_id) DO UPDATE SET category=excluded.category,
+    note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at`
+    (this naturally preserves `created_at`)
+
+- `get_annotation(conn: sqlite3.Connection, plaid_transaction_id: str) ->
+  AnnotationRow | None`
+  - `SELECT` by `plaid_transaction_id`; return `None` if not found
 
 **Done when**
 
-- `ledger serve` starts without error and `GET /health` returns 200
-- Server binds to `127.0.0.1` by default (never `0.0.0.0` unless
-  explicitly configured)
+- Running `ledger init-db` against a database that already has `transactions`,
+  `accounts`, and `sync_state` tables creates `annotations` without error and
+  without touching the other tables
+- `upsert_annotation` followed by a second `upsert_annotation` preserves
+  `created_at` and updates `updated_at`
+- `get_annotation` returns `None` for an unknown `plaid_transaction_id`
 
-**Testing expectation**
+**Testing expectations**
 
-- Test that the FastAPI app is importable and `/health` returns 200 via
-  the FastAPI `TestClient`; no live uvicorn process required in tests
+- Test: `upsert_annotation` inserts a new row; all fields round-trip correctly
+- Test: second `upsert_annotation` for same `plaid_transaction_id` updates
+  `category`, `note`, `tags`, `updated_at` while preserving `created_at`
+- Test: `get_annotation` returns `None` for an ID not in `annotations`
+- Test: schema idempotency — calling `ensure_schema()` (or `init-db`) twice
+  does not raise
 
 ---
 
-### Task 2: Bearer token auth and startup validation ✅ DONE
+### Task 2: `GET /transactions` list endpoint
 
 **Scope**
 
-- Add `CLAW_API_SECRET` to `Config` and `.env.example`
-- `ledger serve` must refuse to start if `CLAW_API_SECRET` is not set,
-  printing a clear error message
-- Add a FastAPI dependency that enforces `Authorization: Bearer <token>`
-  on all routes except `/health`; return 401 on missing or invalid token
-- Extend `ledger doctor` to check that `CLAW_API_SECRET` is set and
-  report `[OK]` or `[FAIL]` accordingly
-- Document `CLAW_API_SECRET` in `ARCHITECTURE.md` configuration table
+Add a query helper to `db.py` and the corresponding endpoint to `server.py`.
+
+**`db.py` addition — `query_transactions`:**
+
+```python
+def query_transactions(
+    conn: sqlite3.Connection,
+    *,
+    start_date: str | None = None,     # YYYY-MM-DD inclusive
+    end_date: str | None = None,       # YYYY-MM-DD inclusive
+    account_id: str | None = None,     # plaid_account_id exact match
+    pending: bool | None = None,
+    min_amount: float | None = None,   # inclusive
+    max_amount: float | None = None,   # inclusive
+    keyword: str | None = None,        # LIKE match on name + merchant_name
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[dict[str, object]], int]:
+    ...
+```
+
+Implementation notes:
+- Build the `WHERE` clause dynamically from whichever filters are provided
+- Date filter: `COALESCE(posted_date, authorized_date) BETWEEN ? AND ?`
+- `pending` maps to SQLite `0`/`1`
+- `keyword` filter: `(name LIKE ? OR merchant_name LIKE ?)` where the
+  parameter is `f"%{keyword}%"`; SQLite `LIKE` is case-insensitive for ASCII
+  by default — no `COLLATE NOCASE` needed
+- Return a tuple `(rows, total)` where `total` is the full matching count
+  (run a `SELECT COUNT(*)` with the same `WHERE` clause before applying
+  `LIMIT`/`OFFSET`)
+- Each dict in `rows` must include:
+  `id` (= `plaid_transaction_id`), `account_id` (= `plaid_account_id`),
+  `amount`, `iso_currency_code`, `name`, `merchant_name`, `pending` (bool,
+  not int), `date` (= `COALESCE(posted_date, authorized_date)`)
+
+**Endpoint:**
+
+```
+GET /transactions
+Authorization: Bearer <token>
+```
+
+Query parameters (all optional):
+
+| Param | Type | Description |
+|---|---|---|
+| `start_date` | `YYYY-MM-DD` | Filter by effective date ≥ |
+| `end_date` | `YYYY-MM-DD` | Filter by effective date ≤ |
+| `account_id` | string | Exact match on `plaid_account_id` |
+| `pending` | bool | `true` or `false` |
+| `min_amount` | float | Amount ≥ (Plaid sign: positive = debit) |
+| `max_amount` | float | Amount ≤ |
+| `keyword` | string | Case-insensitive substring match on `name` and `merchant_name` |
+| `limit` | int | Default `100`, max `500` |
+| `offset` | int | Default `0` |
+
+Response (HTTP 200):
+
+```json
+{
+  "transactions": [
+    {
+      "id": "<plaid_transaction_id>",
+      "account_id": "<plaid_account_id>",
+      "amount": 12.34,
+      "iso_currency_code": "USD",
+      "name": "Starbucks",
+      "merchant_name": "Starbucks",
+      "pending": false,
+      "date": "2024-01-15"
+    }
+  ],
+  "total": 150,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+- `limit > 500` returns HTTP 422 with a descriptive validation message;
+  use FastAPI's `Query(le=500)` to get this automatically
+- Requires bearer token; missing/invalid token returns 401
+- Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`
 
 **Done when**
 
-- Server refuses to start without `CLAW_API_SECRET`
-- Requests to protected routes without a valid token return 401
-- `doctor` reports the secret's presence (not its value)
+- `GET /transactions` returns 200 with the pagination envelope
+- All filters work individually and in combination
+- `limit=501` returns 422
+- Empty database returns `{"transactions": [], "total": 0, "limit": 100,
+  "offset": 0}`
 
-**Testing expectation**
+**Testing expectations**
 
-- Test: missing token returns 401
-- Test: wrong token returns 401
-- Test: correct token passes through to the route
-- Test: `doctor` output reflects set/unset state of `CLAW_API_SECRET`
+- Test: no filters returns all transactions (up to default limit), correct
+  `total`
+- Test: `start_date` and `end_date` filter correctly on effective date
+- Test: `account_id` filters to the matching account only
+- Test: `pending=true` returns only pending; `pending=false` returns only
+  posted
+- Test: `min_amount=10&max_amount=50` returns only transactions in that range
+- Test: `keyword` matches on `name`; `keyword` matches on `merchant_name`;
+  `keyword` is case-insensitive
+- Test: `offset` and `limit` page correctly; `total` reflects unfiltered count
+- Test: `limit=501` returns 422
+- Test: missing bearer token returns 401; wrong token returns 401
+- Test: empty DB returns 200 with empty list and `total=0`
 
 ---
 
-### Task 3: Plaid webhook signature verification ✅ DONE
+### Task 3: `GET /transactions/{transaction_id}` detail endpoint
 
 **Scope**
 
-- Implement a standalone `verify_plaid_signature(body: bytes, headers:
-  dict) -> bool` function in a new `webhook_auth.py` module
-- Verification must follow Plaid's documented HMAC-SHA256 scheme using
-  `PLAID_WEBHOOK_SECRET` (add to `Config` and `.env.example`)
-- The function should be pure and testable without a live server
-- If `PLAID_WEBHOOK_SECRET` is not set, verification fails closed
-  (returns `False`), never open
+Add a single-row query helper to `db.py` and the detail endpoint to `server.py`.
+
+**`db.py` addition — `get_transaction`:**
+
+```python
+def get_transaction(
+    conn: sqlite3.Connection,
+    plaid_transaction_id: str,
+) -> dict[str, object] | None:
+    ...
+```
+
+Returns a dict with all transaction columns, or `None` if not found. The
+returned dict includes the same fields as the list response plus `raw_json`.
+The endpoint merges in the annotation separately (call `get_annotation` after
+`get_transaction`).
+
+**Endpoint:**
+
+```
+GET /transactions/{transaction_id}
+Authorization: Bearer <token>
+```
+
+- `transaction_id` in the path is the `plaid_transaction_id` string
+- Returns HTTP 404 if not found
+- Returns HTTP 200 with the full transaction detail plus annotation:
+
+```json
+{
+  "id": "<plaid_transaction_id>",
+  "account_id": "<plaid_account_id>",
+  "amount": 12.34,
+  "iso_currency_code": "USD",
+  "name": "Starbucks",
+  "merchant_name": "Starbucks",
+  "pending": false,
+  "date": "2024-01-15",
+  "raw_json": "{...}",
+  "annotation": {
+    "category": "food",
+    "note": "Morning coffee",
+    "tags": ["discretionary", "recurring"],
+    "updated_at": "2024-01-16T10:30:00Z"
+  }
+}
+```
+
+- `annotation` is `null` if no annotation exists for this transaction
+- `tags` in the response is a parsed JSON list (not the raw string stored in
+  SQLite); if stored value is `null`, return `null` for tags
+- `raw_json` is the raw Plaid API payload stored at sync time; may be `null`
+  for transactions synced before this field was populated
 
 **Done when**
 
-- Valid signatures return `True`; tampered body or wrong secret return
-  `False`
-- Unset secret returns `False` without raising
+- Known `transaction_id` returns 200 with full detail
+- Known `transaction_id` with no annotation returns 200 with `"annotation": null`
+- Unknown `transaction_id` returns 404
+- `tags` is a JSON list in the response (not a string)
 
-**Testing expectation**
+**Testing expectations**
 
-- Test: valid signature passes
-- Test: wrong secret fails
-- Test: tampered body fails
-- Test: missing secret fails closed
+- Test: known ID with no annotation returns 200, `annotation` is `null`
+- Test: known ID with annotation returns 200, annotation fields are correct,
+  `tags` is a Python list (not a string)
+- Test: `annotation.tags = null` when stored tags is `null`
+- Test: unknown ID returns 404
+- Test: missing bearer token returns 401; wrong token returns 401
 
 ---
 
-### Task 4: `POST /webhooks/plaid` handler ✅ DONE
+### Task 4: `PUT /annotations/{transaction_id}` upsert endpoint
 
 **Scope**
 
-- Add `POST /webhooks/plaid` endpoint; requires bearer token
-- Verify Plaid HMAC signature using the function from Task 3; return 400
-  on failure
-- On `SYNC_UPDATES_AVAILABLE` webhook type, enqueue a background sync
-  using FastAPI's `BackgroundTasks`; return 200 immediately (Plaid's
-  10-second timeout must not be breached)
-- The background task calls the existing `run_sync` via a thin
-  `PlaidClientAdapter` constructed from config; errors are logged but do
-  not affect the 200 response already sent
-- Unrecognised webhook types are acknowledged with 200 and logged at
-  debug level; do not error on unknown types (Plaid may send others)
-- Document the endpoint in `ARCHITECTURE.md`
+Add the annotation write endpoint to `server.py`. The DB helper from Task 1
+(`upsert_annotation`) is used directly.
+
+**Endpoint:**
+
+```
+PUT /annotations/{transaction_id}
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+- `transaction_id` in the path is the `plaid_transaction_id` string
+- Request body (all fields optional; omitted fields are stored as `null`):
+
+```json
+{
+  "category": "food",
+  "note": "Morning coffee",
+  "tags": ["discretionary", "recurring"]
+}
+```
+
+- This is a **full replace**, not a partial PATCH: every PUT completely
+  overwrites the annotation row. If an agent omits `note`, the stored `note`
+  becomes `null`.
+- `tags` must be a JSON array of strings or `null`; the server stores it as
+  `json.dumps(tags)` (or `null` if absent/null in the body)
+- Returns HTTP 404 if `transaction_id` does not exist in the `transactions`
+  table — agents cannot annotate phantom transactions. Check existence with
+  `get_transaction` before calling `upsert_annotation`.
+- Returns HTTP 200 `{"status": "ok"}` on successful create or update
+- Requires bearer token; missing/invalid token returns 401
+
+**Pydantic request model** (define in `server.py` or a new `api_models.py`):
+
+```python
+class AnnotationRequest(BaseModel):
+    category: str | None = None
+    note: str | None = None
+    tags: list[str] | None = None
+```
 
 **Done when**
 
-- `SYNC_UPDATES_AVAILABLE` webhook triggers a background sync
-- Invalid signature returns 400
-- Unknown webhook types return 200 without error
+- `PUT /annotations/{id}` on a valid transaction creates the annotation and
+  returns 200
+- A second PUT replaces the annotation; `created_at` is preserved
+- `PUT /annotations/{unknown_id}` returns 404
+- A PUT followed by `GET /transactions/{id}` returns the annotation correctly
+  (tags as a list)
 
-**Testing expectation**
+**Testing expectations**
 
-- Test: valid `SYNC_UPDATES_AVAILABLE` payload enqueues sync and returns
-  200; verify the background task is invoked (mock `run_sync`)
-- Test: invalid signature returns 400
-- Test: unknown webhook type returns 200
-- Test: sync errors in background do not bubble up to the HTTP response
+- Test: PUT creates a new annotation; response is `{"status": "ok"}`
+- Test: second PUT replaces annotation; `created_at` unchanged (verify via
+  `get_annotation` in DB); `updated_at` changes
+- Test: PUT with `{}` (empty body) stores all-null annotation; returns 200
+- Test: PUT with `tags: []` stores empty list correctly; round-trips as `[]`
+- Test: PUT for unknown `transaction_id` returns 404
+- Test: missing bearer token returns 401; wrong token returns 401
+- Test: end-to-end — PUT annotation, then GET transaction detail, verify
+  `annotation` block matches
 
 ---
 
-### Task 5: Structured logging ✅ DONE
+### Task 5: `ARCHITECTURE.md` update
 
 **Scope**
 
-- Configure Python's standard `logging` module at server startup with a
-  format suitable for systemd/journald: no ANSI color, timestamps, level,
-  module name, and message; e.g.
-  `%(asctime)s %(levelname)s %(name)s: %(message)s`
-- Log level configurable via `CLAW_LOG_LEVEL` env var (default `INFO`);
-  add to `Config`, `.env.example`, and `ARCHITECTURE.md`
-- Establish consistent log coverage across the new server surface:
-  - `INFO` — server started (host, port, log level; never the secret
-    value); webhook received and acknowledged; sync triggered; sync
-    completed (accounts/added/modified/removed counts)
-  - `WARNING` — unknown webhook type received; sync completed with zero
-    results when changes were expected (has_more drained but counts all
-    zero)
-  - `ERROR` — signature verification failed; background sync raised an
-    exception (log the exception with traceback)
-- Existing CLI commands (`doctor`, `sync`, `init-db`) are unaffected;
-  they continue to use `typer.echo` for operator output
+Update `ARCHITECTURE.md` to reflect all additions from this sprint. No code
+changes; documentation only.
+
+Sections to add or update:
+
+1. **Schema** — add `annotations` table with column descriptions, noting that
+   `tags` is stored as JSON text, and that this table is entirely agent-owned
+   (sync engine never touches it)
+
+2. **API endpoints** — extend the endpoints table to include:
+
+   | Method | Path | Auth | Description |
+   |---|---|---|---|
+   | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list |
+   | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with annotation |
+   | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
+   | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI) |
+   | `GET` | `/docs` | None | Swagger UI (FastAPI, local use only) |
+
+3. **Query parameters for `GET /transactions`** — document all eight filter
+   params with types, defaults, and the effective-date definition
+   (`COALESCE(posted_date, authorized_date)`)
+
+4. **Annotation response shape** — document the `annotation` object embedded
+   in `GET /transactions/{id}`, including `tags` being a JSON array
+
+5. **OpenAPI / SKILL definition** — note that `GET /openapi.json` is the
+   canonical machine-readable spec and is intended to seed the OpenClaw SKILL
+   definition for M7
+
+6. **Data flow** — update to reflect the new read path:
+   `SQLite → Agent API → OpenClaw agent`
 
 **Done when**
 
-- `journalctl -u claw-plaid-ledger` shows structured, human-readable
-  entries covering the above events
-- Log level can be changed without a code edit
-- No secrets or access tokens appear in any log line
-
-**Testing expectation**
-
-- Test: server startup emits an `INFO` line containing host and port
-- Test: `ERROR` is logged when signature verification fails
-- Test: `ERROR` with traceback is logged when background sync raises
-- Test: `CLAW_LOG_LEVEL=DEBUG` is accepted without error; `CLAW_LOG_LEVEL=INVALID` raises a clear `ConfigError` at startup
+- A developer can implement the full M4 API surface from `ARCHITECTURE.md`
+  alone without reading the code
+- The OpenAPI endpoint and Swagger UI are documented
 
 ---
 
 ## Acceptance criteria for the sprint
 
-- `ledger serve` starts, binds locally, and serves `/health`
-- All non-health endpoints require a valid bearer token
-- Plaid webhook signature is verified before any sync is triggered
-- `SYNC_UPDATES_AVAILABLE` triggers a background sync without blocking
-  the HTTP response
-- `ledger doctor` reports `CLAW_API_SECRET` presence
-- Quality gate passes on all PRs
-- `ARCHITECTURE.md` reflects all new config vars and endpoints
+- `GET /transactions` returns a correctly paginated, filterable list; all
+  eight filter parameters work independently and in combination
+- `GET /transactions/{id}` returns full transaction detail with annotation
+  merged in (`null` when absent); `tags` is a JSON array in the response
+- `PUT /annotations/{id}` creates or fully replaces an annotation; 404 for
+  unknown transactions; `created_at` is preserved on updates
+- The `annotations` table is isolated from the sync engine — no sync code
+  reads from or writes to it
+- `init-db` on an existing database creates `annotations` without error
+- All three new endpoints require a valid bearer token; 401 on
+  missing/invalid
+- FastAPI's `/openapi.json` and `/docs` are reachable without auth and
+  accurately describe all endpoints
+- Quality gate passes on all PRs (`ruff format`, `ruff check`, `mypy`,
+  `pytest`)
+- `ARCHITECTURE.md` reflects the new schema and full API surface
 
 ## Explicitly deferred
 
-- Agent query API and annotations (M4)
-- OpenClaw notification (M5)
-- Any markdown export
-- Multi-institution webhook routing
+- Per-agent token scoping (different tokens for read-only vs. read-write)
+- Keyword search on annotation `note` field
+- `DELETE /annotations/{transaction_id}`
+- Bulk annotation operations
+- OpenClaw notification on new transactions (M5)
+- Merchant normalization and category hints (M6)
+- OpenClaw SKILL definition file (M7)
