@@ -21,6 +21,28 @@ if TYPE_CHECKING:
     from claw_plaid_ledger.plaid_models import SyncResult
 
 
+class PlaidSyncError(RuntimeError):
+    """Base class for all Plaid sync errors raised by run_sync."""
+
+
+class PlaidTransientError(PlaidSyncError):
+    """
+    Transient Plaid error (network blip, rate-limit, server failure).
+
+    The operation may succeed on retry.  When this propagates from
+    run_sync the sqlite3 context manager rolls back all in-flight writes;
+    the prior cursor is preserved and the next run restarts cleanly.
+    """
+
+
+class PlaidPermanentError(PlaidSyncError):
+    """
+    Permanent Plaid error (invalid token, unsupported operation).
+
+    Retrying without operator intervention will not succeed.
+    """
+
+
 class SyncAdapter(Protocol):
     """Structural interface required by run_sync."""
 
@@ -63,7 +85,23 @@ def run_sync(
         seen_account_ids: set[str] = set()
 
         while True:
-            result = adapter.sync_transactions(access_token, cursor=cursor)
+            # Any exception raised here propagates out of the with-block,
+            # causing the sqlite3 context manager to call rollback().
+            # Classify known Plaid error types and wrap unknowns as
+            # transient so callers can reason about retry behaviour.
+            try:
+                result = adapter.sync_transactions(access_token, cursor=cursor)
+            except PlaidSyncError:
+                # Already a classified error — re-raise and let rollback fire.
+                raise
+            except Exception as exc:
+                # Unexpected exception from the adapter; treat as transient
+                # so the operator can retry without manual intervention.
+                msg = (
+                    "Unexpected error from Plaid adapter"
+                    f" (treating as transient): {exc}"
+                )
+                raise PlaidTransientError(msg) from exc
 
             for account in result.accounts:
                 upsert_account(connection, account)
@@ -88,6 +126,12 @@ def run_sync(
             if not result.has_more:
                 break
 
+        # Cursor-write-after-success invariant: cursor and sync state are
+        # persisted only after every page has been fetched without error.
+        # Any exception raised inside this with-block causes the sqlite3
+        # context manager to call connection.rollback(), discarding all
+        # in-flight account and transaction writes.  The prior cursor is
+        # preserved, so the next run restarts from the last known-good point.
         upsert_sync_state(
             connection,
             item_id=item_id,

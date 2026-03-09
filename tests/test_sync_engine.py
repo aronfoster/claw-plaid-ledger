@@ -6,6 +6,8 @@ import sqlite3
 from datetime import date
 from typing import TYPE_CHECKING
 
+import pytest
+
 from claw_plaid_ledger.db import get_sync_cursor
 from claw_plaid_ledger.plaid_models import (
     AccountData,
@@ -13,7 +15,11 @@ from claw_plaid_ledger.plaid_models import (
     SyncResult,
     TransactionData,
 )
-from claw_plaid_ledger.sync_engine import run_sync
+from claw_plaid_ledger.sync_engine import (
+    PlaidPermanentError,
+    PlaidTransientError,
+    run_sync,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,6 +42,34 @@ class FakeAdapter:
         cursor_arg = kwargs.get("cursor") if kwargs else None
         assert cursor_arg is None or isinstance(cursor_arg, str)
         self.received_cursors.append(cursor_arg)
+        return self._results.pop(0)
+
+
+class FailingAdapter:
+    """FakeAdapter variant that raises a configured error on a given page."""
+
+    def __init__(
+        self,
+        results: tuple[SyncResult, ...],
+        *,
+        fail_on_page: int,
+        error: Exception,
+    ) -> None:
+        """Configure results and the page number (0-indexed) that raises."""
+        self._results = list(results)
+        self._fail_on_page = fail_on_page
+        self._error = error
+        self._page = 0
+
+    def sync_transactions(self, *args: object, **kwargs: object) -> SyncResult:
+        """Return the next result, or raise on the configured page."""
+        assert args[0] == SYNC_ACCESS_VALUE
+        cursor_arg = kwargs.get("cursor") if kwargs else None
+        assert cursor_arg is None or isinstance(cursor_arg, str)
+        current_page = self._page
+        self._page += 1
+        if current_page == self._fail_on_page:
+            raise self._error
         return self._results.pop(0)
 
 
@@ -252,3 +286,102 @@ def test_run_sync_deletes_removed_transactions(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM transactions"
         ).fetchone()[0]
         assert tx_count == 0
+
+
+def test_run_sync_preserves_cursor_on_first_page_exception(
+    tmp_path: Path,
+) -> None:
+    """A transient error on page 1 leaves the DB clean and cursor unchanged."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FailingAdapter(
+        (),
+        fail_on_page=0,
+        error=PlaidTransientError("network blip"),
+    )
+
+    with pytest.raises(PlaidTransientError, match="network blip"):
+        run_sync(
+            db_path=db_path,
+            adapter=adapter,
+            access_token=SYNC_ACCESS_VALUE,
+        )
+
+    with sqlite3.connect(db_path) as connection:
+        # No transactions or cursor state should have been written.
+        tx_count = connection.execute(
+            "SELECT COUNT(*) FROM transactions"
+        ).fetchone()[0]
+        assert tx_count == 0
+        assert get_sync_cursor(connection, "default-item") is None
+
+
+def test_run_sync_preserves_prior_cursor_on_mid_loop_exception(
+    tmp_path: Path,
+) -> None:
+    """A transient error on page 2 rolls back writes; prior cursor survives."""
+    db_path = tmp_path / "ledger.db"
+
+    # First sync succeeds and establishes a cursor.
+    first = FakeAdapter((_result("cursor-1"),))
+    run_sync(
+        db_path=db_path,
+        adapter=first,
+        access_token=SYNC_ACCESS_VALUE,
+    )
+
+    # Second sync: page 1 succeeds (has_more=True), page 2 raises.
+    second = FailingAdapter(
+        (_result("cursor-2", has_more=True),),
+        fail_on_page=1,
+        error=PlaidTransientError("rate limit"),
+    )
+
+    with pytest.raises(PlaidTransientError, match="rate limit"):
+        run_sync(
+            db_path=db_path,
+            adapter=second,
+            access_token=SYNC_ACCESS_VALUE,
+        )
+
+    with sqlite3.connect(db_path) as connection:
+        # Cursor must still be from the first successful run.
+        assert get_sync_cursor(connection, "default-item") == "cursor-1"
+        # Only the one transaction from the first run should exist.
+        tx_count = connection.execute(
+            "SELECT COUNT(*) FROM transactions"
+        ).fetchone()[0]
+        assert tx_count == 1
+
+
+def test_run_sync_wraps_unknown_exception_as_transient(tmp_path: Path) -> None:
+    """An unexpected adapter exception is wrapped as PlaidTransientError."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FailingAdapter(
+        (),
+        fail_on_page=0,
+        error=ValueError("malformed response"),
+    )
+
+    with pytest.raises(PlaidTransientError, match="malformed response"):
+        run_sync(
+            db_path=db_path,
+            adapter=adapter,
+            access_token=SYNC_ACCESS_VALUE,
+        )
+
+
+def test_run_sync_propagates_permanent_error(tmp_path: Path) -> None:
+    """A PlaidPermanentError propagates unchanged from run_sync."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FailingAdapter(
+        (),
+        fail_on_page=0,
+        error=PlaidPermanentError("invalid access token"),
+    )
+
+    with pytest.raises(PlaidPermanentError, match="invalid access token"):
+        run_sync(
+            db_path=db_path,
+            adapter=adapter,
+            access_token=SYNC_ACCESS_VALUE,
+        )

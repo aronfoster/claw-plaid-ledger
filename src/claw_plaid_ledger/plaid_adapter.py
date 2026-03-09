@@ -25,11 +25,19 @@ from claw_plaid_ledger.plaid_models import (
     SyncResult,
     TransactionData,
 )
+from claw_plaid_ledger.sync_engine import (
+    PlaidPermanentError,
+    PlaidTransientError,
+)
 
 _ENV_MAP: dict[str, str] = {
     "sandbox": plaid.Environment.Sandbox,
     "production": plaid.Environment.Production,
 }
+
+# HTTP status code thresholds for transient-vs-permanent classification.
+_HTTP_TOO_MANY_REQUESTS: int = 429
+_HTTP_SERVER_ERROR_MIN: int = 500
 
 SUPPORTED_ENVIRONMENTS: frozenset[str] = frozenset(_ENV_MAP)
 
@@ -139,7 +147,23 @@ class PlaidClientAdapter:
         if cursor is not None:
             kwargs["cursor"] = cursor
         request = TransactionsSyncRequest(**kwargs)
-        response = self._api.transactions_sync(request)
+        try:
+            response = self._api.transactions_sync(request)
+        except plaid.ApiException as exc:
+            # HTTP 429 (rate limit) and 5xx (server error) are transient;
+            # other 4xx responses (e.g. INVALID_ACCESS_TOKEN) are permanent.
+            status: int = getattr(exc, "status", 0)
+            if (
+                status == _HTTP_TOO_MANY_REQUESTS
+                or status >= _HTTP_SERVER_ERROR_MIN
+            ):
+                msg = f"Plaid transient API error (HTTP {status}): {exc}"
+                raise PlaidTransientError(msg) from exc
+            msg = f"Plaid permanent API error (HTTP {status}): {exc}"
+            raise PlaidPermanentError(msg) from exc
+        except OSError as exc:
+            msg = f"Network error calling Plaid: {exc}"
+            raise PlaidTransientError(msg) from exc
 
         return SyncResult(
             added=tuple(_to_transaction_data(tx) for tx in response.added),
