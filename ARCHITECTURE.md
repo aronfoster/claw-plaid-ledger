@@ -18,6 +18,7 @@ planned but intentionally deferred until later milestones.
 - SQLite bootstrap and persistence layer (`db.py` + `schema.sql`)
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
+- HTTP server (`server.py`) — FastAPI application served via uvicorn
 
 ## Data flow
 
@@ -49,6 +50,12 @@ Current operator-facing CLI commands:
 - `init-db` — creates the SQLite database and initializes the schema
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
   respects `CLAW_PLAID_LEDGER_ITEM_ID` for multi-institution households
+- `serve` — starts the FastAPI/uvicorn HTTP server; binds to
+  `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`)
+
+HTTP endpoints (served by `ledger serve`):
+
+- `GET /health` — returns `{"status": "ok"}`; no authentication required
 
 Planned in M3:
 
@@ -76,14 +83,17 @@ Key variables:
 | `PLAID_ACCESS_TOKEN` | for sync | — | Plaid access token for the linked item |
 | `CLAW_PLAID_LEDGER_ITEM_ID` | no | `default-item` | Sync-state key; one value per institution |
 | `CLAW_PLAID_LEDGER_WORKSPACE_PATH` | no | — | Path to OpenClaw workspace for exports |
+| `CLAW_SERVER_HOST` | no | `127.0.0.1` | Host for `ledger serve` to bind to (local-only by default) |
+| `CLAW_SERVER_PORT` | no | `8000` | TCP port for `ledger serve` to listen on |
 
 ## Runtime and tooling standards
 
 - Python: 3.12+
 - Environment/dependency management: `uv`
 - CLI framework: `typer` (real library, not a shim)
+- HTTP framework: `fastapi` + `uvicorn[standard]`
 - Datastore: standard-library `sqlite3`
-- Testing: `pytest`
+- Testing: `pytest` + `fastapi.testclient.TestClient`
 - Formatting/linting: `ruff format` + `ruff check`
 - Type-checking: `mypy --strict`
 
@@ -98,6 +108,7 @@ src/claw_plaid_ledger/
   plaid_adapter.py
   plaid_models.py
   schema.sql
+  server.py
   sync_engine.py
 
 tests/
@@ -105,6 +116,7 @@ tests/
   test_config.py
   test_db.py
   test_plaid_adapter.py
+  test_server.py
   test_sync_engine.py
 
 pyproject.toml

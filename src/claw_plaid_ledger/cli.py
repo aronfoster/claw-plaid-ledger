@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Annotated
 
 import typer
+import uvicorn
 
 from claw_plaid_ledger.config import ConfigError, load_config
 from claw_plaid_ledger.db import initialize_database
@@ -161,6 +163,19 @@ def sync() -> None:
         f"modified={summary.modified} "
         f"removed={summary.removed}"
     )
+
+
+@app.command()
+def serve() -> None:
+    """Start the HTTP server on CLAW_SERVER_HOST:CLAW_SERVER_PORT."""
+    host = os.environ.get("CLAW_SERVER_HOST", "127.0.0.1")
+    port_str = os.environ.get("CLAW_SERVER_PORT", "8000")
+    try:
+        port = int(port_str)
+    except ValueError as exc:
+        typer.echo(f"serve: invalid CLAW_SERVER_PORT value: {port_str!r}")
+        raise SystemExit(1) from exc
+    uvicorn.run("claw_plaid_ledger.server:app", host=host, port=port)
 
 
 def main() -> None:

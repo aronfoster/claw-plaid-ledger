@@ -7,8 +7,10 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "claw-plaid-ledger contributors" }]
 dependencies = [
+  "fastapi>=0.135.1",
   "plaid-python",
   "typer>=0.24.1",
+  "uvicorn[standard]>=0.41.0",
 ]
 
 [project.scripts]
@@ -16,6 +18,7 @@ ledger = "claw_plaid_ledger.cli:main"
 
 [dependency-groups]
 dev = [
+  "httpx>=0.28.1",
   "mypy>=1.11.0,<2.0.0",
   "pytest>=8.3.0,<9.0.0",
   "ruff>=0.6.0,<1.0.0",
