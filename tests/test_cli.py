@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sys
 from contextlib import redirect_stdout
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from _pytest.monkeypatch import MonkeyPatch
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def run_main(args: list[str]) -> tuple[int, str]:
@@ -34,7 +37,7 @@ def run_main(args: list[str]) -> tuple[int, str]:
     finally:
         sys.argv = old_argv
 
-    return exit_code, buffer.getvalue()
+    return exit_code, _ANSI_ESCAPE.sub("", buffer.getvalue())
 
 
 def test_help() -> None:
