@@ -152,6 +152,7 @@ def sync() -> None:
         db_path=config.db_path,
         adapter=adapter,
         access_token=config.plaid_access_token,
+        item_id=config.item_id,
     )
     typer.echo(
         "sync: "

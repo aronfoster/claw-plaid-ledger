@@ -91,6 +91,7 @@ PLAID_ACCESS_TOKEN=
 # Local application paths
 CLAW_PLAID_LEDGER_DB_PATH=
 CLAW_PLAID_LEDGER_WORKSPACE_PATH=
+CLAW_PLAID_LEDGER_ITEM_ID=
 ```
 
 Notes:
@@ -99,6 +100,13 @@ Notes:
 - `CLAW_PLAID_LEDGER_DB_PATH` should point to a local SQLite file.
 - `CLAW_PLAID_LEDGER_WORKSPACE_PATH` should be set only when OpenClaw
   exports are being used.
+- `CLAW_PLAID_LEDGER_ITEM_ID` is a single string that identifies which Plaid
+  item (institution link) this sync run belongs to. It is used as the
+  sync-state key so each item maintains an independent cursor in the DB.
+  Defaults to `"default-item"`. For multi-institution households, run the
+  `sync` command once per institution with a distinct value (e.g. via
+  separate `.env` files or wrapper scripts). Do not use comma-separated
+  lists — the CLI syncs one item per invocation.
 
 ## Example
 
