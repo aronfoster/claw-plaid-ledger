@@ -60,14 +60,14 @@ def run_sync(
         added_count = 0
         modified_count = 0
         removed_count = 0
-        account_count = 0
+        seen_account_ids: set[str] = set()
 
         while True:
             result = adapter.sync_transactions(access_token, cursor=cursor)
 
             for account in result.accounts:
                 upsert_account(connection, account)
-            account_count += len(result.accounts)
+                seen_account_ids.add(account.plaid_account_id)
 
             for transaction in result.added:
                 upsert_transaction(connection, transaction)
@@ -99,6 +99,6 @@ def run_sync(
         added=added_count,
         modified=modified_count,
         removed=removed_count,
-        accounts=account_count,
+        accounts=len(seen_account_ids),
         next_cursor=cursor or "",
     )

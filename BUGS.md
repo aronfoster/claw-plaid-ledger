@@ -8,7 +8,7 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## BUG-001 — `account_count` inflated on multi-page syncs
 
-**Status:** Open
+**Status:** Resolved (Sprint 3, Task 1)
 **Severity:** Low (operator output only; no data integrity impact)
 **File:** `src/claw_plaid_ledger/sync_engine.py`
 **Introduced:** Sprint 2
