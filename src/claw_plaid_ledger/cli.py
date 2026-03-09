@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Annotated
 
 import typer
+
 from claw_plaid_ledger.config import ConfigError, load_config
 from claw_plaid_ledger.db import initialize_database
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
 
 app = typer.Typer(
-    help_text=(
+    help=(
         "Local-first finance ledger CLI for syncing Plaid data into "
         "SQLite and exporting agent-friendly artifacts."
     ),
@@ -20,7 +21,7 @@ app = typer.Typer(
 
 @app.command()
 def doctor(
-    verbose: int = cast("int", typer.option(0, "--verbose", "-v", count=True)),
+    verbose: Annotated[int, typer.Option("--verbose", "-v", count=True)] = 0,
 ) -> None:
     """Show environment and setup diagnostics for this project."""
     if verbose > 0:

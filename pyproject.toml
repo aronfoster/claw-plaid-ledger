@@ -8,6 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "claw-plaid-ledger contributors" }]
 dependencies = [
   "plaid-python",
+  "typer>=0.24.1",
 ]
 
 [project.scripts]
