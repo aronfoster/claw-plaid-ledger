@@ -34,7 +34,7 @@ def _redact(value: str | None) -> str:
 
 @app.command()
 def doctor(
-    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,  # noqa: FBT002
+    verbose: Annotated[int, typer.Option("--verbose", "-v", count=True)] = 0,
 ) -> None:
     """Show environment and setup diagnostics for this project."""
     # Validate required env vars
@@ -96,7 +96,7 @@ def doctor(
     typer.echo(f"doctor: accounts rows={account_count}")
     typer.echo(f"doctor: transactions rows={tx_count}")
 
-    if verbose:
+    if verbose > 0:
         typer.echo(
             f"doctor: config CLAW_PLAID_LEDGER_DB_PATH={config.db_path}"
         )
