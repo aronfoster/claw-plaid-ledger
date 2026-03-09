@@ -2,8 +2,16 @@
 
 ## Current milestone focus
 
-M2 (Local ledger hardening) is complete. The repository is now in Sprint 4
-with a focus on agent-friendly exports (M3).
+M2 (Local ledger hardening) is complete. Sprint 4 (M3 server skeleton and
+webhook receiver) is complete. The server now:
+
+- Serves `GET /health` and `POST /webhooks/plaid` via FastAPI/uvicorn
+- Enforces bearer token auth on all non-health routes
+- Verifies Plaid HMAC-SHA256 signatures before triggering any sync
+- Enqueues background syncs asynchronously on `SYNC_UPDATES_AVAILABLE`
+- Emits structured logs suitable for systemd/journald at a configurable level
+
+Next focus: M3 agent-friendly exports.
 
 - Write markdown summaries and inbox files into the OpenClaw workspace
 - Make exports idempotent and safe to regenerate on every sync run
@@ -92,6 +100,7 @@ Key variables:
 | `CLAW_SERVER_PORT` | no | `8000` | TCP port for `ledger serve` to listen on |
 | `CLAW_API_SECRET` | for serve | — | Bearer token required on all non-health HTTP endpoints; server refuses to start if unset |
 | `PLAID_WEBHOOK_SECRET` | for webhooks | — | Shared secret used to verify Plaid webhook HMAC-SHA256 signatures; if unset all webhook signature checks fail closed |
+| `CLAW_LOG_LEVEL` | no | `INFO` | Log level for the HTTP server; must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; invalid value raises `ConfigError` at startup |
 
 ## Runtime and tooling standards
 

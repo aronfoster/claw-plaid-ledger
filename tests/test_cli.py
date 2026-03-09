@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -10,8 +11,9 @@ from contextlib import redirect_stdout
 from io import StringIO
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
-from claw_plaid_ledger.cli import main
+from claw_plaid_ledger.cli import main, serve
 from claw_plaid_ledger.db import initialize_database
 
 if TYPE_CHECKING:
@@ -255,3 +257,46 @@ def test_sync_success_calls_engine(
 
     assert exit_code == 0
     assert "sync: accounts=3 added=2 modified=1 removed=0" in output
+
+
+def test_serve_refuses_invalid_log_level(monkeypatch: MonkeyPatch) -> None:
+    """`serve` exits non-zero when CLAW_LOG_LEVEL is invalid."""
+    monkeypatch.setenv("CLAW_API_SECRET", "some-secret-value")
+    monkeypatch.setenv("CLAW_LOG_LEVEL", "INVALID")
+
+    exit_code, output = run_main(["serve"])
+
+    assert exit_code != 0
+    assert "CLAW_LOG_LEVEL" in output
+
+
+def test_serve_logs_startup_info(monkeypatch: MonkeyPatch) -> None:
+    """`serve` emits an INFO log containing host and port before starting."""
+    monkeypatch.setenv("CLAW_API_SECRET", "some-secret-value")
+    monkeypatch.setenv("CLAW_SERVER_HOST", "127.0.0.1")
+    monkeypatch.setenv("CLAW_SERVER_PORT", "9999")
+    monkeypatch.delenv("CLAW_LOG_LEVEL", raising=False)
+
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Capture()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    old_level = root.level
+    root.setLevel(logging.DEBUG)
+
+    try:
+        with patch("claw_plaid_ledger.cli.uvicorn.run"):
+            serve()
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(old_level)
+
+    messages = [r.getMessage() for r in records if r.levelno == logging.INFO]
+    assert any("127.0.0.1" in m and "9999" in m for m in messages), (
+        f"Expected INFO with host and port; got: {messages}"
+    )

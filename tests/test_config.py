@@ -142,3 +142,33 @@ def test_load_config_item_id_reads_from_env_var() -> None:
     )
 
     assert cfg.item_id == "my-bank-item"
+
+
+def test_load_config_invalid_log_level_raises_config_error() -> None:
+    """CLAW_LOG_LEVEL with an unrecognised value raises ConfigError."""
+    with pytest.raises(ConfigError, match="Invalid CLAW_LOG_LEVEL"):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_LOG_LEVEL": "INVALID",
+            }
+        )
+
+
+def test_load_config_debug_log_level_accepted() -> None:
+    """CLAW_LOG_LEVEL=DEBUG is a recognised level and loads without error."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_LOG_LEVEL": "DEBUG",
+        }
+    )
+
+    assert cfg.log_level == "DEBUG"
+
+
+def test_load_config_log_level_defaults_to_info() -> None:
+    """log_level defaults to INFO when CLAW_LOG_LEVEL is not set."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.log_level == "INFO"

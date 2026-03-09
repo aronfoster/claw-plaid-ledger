@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from os import environ as os_environ
 from pathlib import Path
 
+_VALID_LOG_LEVELS = frozenset(
+    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+)
+
 
 class ConfigError(ValueError):
     """Raised when required configuration is missing or invalid."""
@@ -34,6 +38,7 @@ class Config:
     api_secret: str | None = None
     plaid_webhook_secret: str | None = None
     item_id: str = DEFAULT_ITEM_ID
+    log_level: str = "INFO"
 
 
 def _default_env_file() -> Path:
@@ -82,6 +87,14 @@ def load_config(
     api_secret = values.get("CLAW_API_SECRET") or None
     plaid_webhook_secret = values.get("PLAID_WEBHOOK_SECRET") or None
     item_id = values.get("CLAW_PLAID_LEDGER_ITEM_ID") or DEFAULT_ITEM_ID
+    log_level_raw = (values.get("CLAW_LOG_LEVEL") or "INFO").upper()
+    if log_level_raw not in _VALID_LOG_LEVELS:
+        valid_names = ", ".join(sorted(_VALID_LOG_LEVELS))
+        msg = (
+            f"Invalid CLAW_LOG_LEVEL: {log_level_raw!r}."
+            f" Must be one of: {valid_names}"
+        )
+        raise ConfigError(msg)
 
     missing = []
     if not db_path_raw:
@@ -115,4 +128,5 @@ def load_config(
         api_secret=api_secret,
         plaid_webhook_secret=plaid_webhook_secret,
         item_id=item_id,
+        log_level=log_level_raw,
     )
