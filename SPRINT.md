@@ -101,7 +101,7 @@ verification from day one.
 
 ---
 
-### Task 4: `POST /webhooks/plaid` handler
+### Task 4: `POST /webhooks/plaid` handler ✅ DONE
 
 **Scope**
 

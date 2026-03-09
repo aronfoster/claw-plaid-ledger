@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import http
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
 
 import fastapi
 import pytest
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    import pathlib
 
 from claw_plaid_ledger.server import app, require_bearer_token
 
@@ -145,4 +152,140 @@ class TestProtectedRoute:
             "/protected",
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
+        assert response.status_code == http.HTTPStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# Tests for POST /webhooks/plaid
+# ---------------------------------------------------------------------------
+
+_WEBHOOK_SECRET = "test-webhook-secret"  # noqa: S105
+
+
+def _make_plaid_sig(body: bytes, secret: str = _WEBHOOK_SECRET) -> str:
+    """Compute a valid Plaid-Verification HMAC-SHA256 hex digest."""
+    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+class TestWebhookPlaid:
+    """Tests for the POST /webhooks/plaid endpoint."""
+
+    def test_valid_sync_updates_available_returns_200_and_enqueues_sync(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SYNC_UPDATES_AVAILABLE with valid sig returns 200; enqueues sync."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once()
+
+    def test_invalid_signature_returns_400(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A tampered or missing signature returns 400."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": "bad-signature",
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == http.HTTPStatus.BAD_REQUEST
+
+    def test_unknown_webhook_type_returns_200_without_enqueuing_sync(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unrecognised webhook types are acknowledged with 200; no sync."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "ITEM_WEBHOOK"}'
+        sig = _make_plaid_sig(body)
+
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_not_called()
+
+    def test_sync_error_in_background_does_not_affect_response(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """A run_sync failure in the background does not change the 200."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        mock_config = MagicMock()
+        # S105: value is a mock placeholder, not a real credential.
+        mock_config.plaid_access_token = "access-token"  # noqa: S105
+        mock_config.item_id = "default-item"
+        mock_config.db_path = tmp_path
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "claw_plaid_ledger.server.PlaidClientAdapter"
+            ) as mock_adapter_cls,
+            patch(
+                "claw_plaid_ledger.server.run_sync",
+                side_effect=RuntimeError("sync blew up"),
+            ),
+        ):
+            mock_adapter_cls.from_config.return_value = MagicMock()
+
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
         assert response.status_code == http.HTTPStatus.OK

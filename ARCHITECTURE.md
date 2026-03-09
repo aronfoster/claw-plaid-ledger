@@ -56,6 +56,11 @@ Current operator-facing CLI commands:
 HTTP endpoints (served by `ledger serve`):
 
 - `GET /health` — returns `{"status": "ok"}`; no authentication required
+- `POST /webhooks/plaid` — receives Plaid webhook events; requires bearer
+  token auth and Plaid HMAC-SHA256 signature verification (`Plaid-Verification`
+  header); returns 400 on invalid signature; on `SYNC_UPDATES_AVAILABLE`
+  enqueues a background sync via `run_sync` and returns 200 immediately;
+  unrecognised webhook types are acknowledged with 200 and logged at debug level
 
 Planned in M3:
 
