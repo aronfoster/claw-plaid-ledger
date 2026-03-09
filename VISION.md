@@ -2,26 +2,31 @@
 
 ## One-liner
 
-Local-first household finance ingestion for OpenClaw.
+Local-first household finance server: deterministic ingestion from Plaid,
+safe agent access via API, human-readable exports on demand.
 
 ## Problem
 
 Polling an agent to repeatedly inspect mostly unchanged finance data wastes
-tokens and mixes deterministic ingestion with interpretation.
+tokens and mixes deterministic ingestion with interpretation. Giving agents
+direct database access creates safety and correctness risks.
 
 ## Goal
 
-Use Plaid to ingest transaction data into a local ledger, then wake OpenClaw
-only when there is new or uncertain information worth interpreting.
+Run a persistent local server that ingests transaction data from Plaid via
+webhooks, exposes a typed API for OpenClaw agents to query and annotate,
+and wakes OpenClaw only when there is new or uncertain information worth
+interpreting.
 
 ## Principles
 
 - Local-first
 - Deterministic ingestion
+- Server as the runtime; CLI as the ops interface
 - Agent for interpretation, not bookkeeping
-- Human-readable exports
+- Agents interact through the API, never directly with SQLite
+- Secure by default, even on a trusted local machine
 - Minimal secrets exposure
-- Security-first defaults
 - Small, composable architecture
 
 ## Non-goals
