@@ -21,7 +21,7 @@ verification from day one.
 
 ## Task breakdown
 
-### Task 1: FastAPI dependency and `ledger serve` skeleton
+### Task 1: FastAPI dependency and `ledger serve` skeleton ✅ DONE
 
 **Scope**
 
@@ -46,7 +46,7 @@ verification from day one.
 
 ---
 
-### Task 2: Bearer token auth and startup validation
+### Task 2: Bearer token auth and startup validation ✅ DONE
 
 **Scope**
 
@@ -74,7 +74,7 @@ verification from day one.
 
 ---
 
-### Task 3: Plaid webhook signature verification
+### Task 3: Plaid webhook signature verification ✅ DONE
 
 **Scope**
 
