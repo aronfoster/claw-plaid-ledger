@@ -42,7 +42,7 @@ def test_help() -> None:
     exit_code, output = run_main(["--help"])
 
     assert exit_code == 0
-    assert "usage: ledger" in output
+    assert "Usage: ledger" in output
     assert "doctor" in output
     assert "init-db" in output
     assert "sync" in output

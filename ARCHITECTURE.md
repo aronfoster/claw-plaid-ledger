@@ -1,26 +1,28 @@
 # Architecture
 
-## Sprint 2 implementation focus
+## Sprint 3 implementation focus
 
-This repository is currently in Sprint 2 with a narrow vertical slice:
+This repository is currently in Sprint 3 with a focus on hardening the local
+ledger for reliable day-to-day operation.
 
-- configure runtime from environment variables
-- initialize and manage a local SQLite ledger
-- add a thin Plaid ingestion path for accounts, transactions, and sync cursor
-- keep repeated syncs deterministic and idempotent
+- fix known bugs from Sprint 2
+- adopt the real `typer` library as the CLI framework (replacing the shim)
+- harden the `doctor` command with real diagnostics
+- make `item_id` configurable for multi-institution households
+- improve sync atomicity and error resilience
 
 Markdown exports, OpenClaw notifications, and reconciliation workflows are
 planned but intentionally deferred until later milestones.
 
 ## Components
 
-- CLI boundary (`Typer`) for operator workflows
+- CLI boundary (`typer` library) for operator workflows
 - Config/secrets layer (`config.py`)
 - SQLite bootstrap and persistence layer (`db.py` + `schema.sql`)
 - Plaid client wrapper (Sprint 2 scope)
 - Sync engine (Sprint 2 scope)
 
-## Data flow (Sprint 2)
+## Data flow (Sprint 3)
 
 Plaid API -> sync engine -> SQLite
 
@@ -60,7 +62,7 @@ Deferred interfaces:
 
 - Python: 3.12+
 - Environment/dependency management: `uv`
-- CLI framework: `Typer`
+- CLI framework: `typer` (real library, not a shim)
 - Datastore: standard-library `sqlite3`
 - Testing: `pytest`
 - Formatting/linting: `ruff format` + `ruff check`
@@ -74,15 +76,17 @@ src/claw_plaid_ledger/
   cli.py
   config.py
   db.py
+  plaid_adapter.py
+  plaid_models.py
   schema.sql
-
-src/
-  typer.py
+  sync_engine.py
 
 tests/
   test_cli.py
   test_config.py
   test_db.py
+  test_plaid_adapter.py
+  test_sync_engine.py
 
 pyproject.toml
 README.md

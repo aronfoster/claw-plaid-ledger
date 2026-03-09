@@ -60,7 +60,7 @@ Option A is preferred for Sprint 3.
 
 ## BUG-002 — `src/typer.py` is a custom shim, not the real Typer library
 
-**Status:** Open
+**Status:** Resolved (Sprint 3, Task 2)
 **Severity:** Medium (will cause friction when adding new CLI options)
 **File:** `src/typer.py`, `pyproject.toml`, `ARCHITECTURE.md`
 **Introduced:** Sprint 1
