@@ -19,6 +19,13 @@ SQLite with cursor-based idempotent reruns.
 Expand deterministic persistence behavior for accounts, transactions, and sync
 state; improve operational diagnostics.
 
+### Status
+
+Complete. BUG-001 (account_count inflation) and BUG-002 (Typer shim) resolved.
+Real `typer` library adopted. `doctor` command hardened with real diagnostics.
+`CLAW_PLAID_LEDGER_ITEM_ID` is configurable for multi-institution households.
+Sync loop handles mid-loop exceptions without corrupting cursor state.
+
 ## M3 - Agent-friendly exports
 
 Write markdown summaries/inbox files into OpenClaw workspace.

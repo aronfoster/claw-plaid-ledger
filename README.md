@@ -16,9 +16,8 @@ prepares deterministic outputs for OpenClaw. Bring-your-own-Plaid-integration. Y
 ## Quick start
 
 ```bash
-uv sync
 uv run ledger --help
-uv run pytest
+uv run --locked pytest
 uv run --locked ruff format . --check
 uv run --locked ruff check .
 uv run --locked mypy .
@@ -110,11 +109,12 @@ Notes:
 
 ## Example
 
-After creating your config and syncing dependencies:
+After creating your config:
 
 ```bash
-uv sync --dev --locked
 uv run ledger init-db
+uv run ledger doctor
+uv run ledger sync
 ```
 
 ## Quality defaults
