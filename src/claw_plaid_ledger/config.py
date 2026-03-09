@@ -31,6 +31,7 @@ class Config:
     plaid_secret: str | None
     plaid_env: str | None
     plaid_access_token: str | None
+    api_secret: str | None = None
     item_id: str = DEFAULT_ITEM_ID
 
 
@@ -77,6 +78,7 @@ def load_config(
     plaid_secret = values.get("PLAID_SECRET")
     plaid_env = values.get("PLAID_ENV")
     plaid_access_token = values.get("PLAID_ACCESS_TOKEN")
+    api_secret = values.get("CLAW_API_SECRET") or None
     item_id = values.get("CLAW_PLAID_LEDGER_ITEM_ID") or DEFAULT_ITEM_ID
 
     missing = []
@@ -108,5 +110,6 @@ def load_config(
         plaid_secret=plaid_secret,
         plaid_env=plaid_env,
         plaid_access_token=plaid_access_token,
+        api_secret=api_secret,
         item_id=item_id,
     )

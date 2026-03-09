@@ -125,6 +125,46 @@ def test_doctor_verbose_redacts_secrets(
     assert "access-token-abcdefgh" not in output
 
 
+def test_doctor_reports_api_secret_set(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports [OK] when CLAW_API_SECRET is set."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_API_SECRET", "some-secret-value")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "CLAW_API_SECRET [OK]" in output
+
+
+def test_doctor_reports_api_secret_unset(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports [FAIL] when CLAW_API_SECRET is not set."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.delenv("CLAW_API_SECRET", raising=False)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "CLAW_API_SECRET [FAIL]" in output
+
+
+def test_serve_refuses_without_api_secret(monkeypatch: MonkeyPatch) -> None:
+    """`serve` exits non-zero when CLAW_API_SECRET is not set."""
+    monkeypatch.delenv("CLAW_API_SECRET", raising=False)
+
+    exit_code, output = run_main(["serve"])
+
+    assert exit_code != 0
+    assert "CLAW_API_SECRET" in output
+
+
 INIT_DB_CONFIG_ERROR_EXIT_CODE = 2
 
 
