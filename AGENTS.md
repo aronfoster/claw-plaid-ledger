@@ -114,6 +114,20 @@ and `int` instead of `bool`), so the noqa comment is not justified.
 
 ---
 
+## Sprint tracking
+
+When you complete a task from `SPRINT.md`, mark it done in that file before
+committing.  Add `✅ DONE` to the end of the task's heading line, for example:
+
+```
+### Task 3: Plaid webhook signature verification ✅ DONE
+```
+
+This keeps the sprint board accurate for the next developer (human or agent)
+picking up the next task.
+
+---
+
 ## Required behavior summary
 
 1. Run the full quality gate before committing.
@@ -121,3 +135,4 @@ and `int` instead of `bool`), so the noqa comment is not justified.
 3. If a bypass is truly unavoidable, follow the narrow-bypass + detailed
    comment policy above.
 4. Include quality-gate output in your task summary.
+5. Mark completed tasks in `SPRINT.md` (see **Sprint tracking** above).

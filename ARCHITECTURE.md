@@ -86,6 +86,7 @@ Key variables:
 | `CLAW_SERVER_HOST` | no | `127.0.0.1` | Host for `ledger serve` to bind to (local-only by default) |
 | `CLAW_SERVER_PORT` | no | `8000` | TCP port for `ledger serve` to listen on |
 | `CLAW_API_SECRET` | for serve | — | Bearer token required on all non-health HTTP endpoints; server refuses to start if unset |
+| `PLAID_WEBHOOK_SECRET` | for webhooks | — | Shared secret used to verify Plaid webhook HMAC-SHA256 signatures; if unset all webhook signature checks fail closed |
 
 ## Runtime and tooling standards
 
@@ -111,6 +112,7 @@ src/claw_plaid_ledger/
   schema.sql
   server.py
   sync_engine.py
+  webhook_auth.py
 
 tests/
   test_cli.py
@@ -119,6 +121,7 @@ tests/
   test_plaid_adapter.py
   test_server.py
   test_sync_engine.py
+  test_webhook_auth.py
 
 pyproject.toml
 README.md
