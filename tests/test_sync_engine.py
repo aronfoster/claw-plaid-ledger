@@ -151,6 +151,28 @@ def test_run_sync_pages_until_has_more_is_false(tmp_path: Path) -> None:
         assert get_sync_cursor(connection, "default-item") == "cursor-2"
 
 
+def test_run_sync_account_count_is_distinct_across_pages(
+    tmp_path: Path,
+) -> None:
+    """account_count is distinct accounts, not pages x accounts (BUG-001)."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FakeAdapter(
+        (
+            _result("cursor-1", has_more=True),
+            _result("cursor-2"),
+        )
+    )
+
+    summary = run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+    )
+
+    # Both pages return the same single account; summary must report 1, not 2.
+    assert summary.accounts == 1
+
+
 def test_run_sync_deletes_removed_transactions(tmp_path: Path) -> None:
     """run_sync removes transactions that Plaid marks as removed."""
     db_path = tmp_path / "ledger.db"
