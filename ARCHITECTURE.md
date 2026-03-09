@@ -85,6 +85,7 @@ Key variables:
 | `CLAW_PLAID_LEDGER_WORKSPACE_PATH` | no | — | Path to OpenClaw workspace for exports |
 | `CLAW_SERVER_HOST` | no | `127.0.0.1` | Host for `ledger serve` to bind to (local-only by default) |
 | `CLAW_SERVER_PORT` | no | `8000` | TCP port for `ledger serve` to listen on |
+| `CLAW_API_SECRET` | for serve | — | Bearer token required on all non-health HTTP endpoints; server refuses to start if unset |
 
 ## Runtime and tooling standards
 

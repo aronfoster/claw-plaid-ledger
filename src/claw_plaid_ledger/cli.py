@@ -117,6 +117,11 @@ def doctor(
             f"{_redact(config.plaid_access_token)}"
         )
 
+    if config.api_secret:
+        typer.echo("doctor: CLAW_API_SECRET [OK]")
+    else:
+        typer.echo("doctor: CLAW_API_SECRET [FAIL] not set")
+
     typer.echo("doctor: all checks passed")
 
 
@@ -168,6 +173,14 @@ def sync() -> None:
 @app.command()
 def serve() -> None:
     """Start the HTTP server on CLAW_SERVER_HOST:CLAW_SERVER_PORT."""
+    if not os.environ.get("CLAW_API_SECRET"):
+        typer.echo(
+            "serve: CLAW_API_SECRET is not set; refusing to start. "
+            "Set CLAW_API_SECRET to a strong random secret before "
+            "running the server."
+        )
+        raise SystemExit(1)
+
     host = os.environ.get("CLAW_SERVER_HOST", "127.0.0.1")
     port_str = os.environ.get("CLAW_SERVER_PORT", "8000")
     try:
