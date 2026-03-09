@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from claw_plaid_ledger.cli import main
+from claw_plaid_ledger.db import initialize_database
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -51,20 +52,77 @@ def test_help() -> None:
     assert "sync" in output
 
 
-def test_doctor_default() -> None:
-    """`doctor` command returns the baseline setup status."""
+def test_doctor_missing_config() -> None:
+    """`doctor` exits non-zero when required env var is missing."""
+    original = os.environ.pop("CLAW_PLAID_LEDGER_DB_PATH", None)
+
+    try:
+        exit_code, output = run_main(["doctor"])
+    finally:
+        if original is not None:
+            os.environ["CLAW_PLAID_LEDGER_DB_PATH"] = original
+
+    assert exit_code != 0
+    assert "doctor: env [FAIL]" in output
+    assert "CLAW_PLAID_LEDGER_DB_PATH" in output
+
+
+def test_doctor_missing_db_file(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` exits non-zero when the DB file does not exist."""
+    db_path = tmp_path / "missing.db"
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code != 0
+    assert "doctor: db [FAIL]" in output
+
+
+def test_doctor_healthy(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """`doctor` exits zero and reports row counts when healthy."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
     exit_code, output = run_main(["doctor"])
 
     assert exit_code == 0
-    assert "doctor: basic checks passed" in output
+    assert "doctor: env [OK]" in output
+    assert "doctor: db [OK]" in output
+    assert "doctor: schema [OK]" in output
+    assert "doctor: sync_state rows=0 last_synced_at=never" in output
+    assert "doctor: accounts rows=0" in output
+    assert "doctor: transactions rows=0" in output
+    assert "doctor: all checks passed" in output
 
 
-def test_doctor_verbose() -> None:
-    """`doctor --verbose` returns the verbose placeholder status."""
+def test_doctor_verbose_redacts_secrets(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor --verbose` shows config values with secrets redacted."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id-value")
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    monkeypatch.setenv("PLAID_SECRET", "supersecretvalue1234")
+    monkeypatch.setenv("PLAID_ACCESS_TOKEN", "access-token-abcdefgh")
+
     exit_code, output = run_main(["doctor", "--verbose"])
 
     assert exit_code == 0
-    assert "doctor: verbose diagnostics not implemented yet" in output
+    assert "doctor: all checks passed" in output
+    # Non-secret values shown in full
+    assert "PLAID_CLIENT_ID=client-id-value" in output
+    assert "PLAID_ENV=sandbox" in output
+    # Secrets redacted to last 4 chars
+    assert "PLAID_SECRET=****1234" in output
+    assert "PLAID_ACCESS_TOKEN=****efgh" in output
+    # Full secret values must not appear in output
+    assert "supersecretvalue1234" not in output
+    assert "access-token-abcdefgh" not in output
 
 
 INIT_DB_CONFIG_ERROR_EXIT_CODE = 2
