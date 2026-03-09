@@ -134,7 +134,7 @@ verification from day one.
 
 ---
 
-### Task 5: Structured logging
+### Task 5: Structured logging ✅ DONE
 
 **Scope**
 

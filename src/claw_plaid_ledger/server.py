@@ -49,12 +49,30 @@ def _background_sync() -> None:
             logger.error("Background sync aborted: PLAID_ACCESS_TOKEN not set")
             return
         adapter = PlaidClientAdapter.from_config(config)
-        run_sync(
+        logger.info("Background sync starting item_id=%s", config.item_id)
+        summary = run_sync(
             db_path=config.db_path,
             adapter=adapter,
             access_token=config.plaid_access_token,
             item_id=config.item_id,
         )
+        logger.info(
+            "Background sync completed accounts=%d added=%d modified=%d"
+            " removed=%d",
+            summary.accounts,
+            summary.added,
+            summary.modified,
+            summary.removed,
+        )
+        if (
+            summary.added == 0
+            and summary.modified == 0
+            and summary.removed == 0
+        ):
+            logger.warning(
+                "Background sync completed with zero transaction changes; "
+                "verify webhook payload and Plaid item state"
+            )
     except Exception:
         logger.exception("Background sync failed")
 
@@ -75,14 +93,19 @@ async def webhook_plaid(
     headers = dict(request.headers)
 
     if not verify_plaid_signature(body, headers):
+        logger.error("Plaid webhook signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     payload = json.loads(body)
     webhook_type = payload.get("webhook_type", "")
+    logger.info("Plaid webhook received webhook_type=%s", webhook_type)
 
     if webhook_type == _SYNC_UPDATES_AVAILABLE:
+        logger.info(
+            "Enqueuing background sync for webhook_type=%s", webhook_type
+        )
         background_tasks.add_task(_background_sync)
     else:
-        logger.debug("Unrecognised Plaid webhook type: %s", webhook_type)
+        logger.warning("Unrecognised Plaid webhook type: %s", webhook_type)
 
     return {"status": "ok"}

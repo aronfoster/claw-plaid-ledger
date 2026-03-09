@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import http
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -289,3 +290,93 @@ class TestWebhookPlaid:
             )
 
         assert response.status_code == http.HTTPStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# Structured logging tests
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredLogging:
+    """Tests for INFO/ERROR log coverage in the webhook handler."""
+
+    def test_invalid_signature_logs_error(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An invalid Plaid signature logs an ERROR before returning 400."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+
+        with caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"):
+            client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": "tampered-bad-sig",
+                    "Content-Type": "application/json",
+                },
+            )
+
+        error_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.ERROR
+        ]
+        assert any("signature" in m.lower() for m in error_messages), (
+            f"Expected ERROR log mentioning signature; got: {error_messages}"
+        )
+
+    def test_background_sync_exception_logs_error_with_traceback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """A run_sync exception is logged as ERROR with exc_info."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        mock_config = MagicMock()
+        mock_config.plaid_access_token = "access-token"  # noqa: S105
+        mock_config.item_id = "default-item"
+        mock_config.db_path = tmp_path
+
+        with (
+            caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"),
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "claw_plaid_ledger.server.PlaidClientAdapter"
+            ) as mock_adapter_cls,
+            patch(
+                "claw_plaid_ledger.server.run_sync",
+                side_effect=RuntimeError("deliberate test failure"),
+            ),
+        ):
+            mock_adapter_cls.from_config.return_value = MagicMock()
+            client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        error_records = [
+            r for r in caplog.records if r.levelno == logging.ERROR
+        ]
+        assert error_records, "Expected at least one ERROR log record"
+        # exc_info should be set so the traceback is captured
+        assert any(r.exc_info is not None for r in error_records), (
+            "Expected ERROR record to include exc_info (traceback)"
+        )

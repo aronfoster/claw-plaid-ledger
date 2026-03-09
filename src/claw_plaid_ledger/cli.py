@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from typing import Annotated
@@ -9,7 +10,11 @@ from typing import Annotated
 import typer
 import uvicorn
 
-from claw_plaid_ledger.config import ConfigError, load_config
+from claw_plaid_ledger.config import (
+    _VALID_LOG_LEVELS,
+    ConfigError,
+    load_config,
+)
 from claw_plaid_ledger.db import initialize_database
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
@@ -181,6 +186,19 @@ def serve() -> None:
         )
         raise SystemExit(1)
 
+    log_level_raw = (os.environ.get("CLAW_LOG_LEVEL") or "INFO").upper()
+    if log_level_raw not in _VALID_LOG_LEVELS:
+        typer.echo(
+            f"serve: invalid CLAW_LOG_LEVEL={log_level_raw!r}. "
+            f"Must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}"
+        )
+        raise SystemExit(1)
+
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        level=getattr(logging, log_level_raw),
+    )
+
     host = os.environ.get("CLAW_SERVER_HOST", "127.0.0.1")
     port_str = os.environ.get("CLAW_SERVER_PORT", "8000")
     try:
@@ -188,6 +206,15 @@ def serve() -> None:
     except ValueError as exc:
         typer.echo(f"serve: invalid CLAW_SERVER_PORT value: {port_str!r}")
         raise SystemExit(1) from exc
+
+    _serve_logger = logging.getLogger(__name__)
+    _serve_logger.info(
+        "server starting host=%s port=%d log_level=%s",
+        host,
+        port,
+        log_level_raw,
+    )
+
     uvicorn.run("claw_plaid_ledger.server:app", host=host, port=port)
 
 
