@@ -1,7 +1,7 @@
 # claw-plaid-ledger
 
-Local-first financial management app that ingests Plaid data into SQLite and
-prepares deterministic outputs for OpenClaw.
+Local-first financial management support app that ingests Plaid data into SQLite and
+prepares deterministic outputs for OpenClaw. Bring-your-own-Plaid-integration. You're responsible for safeguarding the data at rest and keeping OpenClaw interactions safe.
 
 ## Tech stack
 
