@@ -18,6 +18,9 @@ class ConfigError(ValueError):
         return cls(message)
 
 
+DEFAULT_ITEM_ID = "default-item"
+
+
 @dataclass(frozen=True)
 class Config:
     """Application configuration values loaded from environment variables."""
@@ -28,6 +31,7 @@ class Config:
     plaid_secret: str | None
     plaid_env: str | None
     plaid_access_token: str | None
+    item_id: str = DEFAULT_ITEM_ID
 
 
 def _default_env_file() -> Path:
@@ -73,6 +77,7 @@ def load_config(
     plaid_secret = values.get("PLAID_SECRET")
     plaid_env = values.get("PLAID_ENV")
     plaid_access_token = values.get("PLAID_ACCESS_TOKEN")
+    item_id = values.get("CLAW_PLAID_LEDGER_ITEM_ID") or DEFAULT_ITEM_ID
 
     missing = []
     if not db_path_raw:
@@ -103,4 +108,5 @@ def load_config(
         plaid_secret=plaid_secret,
         plaid_env=plaid_env,
         plaid_access_token=plaid_access_token,
+        item_id=item_id,
     )

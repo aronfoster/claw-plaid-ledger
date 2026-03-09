@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claw_plaid_ledger.config import ConfigError, load_config
+from claw_plaid_ledger.config import DEFAULT_ITEM_ID, ConfigError, load_config
 
 
 def test_load_config_success_without_plaid_requirement() -> None:
@@ -123,3 +123,22 @@ def test_load_config_success_with_plaid_requirement() -> None:
     assert cfg.plaid_secret is not None
     assert cfg.plaid_env == "sandbox"
     assert cfg.plaid_access_token == access_value
+
+
+def test_load_config_item_id_defaults_to_default_item() -> None:
+    """item_id falls back to DEFAULT_ITEM_ID when env var is absent."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.item_id == DEFAULT_ITEM_ID
+
+
+def test_load_config_item_id_reads_from_env_var() -> None:
+    """item_id is loaded from CLAW_PLAID_LEDGER_ITEM_ID when set."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_PLAID_LEDGER_ITEM_ID": "my-bank-item",
+        }
+    )
+
+    assert cfg.item_id == "my-bank-item"

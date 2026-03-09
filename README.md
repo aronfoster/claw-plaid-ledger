@@ -91,6 +91,7 @@ PLAID_ACCESS_TOKEN=
 # Local application paths
 CLAW_PLAID_LEDGER_DB_PATH=
 CLAW_PLAID_LEDGER_WORKSPACE_PATH=
+CLAW_PLAID_LEDGER_ITEM_ID=
 ```
 
 Notes:
@@ -99,6 +100,10 @@ Notes:
 - `CLAW_PLAID_LEDGER_DB_PATH` should point to a local SQLite file.
 - `CLAW_PLAID_LEDGER_WORKSPACE_PATH` should be set only when OpenClaw
   exports are being used.
+- `CLAW_PLAID_LEDGER_ITEM_ID` identifies the Plaid item (institution link)
+  used as the sync-state key. Defaults to `"default-item"`. Set this when
+  connecting more than one institution so each item's cursor is stored
+  separately.
 
 ## Example
 

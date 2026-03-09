@@ -173,6 +173,52 @@ def test_run_sync_account_count_is_distinct_across_pages(
     assert summary.accounts == 1
 
 
+def test_run_sync_uses_custom_item_id(tmp_path: Path) -> None:
+    """run_sync stores and reads sync state under the supplied item_id."""
+    db_path = tmp_path / "ledger.db"
+    custom_item_id = "my-bank-item"
+    adapter = FakeAdapter((_result("cursor-custom"),))
+
+    summary = run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id=custom_item_id,
+    )
+
+    assert summary.next_cursor == "cursor-custom"
+
+    with sqlite3.connect(db_path) as connection:
+        # Cursor is stored under the custom item_id, not the default.
+        assert get_sync_cursor(connection, custom_item_id) == "cursor-custom"
+        assert get_sync_cursor(connection, "default-item") is None
+
+
+def test_run_sync_item_id_isolation(tmp_path: Path) -> None:
+    """Separate item_ids maintain independent cursors in the same DB."""
+    db_path = tmp_path / "ledger.db"
+
+    adapter_a = FakeAdapter((_result("cursor-a"),))
+    run_sync(
+        db_path=db_path,
+        adapter=adapter_a,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="item-a",
+    )
+
+    adapter_b = FakeAdapter((_result("cursor-b"),))
+    run_sync(
+        db_path=db_path,
+        adapter=adapter_b,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="item-b",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        assert get_sync_cursor(connection, "item-a") == "cursor-a"
+        assert get_sync_cursor(connection, "item-b") == "cursor-b"
+
+
 def test_run_sync_deletes_removed_transactions(tmp_path: Path) -> None:
     """run_sync removes transactions that Plaid marks as removed."""
     db_path = tmp_path / "ledger.db"
