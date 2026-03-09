@@ -35,3 +35,24 @@ reconciliation.
 ## M6 - OSS hardening
 
 Install docs, sample config, tests, packaging, security notes.
+
+## Future / unscheduled
+
+### Multi-institution sync UX
+
+`CLAW_PLAID_LEDGER_ITEM_ID` is a single string set per invocation. A
+household with more than one institution must currently run `ledger sync`
+multiple times, each time with a different value for that variable (e.g.
+via separate `.env` files or wrapper scripts). This is functional but
+operationally tedious.
+
+Future work should add first-class multi-institution support, for example:
+
+- A config file (TOML or similar) that declares multiple named items, each
+  with its own `access_token` and `item_id`, so a single `ledger sync`
+  invocation iterates over all of them.
+- Or a `ledger sync --all` flag that reads all configured items and syncs
+  each in sequence, producing a combined summary.
+
+Until this is addressed, operators with multiple institutions should create
+one wrapper script per item and call them from a single top-level script.
