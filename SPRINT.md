@@ -134,6 +134,44 @@ verification from day one.
 
 ---
 
+### Task 5: Structured logging
+
+**Scope**
+
+- Configure Python's standard `logging` module at server startup with a
+  format suitable for systemd/journald: no ANSI color, timestamps, level,
+  module name, and message; e.g.
+  `%(asctime)s %(levelname)s %(name)s: %(message)s`
+- Log level configurable via `CLAW_LOG_LEVEL` env var (default `INFO`);
+  add to `Config`, `.env.example`, and `ARCHITECTURE.md`
+- Establish consistent log coverage across the new server surface:
+  - `INFO` — server started (host, port, log level; never the secret
+    value); webhook received and acknowledged; sync triggered; sync
+    completed (accounts/added/modified/removed counts)
+  - `WARNING` — unknown webhook type received; sync completed with zero
+    results when changes were expected (has_more drained but counts all
+    zero)
+  - `ERROR` — signature verification failed; background sync raised an
+    exception (log the exception with traceback)
+- Existing CLI commands (`doctor`, `sync`, `init-db`) are unaffected;
+  they continue to use `typer.echo` for operator output
+
+**Done when**
+
+- `journalctl -u claw-plaid-ledger` shows structured, human-readable
+  entries covering the above events
+- Log level can be changed without a code edit
+- No secrets or access tokens appear in any log line
+
+**Testing expectation**
+
+- Test: server startup emits an `INFO` line containing host and port
+- Test: `ERROR` is logged when signature verification fails
+- Test: `ERROR` with traceback is logged when background sync raises
+- Test: `CLAW_LOG_LEVEL=DEBUG` is accepted without error; `CLAW_LOG_LEVEL=INVALID` raises a clear `ConfigError` at startup
+
+---
+
 ## Acceptance criteria for the sprint
 
 - `ledger serve` starts, binds locally, and serves `/health`
