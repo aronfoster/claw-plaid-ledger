@@ -1,13 +1,12 @@
-# Sprint 5 — M4: Agent API and annotation layer
+# Sprint 6 — M5: OpenClaw notification
 
 ## Sprint goal
 
-Expose a typed REST API so OpenClaw agents can query the transaction ledger
-and write durable annotations — without ever touching SQLite directly.
-This sprint adds three new endpoints (`GET /transactions`,
-`GET /transactions/{id}`, `PUT /annotations/{transaction_id}`), the supporting
-`annotations` table, and updates `ARCHITECTURE.md` to serve as the source of
-truth for the OpenClaw SKILL definition.
+After a webhook-triggered sync, wake Hestia when there are transactions worth
+reviewing. A successful sync that adds, modifies, or removes at least one
+transaction sends a `POST` to OpenClaw's local `/hooks/agent` endpoint. Zero-change
+syncs remain silent. The operator can opt out by leaving `OPENCLAW_HOOKS_TOKEN`
+unset — a warning is logged but nothing crashes.
 
 ## Working agreements
 
@@ -18,437 +17,425 @@ truth for the OpenClaw SKILL definition.
   - `uv run --locked ruff check .`
   - `uv run --locked mypy .`
   - `uv run --locked pytest`
-- Use standard-library `sqlite3` for the database layer.
+- Use standard-library `sqlite3` for the database layer (no change from M4).
+- Use standard-library `urllib.request` for the notification HTTP call — do not
+  add `httpx` to the runtime dependencies; it remains a dev/test-only dependency.
 - Add appropriate unit and integration tests for each task.
 
-## Conventions and data notes
+## Conventions and implementation notes
 
-**Transaction identifier in URLs:** use `plaid_transaction_id` (the
-Plaid-issued string, e.g. `"Ax9bz3KQ..."`). This is the stable external key
-already stored as `UNIQUE` in the `transactions` table; it is safe for agents
-to cache and reference across sessions.
+**HTTP client for notification:** use `urllib.request.urlopen` with a
+`urllib.request.Request` object. This is the only outbound HTTP call in the
+notification path; keeping it in stdlib avoids promoting `httpx` from a test
+utility to a runtime dependency.
 
-**Effective date:** many query operations need a single date per transaction.
-Use `COALESCE(posted_date, authorized_date)` as the effective date. For posted
-transactions `posted_date` is set; for pending ones only `authorized_date` is
-set.
+**Zero-change gate:** the gate lives in `_background_sync` in `server.py`,
+immediately after `run_sync` returns. Check
+`summary.added + summary.modified + summary.removed > 0` before calling the
+notifier. The existing `logger.warning("sync returned no changes")` log line
+is already in place as the fallthrough.
 
-**Amount sign convention:** Plaid uses positive = money leaving the account
-(debit/expense), negative = money entering (credit/income). The API exposes
-amounts exactly as stored — do not invert.
+**Graceful degradation:** if `OPENCLAW_HOOKS_TOKEN` is not set, the notifier
+logs a `WARNING` and returns immediately — it does not raise. If the HTTP POST
+itself fails (network error, non-2xx response), the notifier logs the error at
+`WARNING` and returns — it must never propagate an exception back to
+`_background_sync`.
 
-**Tags storage:** tags are stored as a JSON text string in SQLite (e.g.
-`'["food", "recurring"]'`). The API accepts and returns them as a JSON array.
-The server is responsible for `json.dumps` on write and `json.loads` on read.
+**Message format:** build the message from the non-zero counts only, then
+append the review prompt. Examples:
 
-**Annotation ownership:** the sync engine must never read from or write to
-the `annotations` table. The annotation layer is entirely agent-owned;
-Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) remain
-immutable from the agent's perspective.
+- `"Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate."`
+- `"Plaid sync complete: 5 added. Review new transactions and annotate as appropriate."`
+- `"Plaid sync complete: 2 removed. Review new transactions and annotate as appropriate."`
 
-**OpenAPI spec:** FastAPI generates `/openapi.json` and `/docs` automatically.
-These are served without authentication (consistent with the local-only
-security posture). The OpenAPI spec becomes the source of truth for the
-OpenClaw SKILL definition.
+Produce the count fragment by joining non-zero entries from
+`[f"{n} added", f"{n} modified", f"{n} removed"]` with `", "`. This keeps the
+message clean and matches the example in the roadmap.
+
+**Payload shape** (matches OpenClaw `/hooks/agent` spec):
+
+```json
+{
+  "message": "Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate.",
+  "name": "Hestia",
+  "wakeMode": "now"
+}
+```
+
+**Request headers:**
+
+```
+Content-Type: application/json
+Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>
+```
 
 ---
 
 ## Task breakdown
 
-### Task 1: `annotations` table and DB helpers ✅ DONE
+### Task 1: Config additions for OpenClaw notification
 
 **Scope**
 
-Add the `annotations` table to `schema.sql` and the corresponding helpers to
-`db.py`. Nothing else changes in this task.
+Add four new environment variables to `Config` in `config.py` and document
+them in `.env.example`. Nothing else changes in this task.
 
-**Schema** — add to `schema.sql` using `CREATE TABLE IF NOT EXISTS` so
-`init-db` is safe to run against an existing database:
+**`config.py` additions — new fields on `Config`:**
 
-```sql
-CREATE TABLE IF NOT EXISTS annotations (
-    id                   INTEGER PRIMARY KEY,
-    plaid_transaction_id TEXT NOT NULL UNIQUE
-                         REFERENCES transactions(plaid_transaction_id),
-    category             TEXT,
-    note                 TEXT,
-    tags                 TEXT,          -- JSON array stored as text
-    created_at           TEXT NOT NULL,
-    updated_at           TEXT NOT NULL
-);
+```python
+openclaw_hooks_url: str = "http://127.0.0.1:18789/hooks/agent"
+openclaw_hooks_token: str | None = None
+openclaw_hooks_agent: str = "Hestia"
+openclaw_hooks_wake_mode: str = "now"
 ```
 
-**`db.py` additions:**
+Reading rules (add to `load_config`, alongside the existing env-var reads):
 
-- `AnnotationRow` frozen dataclass with fields:
-  `plaid_transaction_id: str`, `category: str | None`, `note: str | None`,
-  `tags: str | None`, `created_at: str`, `updated_at: str`
+| Field | Env var | Required | Default |
+|---|---|---|---|
+| `openclaw_hooks_url` | `OPENCLAW_HOOKS_URL` | no | `http://127.0.0.1:18789/hooks/agent` |
+| `openclaw_hooks_token` | `OPENCLAW_HOOKS_TOKEN` | no | `None` |
+| `openclaw_hooks_agent` | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` |
+| `openclaw_hooks_wake_mode` | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` |
 
-- `upsert_annotation(conn: sqlite3.Connection, row: AnnotationRow) -> None`
-  - `INSERT OR REPLACE` pattern; preserve original `created_at` on update using
-    the same approach as `upsert_transaction` — explicitly pass `created_at`
-    from the existing row when updating, or the current UTC timestamp when
-    inserting
-  - Straightforward implementation: on conflict (UNIQUE on
-    `plaid_transaction_id`), overwrite all fields except `created_at`
-  - Recommended: `INSERT INTO annotations (...) VALUES (...) ON CONFLICT
-    (plaid_transaction_id) DO UPDATE SET category=excluded.category,
-    note=excluded.note, tags=excluded.tags, updated_at=excluded.updated_at`
-    (this naturally preserves `created_at`)
+None of these variables are required at startup — the server must start
+successfully even when all four are absent.
 
-- `get_annotation(conn: sqlite3.Connection, plaid_transaction_id: str) ->
-  AnnotationRow | None`
-  - `SELECT` by `plaid_transaction_id`; return `None` if not found
+**`.env.example` additions** — add a new section after the existing
+`CLAW_LOG_LEVEL` block:
+
+```
+# OpenClaw notification (optional)
+# After a sync that adds, modifies, or removes transactions, a POST is sent to
+# OpenClaw's /hooks/agent endpoint to wake the configured agent. Set
+# OPENCLAW_HOOKS_TOKEN to enable; leave unset to disable silently.
+OPENCLAW_HOOKS_URL=http://127.0.0.1:18789/hooks/agent
+OPENCLAW_HOOKS_TOKEN=
+OPENCLAW_HOOKS_AGENT=Hestia
+OPENCLAW_HOOKS_WAKE_MODE=now
+```
 
 **Done when**
 
-- Running `ledger init-db` against a database that already has `transactions`,
-  `accounts`, and `sync_state` tables creates `annotations` without error and
-  without touching the other tables
-- `upsert_annotation` followed by a second `upsert_annotation` preserves
-  `created_at` and updates `updated_at`
-- `get_annotation` returns `None` for an unknown `plaid_transaction_id`
+- `load_config()` reads all four vars from the environment; defaults apply
+  when vars are absent
+- `Config` is a frozen dataclass as before; mypy passes with `--strict`
+- `load_config()` called with none of the four vars set returns a valid
+  `Config` with defaults applied
 
 **Testing expectations**
 
-- Test: `upsert_annotation` inserts a new row; all fields round-trip correctly
-- Test: second `upsert_annotation` for same `plaid_transaction_id` updates
-  `category`, `note`, `tags`, `updated_at` while preserving `created_at`
-- Test: `get_annotation` returns `None` for an ID not in `annotations`
-- Test: schema idempotency — calling `ensure_schema()` (or `init-db`) twice
-  does not raise
+- Test: all four vars absent → defaults applied (`url` matches the default,
+  `token` is `None`, `agent` is `"Hestia"`, `wake_mode` is `"now"`)
+- Test: all four vars set → values are read correctly
+- Test: `OPENCLAW_HOOKS_TOKEN` set to empty string → stored as `None`
+  (treat empty string as unset, consistent with how other optional secrets
+  are handled in the existing config loader)
 
 ---
 
-### Task 2: `GET /transactions` list endpoint ✅ DONE
+### Task 2: `notifier.py` module
 
 **Scope**
 
-Add a query helper to `db.py` and the corresponding endpoint to `server.py`.
+Create `src/claw_plaid_ledger/notifier.py` with a single public function
+`notify_openclaw`. This module is the only place that constructs or sends the
+OpenClaw notification payload.
 
-**`db.py` addition — `query_transactions`:**
+**Function signature:**
 
 ```python
-def query_transactions(
-    conn: sqlite3.Connection,
+def notify_openclaw(
     *,
-    start_date: str | None = None,     # YYYY-MM-DD inclusive
-    end_date: str | None = None,       # YYYY-MM-DD inclusive
-    account_id: str | None = None,     # plaid_account_id exact match
-    pending: bool | None = None,
-    min_amount: float | None = None,   # inclusive
-    max_amount: float | None = None,   # inclusive
-    keyword: str | None = None,        # LIKE match on name + merchant_name
-    limit: int = 100,
-    offset: int = 0,
-) -> tuple[list[dict[str, object]], int]:
-    ...
+    added: int,
+    modified: int,
+    removed: int,
+    url: str,
+    token: str | None,
+    agent: str,
+    wake_mode: str,
+) -> None:
 ```
 
-Implementation notes:
-- Build the `WHERE` clause dynamically from whichever filters are provided
-- Date filter: `COALESCE(posted_date, authorized_date) BETWEEN ? AND ?`
-- `pending` maps to SQLite `0`/`1`
-- `keyword` filter: `(name LIKE ? OR merchant_name LIKE ?)` where the
-  parameter is `f"%{keyword}%"`; SQLite `LIKE` is case-insensitive for ASCII
-  by default — no `COLLATE NOCASE` needed
-- Return a tuple `(rows, total)` where `total` is the full matching count
-  (run a `SELECT COUNT(*)` with the same `WHERE` clause before applying
-  `LIMIT`/`OFFSET`)
-- Each dict in `rows` must include:
-  `id` (= `plaid_transaction_id`), `account_id` (= `plaid_account_id`),
-  `amount`, `iso_currency_code`, `name`, `merchant_name`, `pending` (bool,
-  not int), `date` (= `COALESCE(posted_date, authorized_date)`)
+**Implementation requirements:**
 
-**Endpoint:**
+1. **Token guard:** if `token` is `None` or empty, log at `WARNING`:
+   `"OPENCLAW_HOOKS_TOKEN not set — skipping notification"` and return.
 
-```
-GET /transactions
-Authorization: Bearer <token>
-```
+2. **Message construction:** join the non-zero count fragments with `", "`
+   and append the review prompt. See the message format examples in the
+   sprint conventions above.
 
-Query parameters (all optional):
+3. **Payload construction:**
+   ```python
+   payload = {
+       "message": message,
+       "name": agent,
+       "wakeMode": wake_mode,
+   }
+   ```
 
-| Param | Type | Description |
-|---|---|---|
-| `start_date` | `YYYY-MM-DD` | Filter by effective date ≥ |
-| `end_date` | `YYYY-MM-DD` | Filter by effective date ≤ |
-| `account_id` | string | Exact match on `plaid_account_id` |
-| `pending` | bool | `true` or `false` |
-| `min_amount` | float | Amount ≥ (Plaid sign: positive = debit) |
-| `max_amount` | float | Amount ≤ |
-| `keyword` | string | Case-insensitive substring match on `name` and `merchant_name` |
-| `limit` | int | Default `100`, max `500` |
-| `offset` | int | Default `0` |
+4. **HTTP POST** using `urllib.request`:
+   ```python
+   import json
+   import urllib.request
 
-Response (HTTP 200):
+   data = json.dumps(payload).encode()
+   req = urllib.request.Request(
+       url,
+       data=data,
+       headers={
+           "Content-Type": "application/json",
+           "Authorization": f"Bearer {token}",
+       },
+       method="POST",
+   )
+   with urllib.request.urlopen(req, timeout=10) as resp:
+       status = resp.status
+   ```
 
-```json
-{
-  "transactions": [
-    {
-      "id": "<plaid_transaction_id>",
-      "account_id": "<plaid_account_id>",
-      "amount": 12.34,
-      "iso_currency_code": "USD",
-      "name": "Starbucks",
-      "merchant_name": "Starbucks",
-      "pending": false,
-      "date": "2024-01-15"
-    }
-  ],
-  "total": 150,
-  "limit": 100,
-  "offset": 0
-}
-```
+5. **Error handling:**
+   - If `urllib.error.URLError` (network failure, DNS, refused connection) is
+     raised, log at `WARNING`:
+     `f"OpenClaw notification failed (network): {e}"` and return.
+   - If `urllib.error.HTTPError` (non-2xx response) is raised, log at
+     `WARNING`:
+     `f"OpenClaw notification failed: HTTP {e.code}"` and return.
+   - On success, log at `INFO`:
+     `f"OpenClaw notification sent: {status}"`.
+   - **Never propagate any exception** from this function.
 
-- `limit > 500` returns HTTP 422 with a descriptive validation message;
-  use FastAPI's `Query(le=500)` to get this automatically
-- Requires bearer token; missing/invalid token returns 401
-- Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`
+6. **Imports:** use only standard-library modules (`json`, `logging`,
+   `urllib.request`, `urllib.error`). Do not import `httpx`.
 
 **Done when**
 
-- `GET /transactions` returns 200 with the pagination envelope
-- All filters work individually and in combination
-- `limit=501` returns 422
-- Empty database returns `{"transactions": [], "total": 0, "limit": 100,
-  "offset": 0}`
+- `notify_openclaw` with `token=None` logs a warning and makes no HTTP call
+- `notify_openclaw` with a valid token constructs the correct payload and
+  makes one POST to `url`
+- A network error is caught, logged, and does not propagate
+- A non-2xx HTTP response is caught, logged, and does not propagate
+- `mypy --strict` passes on the module
 
 **Testing expectations**
 
-- Test: no filters returns all transactions (up to default limit), correct
-  `total`
-- Test: `start_date` and `end_date` filter correctly on effective date
-- Test: `account_id` filters to the matching account only
-- Test: `pending=true` returns only pending; `pending=false` returns only
-  posted
-- Test: `min_amount=10&max_amount=50` returns only transactions in that range
-- Test: `keyword` matches on `name`; `keyword` matches on `merchant_name`;
-  `keyword` is case-insensitive
-- Test: `offset` and `limit` page correctly; `total` reflects unfiltered count
-- Test: `limit=501` returns 422
-- Test: missing bearer token returns 401; wrong token returns 401
-- Test: empty DB returns 200 with empty list and `total=0`
+Use `unittest.mock.patch("urllib.request.urlopen")` to avoid real network
+calls.
+
+- Test: `token=None` → warning logged, `urlopen` never called
+- Test: `token=""` (empty string) → same as `None`; warning logged,
+  `urlopen` never called
+- Test: `added=3, modified=1, removed=0` → message is
+  `"Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate."`
+- Test: `added=5, modified=0, removed=0` → message is
+  `"Plaid sync complete: 5 added. Review new transactions and annotate as appropriate."`
+- Test: `added=0, modified=0, removed=2` → message is
+  `"Plaid sync complete: 2 removed. Review new transactions and annotate as appropriate."`
+- Test: successful POST → `urlopen` called once with `method="POST"`,
+  `Content-Type: application/json` header, `Authorization: Bearer <token>`
+  header, and correct JSON body
+- Test: `URLError` raised by `urlopen` → warning logged, no exception
+  propagated
+- Test: `HTTPError` with code 401 raised by `urlopen` → warning logged
+  (`"OpenClaw notification failed: HTTP 401"`), no exception propagated
 
 ---
 
-### Task 3: `GET /transactions/{transaction_id}` detail endpoint ✅ DONE
+### Task 3: Wire notification into background sync
 
 **Scope**
 
-Add a single-row query helper to `db.py` and the detail endpoint to `server.py`.
+Integrate `notify_openclaw` into `_background_sync` in `server.py`. This is
+the only file that changes in this task.
 
-**`db.py` addition — `get_transaction`:**
+**Location:** `_background_sync()` in `server.py` — the `except Exception`
+handler that logs sync summary is already present. The notification call goes
+immediately after the summary log, inside the same `try` block (before the
+`except`).
+
+**Change to `_background_sync`:**
+
+After logging the sync summary, add:
 
 ```python
-def get_transaction(
-    conn: sqlite3.Connection,
-    plaid_transaction_id: str,
-) -> dict[str, object] | None:
-    ...
+if summary.added + summary.modified + summary.removed > 0:
+    from claw_plaid_ledger.notifier import notify_openclaw
+    notify_openclaw(
+        added=summary.added,
+        modified=summary.modified,
+        removed=summary.removed,
+        url=cfg.openclaw_hooks_url,
+        token=cfg.openclaw_hooks_token,
+        agent=cfg.openclaw_hooks_agent,
+        wake_mode=cfg.openclaw_hooks_wake_mode,
+    )
 ```
 
-Returns a dict with all transaction columns, or `None` if not found. The
-returned dict includes the same fields as the list response plus `raw_json`.
-The endpoint merges in the annotation separately (call `get_annotation` after
-`get_transaction`).
+The import may be placed at the top of `server.py` with the other imports
+rather than inline — either style is acceptable; follow the existing pattern
+in the file.
 
-**Endpoint:**
+`cfg` is the `Config` object already loaded by `_background_sync`. No new
+config loading is needed.
 
-```
-GET /transactions/{transaction_id}
-Authorization: Bearer <token>
-```
-
-- `transaction_id` in the path is the `plaid_transaction_id` string
-- Returns HTTP 404 if not found
-- Returns HTTP 200 with the full transaction detail plus annotation:
-
-```json
-{
-  "id": "<plaid_transaction_id>",
-  "account_id": "<plaid_account_id>",
-  "amount": 12.34,
-  "iso_currency_code": "USD",
-  "name": "Starbucks",
-  "merchant_name": "Starbucks",
-  "pending": false,
-  "date": "2024-01-15",
-  "raw_json": "{...}",
-  "annotation": {
-    "category": "food",
-    "note": "Morning coffee",
-    "tags": ["discretionary", "recurring"],
-    "updated_at": "2024-01-16T10:30:00Z"
-  }
-}
-```
-
-- `annotation` is `null` if no annotation exists for this transaction
-- `tags` in the response is a parsed JSON list (not the raw string stored in
-  SQLite); if stored value is `null`, return `null` for tags
-- `raw_json` is the raw Plaid API payload stored at sync time; may be `null`
-  for transactions synced before this field was populated
+**Zero-change path:** when `summary.added + summary.modified + summary.removed
+== 0`, the existing `logger.warning("sync returned no changes")` line (or
+equivalent) fires and `notify_openclaw` is not called. Do not add any new
+logging for this path.
 
 **Done when**
 
-- Known `transaction_id` returns 200 with full detail
-- Known `transaction_id` with no annotation returns 200 with `"annotation": null`
-- Unknown `transaction_id` returns 404
-- `tags` is a JSON list in the response (not a string)
+- A background sync with `added=3, modified=1` calls `notify_openclaw` with
+  the correct args
+- A background sync with `added=0, modified=0, removed=0` does not call
+  `notify_openclaw`
+- A notification failure (simulated) does not surface as an unhandled
+  exception in `_background_sync`
+- `mypy --strict` and all four quality gates pass
 
 **Testing expectations**
 
-- Test: known ID with no annotation returns 200, `annotation` is `null`
-- Test: known ID with annotation returns 200, annotation fields are correct,
-  `tags` is a Python list (not a string)
-- Test: `annotation.tags = null` when stored tags is `null`
-- Test: unknown ID returns 404
-- Test: missing bearer token returns 401; wrong token returns 401
+All tests in `test_server.py` (or a new `test_notification_wiring.py`).
+Use `unittest.mock.patch` to mock `notify_openclaw`.
+
+- Test: webhook `SYNC_UPDATES_AVAILABLE` → sync returns summary with changes
+  → `notify_openclaw` called once with correct `added`, `modified`, `removed`
+  args and config values
+- Test: webhook `SYNC_UPDATES_AVAILABLE` → sync returns summary with
+  `added=0, modified=0, removed=0` → `notify_openclaw` not called
+- Test: `notify_openclaw` raises an unexpected exception (simulate a bug in
+  the notifier) → `_background_sync` logs the error and does not re-raise
+  (verify the background task completes without crashing the process)
 
 ---
 
-### Task 4: `PUT /annotations/{transaction_id}` upsert endpoint ✅ DONE
+### Task 4: `doctor` extension for notification config
 
 **Scope**
 
-Add the annotation write endpoint to `server.py`. The DB helper from Task 1
-(`upsert_annotation`) is used directly.
+Extend the `doctor` CLI command in `cli.py` to report whether OpenClaw
+notification is configured. One new check; no other changes.
 
-**Endpoint:**
+**New check — add after the existing `CLAW_API_SECRET` check:**
 
 ```
-PUT /annotations/{transaction_id}
-Authorization: Bearer <token>
-Content-Type: application/json
+doctor: openclaw notification [OK] url=http://127.0.0.1:18789/hooks/agent agent=Hestia
 ```
 
-- `transaction_id` in the path is the `plaid_transaction_id` string
-- Request body (all fields optional; omitted fields are stored as `null`):
+or, when `OPENCLAW_HOOKS_TOKEN` is not set:
 
-```json
-{
-  "category": "food",
-  "note": "Morning coffee",
-  "tags": ["discretionary", "recurring"]
-}
+```
+doctor: openclaw notification [WARN] OPENCLAW_HOOKS_TOKEN not set — notifications disabled
 ```
 
-- This is a **full replace**, not a partial PATCH: every PUT completely
-  overwrites the annotation row. If an agent omits `note`, the stored `note`
-  becomes `null`.
-- `tags` must be a JSON array of strings or `null`; the server stores it as
-  `json.dumps(tags)` (or `null` if absent/null in the body)
-- Returns HTTP 404 if `transaction_id` does not exist in the `transactions`
-  table — agents cannot annotate phantom transactions. Check existence with
-  `get_transaction` before calling `upsert_annotation`.
-- Returns HTTP 200 `{"status": "ok"}` on successful create or update
-- Requires bearer token; missing/invalid token returns 401
+Implementation details:
 
-**Pydantic request model** (define in `server.py` or a new `api_models.py`):
-
-```python
-class AnnotationRequest(BaseModel):
-    category: str | None = None
-    note: str | None = None
-    tags: list[str] | None = None
-```
+- If `config.openclaw_hooks_token` is `None`: print the `[WARN]` line. Do
+  **not** call `sys.exit(1)` — a missing token is a valid operator choice,
+  not a configuration error.
+- If `config.openclaw_hooks_token` is set: print the `[OK]` line showing the
+  effective `url` and `agent` name. Do not print the token value.
+- The `[WARN]` case must not cause `doctor` to exit with a non-zero status
+  code by itself. Only hard failures (missing DB, missing schema, etc.) exit
+  non-zero.
 
 **Done when**
 
-- `PUT /annotations/{id}` on a valid transaction creates the annotation and
-  returns 200
-- A second PUT replaces the annotation; `created_at` is preserved
-- `PUT /annotations/{unknown_id}` returns 404
-- A PUT followed by `GET /transactions/{id}` returns the annotation correctly
-  (tags as a list)
+- `doctor` with `OPENCLAW_HOOKS_TOKEN` unset prints the `[WARN]` line and
+  exits 0
+- `doctor` with `OPENCLAW_HOOKS_TOKEN` set prints the `[OK]` line showing
+  `url` and `agent`; token value is not printed
+- Existing doctor checks are unaffected
 
 **Testing expectations**
 
-- Test: PUT creates a new annotation; response is `{"status": "ok"}`
-- Test: second PUT replaces annotation; `created_at` unchanged (verify via
-  `get_annotation` in DB); `updated_at` changes
-- Test: PUT with `{}` (empty body) stores all-null annotation; returns 200
-- Test: PUT with `tags: []` stores empty list correctly; round-trips as `[]`
-- Test: PUT for unknown `transaction_id` returns 404
-- Test: missing bearer token returns 401; wrong token returns 401
-- Test: end-to-end — PUT annotation, then GET transaction detail, verify
-  `annotation` block matches
+- Test: `OPENCLAW_HOOKS_TOKEN` not set → output contains
+  `"openclaw notification [WARN]"` and `exit code == 0`
+- Test: `OPENCLAW_HOOKS_TOKEN` set → output contains
+  `"openclaw notification [OK]"` and includes the default URL and agent name;
+  exit code == 0
+- Test: `OPENCLAW_HOOKS_AGENT=Hal9000` set → output shows `agent=Hal9000`
 
 ---
 
-### Task 5: `ARCHITECTURE.md` update ✅ DONE
+### Task 5: `ARCHITECTURE.md` update
 
 **Scope**
 
-Update `ARCHITECTURE.md` to reflect all additions from this sprint. No code
+Update `ARCHITECTURE.md` to document the M5 integration pattern. No code
 changes; documentation only.
 
-Sections to add or update:
+**Sections to add or update:**
 
-1. **Schema** — add `annotations` table with column descriptions, noting that
-   `tags` is stored as JSON text, and that this table is entirely agent-owned
-   (sync engine never touches it)
+1. **Current milestone focus** — update from M4 to M5; note Sprint 6 added
+   OpenClaw notification after webhook-triggered syncs.
 
-2. **API endpoints** — extend the endpoints table to include:
+2. **Components** — add `notifier.py` to the component list:
+   `OpenClaw notifier (notifier.py)` — sends `POST /hooks/agent` to wake
+   Hestia after a non-empty sync.
 
-   | Method | Path | Auth | Description |
+3. **Data flow** — extend to show the notification path:
+   ```
+   Plaid API -> sync engine -> SQLite -> Agent API -> OpenClaw agent
+                     |
+                     +--[non-empty sync]--> OpenClaw /hooks/agent (Hestia wake)
+   ```
+
+4. **New section: OpenClaw notification** — add after the existing
+   "OpenAPI / SKILL definition" section. Cover:
+   - When notification fires: after a webhook-triggered sync where
+     `added + modified + removed > 0`
+   - When notification is skipped: zero-change syncs; `OPENCLAW_HOOKS_TOKEN`
+     not set (logged as warning, not an error)
+   - Failure behaviour: network errors and non-2xx responses are logged at
+     `WARNING` and never crash the background task
+   - Payload shape with annotated fields (message, name, wakeMode)
+   - The notifier uses `urllib.request` (stdlib); no new runtime dependency
+
+5. **Configuration table** — add the four new variables:
+
+   | Variable | Required | Default | Description |
    |---|---|---|---|
-   | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list |
-   | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with annotation |
-   | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
-   | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI) |
-   | `GET` | `/docs` | None | Swagger UI (FastAPI, local use only) |
+   | `OPENCLAW_HOOKS_URL` | no | `http://127.0.0.1:18789/hooks/agent` | OpenClaw `/hooks/agent` endpoint URL |
+   | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
+   | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake |
+   | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
 
-3. **Query parameters for `GET /transactions`** — document all eight filter
-   params with types, defaults, and the effective-date definition
-   (`COALESCE(posted_date, authorized_date)`)
-
-4. **Annotation response shape** — document the `annotation` object embedded
-   in `GET /transactions/{id}`, including `tags` being a JSON array
-
-5. **OpenAPI / SKILL definition** — note that `GET /openapi.json` is the
-   canonical machine-readable spec and is intended to seed the OpenClaw SKILL
-   definition for M7
-
-6. **Data flow** — update to reflect the new read path:
-   `SQLite → Agent API → OpenClaw agent`
+6. **Repository layout** — add `notifier.py` to the `src/claw_plaid_ledger/`
+   listing.
 
 **Done when**
 
-- A developer can implement the full M4 API surface from `ARCHITECTURE.md`
-  alone without reading the code
-- The OpenAPI endpoint and Swagger UI are documented
+- A developer can understand the full notification flow from `ARCHITECTURE.md`
+  alone without reading `server.py` or `notifier.py`
+- All four new config variables are documented with their defaults and
+  semantics
+- The "skip on missing token" and "fail gracefully" behaviours are explicitly
+  documented
 
 ---
 
 ## Acceptance criteria for the sprint
 
-- `GET /transactions` returns a correctly paginated, filterable list; all
-  eight filter parameters work independently and in combination
-- `GET /transactions/{id}` returns full transaction detail with annotation
-  merged in (`null` when absent); `tags` is a JSON array in the response
-- `PUT /annotations/{id}` creates or fully replaces an annotation; 404 for
-  unknown transactions; `created_at` is preserved on updates
-- The `annotations` table is isolated from the sync engine — no sync code
-  reads from or writes to it
-- `init-db` on an existing database creates `annotations` without error
-- All three new endpoints require a valid bearer token; 401 on
-  missing/invalid
-- FastAPI's `/openapi.json` and `/docs` are reachable without auth and
-  accurately describe all endpoints
-- Quality gate passes on all PRs (`ruff format`, `ruff check`, `mypy`,
-  `pytest`)
-- `ARCHITECTURE.md` reflects the new schema and full API surface
+- After a webhook-triggered sync with at least one added, modified, or removed
+  transaction, a `POST` is sent to `OPENCLAW_HOOKS_URL` with the correct JSON
+  payload and `Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>` header
+- Zero-change syncs do not trigger a notification
+- When `OPENCLAW_HOOKS_TOKEN` is not set, the server logs a warning and
+  continues normally — no crash, no change to sync behaviour
+- Network failures and non-2xx responses from the OpenClaw endpoint are logged
+  at `WARNING` and do not interrupt the background sync task
+- `ledger doctor` reports `[OK]` when the token is set, and `[WARN]
+  notifications disabled` when it is not; either way `doctor` exits 0
+- All four quality gates pass on every PR:
+  `ruff format`, `ruff check`, `mypy --strict`, `pytest`
+- `ARCHITECTURE.md` documents the notification flow, new config variables, and
+  graceful-degradation behaviour
 
 ## Explicitly deferred
 
-- Per-agent token scoping (different tokens for read-only vs. read-write)
-- Keyword search on annotation `note` field
-- `DELETE /annotations/{transaction_id}`
-- Bulk annotation operations
-- OpenClaw notification on new transactions (M5)
-- Merchant normalization and category hints (M6)
-- OpenClaw SKILL definition file (M7)
+- Retry logic for failed notification attempts
+- Per-institution notification routing (M6 and beyond)
+- Notification on `ledger sync` (CLI path) — only the webhook-triggered
+  background sync notifies in this milestone
+- Configurable notification templates or per-agent message customisation
