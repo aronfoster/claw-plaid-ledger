@@ -2,9 +2,21 @@
 
 ## Current milestone focus
 
-M4 (Agent API and annotation layer) is complete. The server now exposes a
-typed REST API so OpenClaw agents can query the transaction ledger and write
-durable annotations — without ever touching SQLite directly.
+M5 (OpenClaw notification) is complete. After a webhook-triggered sync that
+adds, modifies, or removes at least one transaction, the server sends a `POST`
+to OpenClaw's `/hooks/agent` endpoint to wake the configured agent (Hestia by
+default). Zero-change syncs remain silent. Operators can opt out by leaving
+`OPENCLAW_HOOKS_TOKEN` unset — a warning is logged but nothing crashes.
+
+Sprint 6 added:
+
+- `notifier.py` — sends `POST /hooks/agent` to OpenClaw after a non-empty sync
+- Four new configuration variables for the notification endpoint (see Configuration below)
+- `doctor` extension: reports `[OK]` or `[WARN]` for OpenClaw notification config
+
+M4 (Agent API and annotation layer) is complete. The server exposes a typed
+REST API so OpenClaw agents can query the transaction ledger and write durable
+annotations — without ever touching SQLite directly.
 
 Sprint 5 added:
 
@@ -22,16 +34,23 @@ Sprint 5 added:
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
 - HTTP server (`server.py`) — FastAPI application served via uvicorn
+- OpenClaw notifier (`notifier.py`) — sends `POST /hooks/agent` to wake Hestia after a non-empty sync
 
 ## Data flow
 
 ```
 Plaid API -> sync engine -> SQLite -> Agent API -> OpenClaw agent
+                  |
+                  +--[non-empty sync]--> OpenClaw /hooks/agent (Hestia wake)
 ```
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
 never touches `annotations`. Agents read transactions and write annotations
 exclusively through the HTTP API.
+
+After a webhook-triggered sync where `added + modified + removed > 0`, the
+notifier sends a `POST` to the configured OpenClaw `/hooks/agent` endpoint.
+Zero-change syncs skip the notification entirely.
 
 ## Boundaries
 
@@ -262,6 +281,67 @@ to seed the OpenClaw SKILL definition for M7. Any agent that needs to
 introspect the available API surface should fetch this endpoint rather than
 reading the source code.
 
+## OpenClaw notification
+
+After a webhook-triggered sync, `_background_sync` in `server.py` calls
+`notify_openclaw` from `notifier.py` when `summary.added + summary.modified +
+summary.removed > 0`.
+
+### When notification fires
+
+- A Plaid `SYNC_UPDATES_AVAILABLE` webhook triggers a background sync.
+- The sync returns a non-zero change count (at least one added, modified, or
+  removed transaction).
+- `OPENCLAW_HOOKS_TOKEN` is set to a non-empty value.
+
+### When notification is skipped
+
+- **Zero-change syncs:** if `added + modified + removed == 0`, the notifier is
+  not called. The existing `logger.warning("sync returned no changes")` line
+  fires instead.
+- **Token not set:** if `OPENCLAW_HOOKS_TOKEN` is absent or set to an empty
+  string, `notify_openclaw` logs a `WARNING` (`"OPENCLAW_HOOKS_TOKEN not set —
+  skipping notification"`) and returns immediately. This is not an error; it is
+  a valid operator choice.
+
+### Failure behaviour
+
+Network errors (`urllib.error.URLError`) and non-2xx HTTP responses
+(`urllib.error.HTTPError`) are caught inside `notify_openclaw`, logged at
+`WARNING`, and never re-raised. The background sync task always completes
+normally regardless of notification outcome.
+
+### Payload shape
+
+```json
+{
+  "message": "Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate.",
+  "name": "Hestia",
+  "wakeMode": "now"
+}
+```
+
+| Field | Description |
+|---|---|
+| `message` | Human-readable summary of non-zero change counts plus a review prompt |
+| `name` | Name of the OpenClaw agent to wake; controlled by `OPENCLAW_HOOKS_AGENT` |
+| `wakeMode` | Wake mode for OpenClaw; controlled by `OPENCLAW_HOOKS_WAKE_MODE` (`now` is the only supported value) |
+
+The message is built by joining the non-zero count fragments
+(`"N added"`, `"N modified"`, `"N removed"`) with `", "` and appending
+`". Review new transactions and annotate as appropriate."`.
+
+### HTTP request
+
+The notifier uses `urllib.request` (Python standard library) — no new runtime
+dependency is added. `httpx` remains a dev/test-only dependency.
+
+```
+POST <OPENCLAW_HOOKS_URL>
+Content-Type: application/json
+Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>
+```
+
 ## Configuration
 
 All configuration is loaded from environment variables (or a user `.env` file
@@ -284,6 +364,10 @@ Key variables:
 | `CLAW_API_SECRET` | for serve | — | Bearer token required on all non-health HTTP endpoints; server refuses to start if unset |
 | `PLAID_WEBHOOK_SECRET` | for webhooks | — | Shared secret used to verify Plaid webhook HMAC-SHA256 signatures; if unset all webhook signature checks fail closed |
 | `CLAW_LOG_LEVEL` | no | `INFO` | Log level for the HTTP server; must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; invalid value raises `ConfigError` at startup |
+| `OPENCLAW_HOOKS_URL` | no | `http://127.0.0.1:18789/hooks/agent` | OpenClaw `/hooks/agent` endpoint URL |
+| `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
+| `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake |
+| `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
 
 ## Runtime and tooling standards
 
@@ -304,6 +388,7 @@ src/claw_plaid_ledger/
   cli.py
   config.py
   db.py
+  notifier.py
   plaid_adapter.py
   plaid_models.py
   schema.sql
@@ -315,6 +400,7 @@ tests/
   test_cli.py
   test_config.py
   test_db.py
+  test_notifier.py
   test_plaid_adapter.py
   test_server.py
   test_sync_engine.py
