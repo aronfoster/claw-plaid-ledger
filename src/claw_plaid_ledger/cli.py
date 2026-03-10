@@ -12,6 +12,7 @@ import uvicorn
 
 from claw_plaid_ledger.config import (
     _VALID_LOG_LEVELS,
+    Config,
     ConfigError,
     load_config,
 )
@@ -25,6 +26,37 @@ app = typer.Typer(
         "SQLite and exporting agent-friendly artifacts."
     ),
 )
+
+
+def _doctor_verbose_config(config: Config) -> None:
+    """Print verbose config values for the doctor command."""
+    typer.echo(f"doctor: config CLAW_PLAID_LEDGER_DB_PATH={config.db_path}")
+    typer.echo(
+        f"doctor: config PLAID_CLIENT_ID="
+        f"{config.plaid_client_id or '(not set)'}"
+    )
+    typer.echo(f"doctor: config PLAID_ENV={config.plaid_env or '(not set)'}")
+    typer.echo(f"doctor: config PLAID_SECRET={_redact(config.plaid_secret)}")
+    typer.echo(
+        f"doctor: config PLAID_ACCESS_TOKEN="
+        f"{_redact(config.plaid_access_token)}"
+    )
+
+
+def _doctor_openclaw_check(config: Config) -> None:
+    """Report OpenClaw notification configuration status."""
+    if config.openclaw_hooks_token is not None:
+        url = config.openclaw_hooks_url
+        agent = config.openclaw_hooks_agent
+        typer.echo(
+            f"doctor: openclaw notification [OK] url={url} agent={agent}"
+        )
+    else:
+        typer.echo(
+            "doctor: openclaw notification [WARN] "
+            "OPENCLAW_HOOKS_TOKEN not set \u2014 notifications disabled"
+        )
+
 
 _EXPECTED_TABLES = {"accounts", "transactions", "sync_state"}
 _REDACT_KEEP_CHARS = 4
@@ -104,28 +136,14 @@ def doctor(
     typer.echo(f"doctor: transactions rows={tx_count}")
 
     if verbose > 0:
-        typer.echo(
-            f"doctor: config CLAW_PLAID_LEDGER_DB_PATH={config.db_path}"
-        )
-        typer.echo(
-            f"doctor: config PLAID_CLIENT_ID="
-            f"{config.plaid_client_id or '(not set)'}"
-        )
-        typer.echo(
-            f"doctor: config PLAID_ENV={config.plaid_env or '(not set)'}"
-        )
-        typer.echo(
-            f"doctor: config PLAID_SECRET={_redact(config.plaid_secret)}"
-        )
-        typer.echo(
-            f"doctor: config PLAID_ACCESS_TOKEN="
-            f"{_redact(config.plaid_access_token)}"
-        )
+        _doctor_verbose_config(config)
 
     if config.api_secret:
         typer.echo("doctor: CLAW_API_SECRET [OK]")
     else:
         typer.echo("doctor: CLAW_API_SECRET [FAIL] not set")
+
+    _doctor_openclaw_check(config)
 
     typer.echo("doctor: all checks passed")
 

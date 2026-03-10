@@ -157,6 +157,55 @@ def test_doctor_reports_api_secret_unset(
     assert "CLAW_API_SECRET [FAIL]" in output
 
 
+def test_doctor_openclaw_notification_warn_when_token_unset(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports [WARN] and exits 0 when token is not set."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.delenv("OPENCLAW_HOOKS_TOKEN", raising=False)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "openclaw notification [WARN]" in output
+
+
+def test_doctor_openclaw_notification_ok_when_token_set(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports [OK] with url and agent when token is set."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("OPENCLAW_HOOKS_TOKEN", "my-token")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "openclaw notification [OK]" in output
+    assert "url=http://127.0.0.1:18789/hooks/agent" in output
+    assert "agent=Hestia" in output
+    assert "my-token" not in output
+
+
+def test_doctor_openclaw_notification_shows_custom_agent(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` shows the custom agent name when OPENCLAW_HOOKS_AGENT set."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("OPENCLAW_HOOKS_TOKEN", "my-token")
+    monkeypatch.setenv("OPENCLAW_HOOKS_AGENT", "Hal9000")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "agent=Hal9000" in output
+
+
 def test_serve_refuses_without_api_secret(monkeypatch: MonkeyPatch) -> None:
     """`serve` exits non-zero when CLAW_API_SECRET is not set."""
     monkeypatch.delenv("CLAW_API_SECRET", raising=False)
