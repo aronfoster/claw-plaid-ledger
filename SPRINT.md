@@ -310,7 +310,7 @@ Authorization: Bearer <token>
 
 ---
 
-### Task 4: `PUT /annotations/{transaction_id}` upsert endpoint
+### Task 4: `PUT /annotations/{transaction_id}` upsert endpoint ✅ DONE
 
 **Scope**
 

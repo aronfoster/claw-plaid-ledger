@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import sqlite3
+from datetime import UTC, datetime
 from typing import Annotated
 
 import fastapi
@@ -16,10 +17,12 @@ from pydantic import BaseModel
 
 from claw_plaid_ledger.config import load_config
 from claw_plaid_ledger.db import (
+    AnnotationRow,
     TransactionQuery,
     get_annotation,
     get_transaction,
     query_transactions,
+    upsert_annotation,
 )
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
@@ -163,6 +166,44 @@ def get_transaction_detail(transaction_id: str) -> dict[str, object]:
         }
 
     return {**transaction, "annotation": annotation_payload}
+
+
+class AnnotationRequest(BaseModel):
+    """Request body for PUT /annotations/{transaction_id}."""
+
+    category: str | None = None
+    note: str | None = None
+    tags: list[str] | None = None
+
+
+@app.put(
+    "/annotations/{transaction_id}",
+    dependencies=[Depends(require_bearer_token)],
+)
+def put_annotation(
+    transaction_id: str, body: AnnotationRequest
+) -> dict[str, str]:
+    """Create or fully replace an annotation for a transaction."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        if get_transaction(connection, transaction_id) is None:
+            raise HTTPException(
+                status_code=404, detail="Transaction not found"
+            )
+        now = datetime.now(tz=UTC).isoformat()
+        existing = get_annotation(connection, transaction_id)
+        created_at = existing.created_at if existing is not None else now
+        tags_json = json.dumps(body.tags) if body.tags is not None else None
+        row = AnnotationRow(
+            plaid_transaction_id=transaction_id,
+            category=body.category,
+            note=body.note,
+            tags=tags_json,
+            created_at=created_at,
+            updated_at=now,
+        )
+        upsert_annotation(connection, row)
+    return {"status": "ok"}
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])
