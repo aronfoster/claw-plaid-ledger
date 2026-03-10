@@ -6,13 +6,16 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 from typing import Annotated
 
 import fastapi
-from fastapi import BackgroundTasks, Depends, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 
 from claw_plaid_ledger.config import load_config
+from claw_plaid_ledger.db import TransactionQuery, query_transactions
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
 from claw_plaid_ledger.webhook_auth import verify_plaid_signature
@@ -81,6 +84,47 @@ def _background_sync() -> None:
 def health() -> dict[str, str]:
     """Return service liveness status."""
     return {"status": "ok"}
+
+
+class TransactionListQuery(BaseModel):
+    """Validated query parameters for the transactions list endpoint."""
+
+    start_date: str | None = None
+    end_date: str | None = None
+    account_id: str | None = None
+    pending: bool | None = None
+    min_amount: float | None = None
+    max_amount: float | None = None
+    keyword: str | None = None
+    limit: int = Query(default=100, le=500)
+    offset: int = 0
+
+
+@app.get("/transactions", dependencies=[Depends(require_bearer_token)])
+def list_transactions(
+    params: Annotated[TransactionListQuery, Depends()],
+) -> dict[str, object]:
+    """List transactions with optional filtering and pagination."""
+    config = load_config()
+    query = TransactionQuery(
+        start_date=params.start_date,
+        end_date=params.end_date,
+        account_id=params.account_id,
+        pending=params.pending,
+        min_amount=params.min_amount,
+        max_amount=params.max_amount,
+        keyword=params.keyword,
+        limit=params.limit,
+        offset=params.offset,
+    )
+    with sqlite3.connect(config.db_path) as connection:
+        rows, total = query_transactions(connection, query)
+    return {
+        "transactions": rows,
+        "total": total,
+        "limit": params.limit,
+        "offset": params.offset,
+    }
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])

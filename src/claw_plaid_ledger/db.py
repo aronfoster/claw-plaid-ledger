@@ -256,6 +256,98 @@ def get_annotation(
     )
 
 
+@dataclass(frozen=True)
+class TransactionQuery:
+    """Transaction list filters and pagination controls for DB queries."""
+
+    start_date: str | None = None
+    end_date: str | None = None
+    account_id: str | None = None
+    pending: bool | None = None
+    min_amount: float | None = None
+    max_amount: float | None = None
+    keyword: str | None = None
+    limit: int = 100
+    offset: int = 0
+
+
+def query_transactions(
+    connection: sqlite3.Connection,
+    query: TransactionQuery,
+) -> tuple[list[dict[str, object]], int]:
+    """Return filtered transaction rows and the full matching count."""
+    pending_value = int(query.pending) if query.pending is not None else None
+    keyword_like = f"%{query.keyword}%" if query.keyword is not None else None
+
+    params: tuple[object, ...] = (
+        query.start_date,
+        query.start_date,
+        query.end_date,
+        query.end_date,
+        query.account_id,
+        query.account_id,
+        pending_value,
+        pending_value,
+        query.min_amount,
+        query.min_amount,
+        query.max_amount,
+        query.max_amount,
+        keyword_like,
+        keyword_like,
+        keyword_like,
+    )
+
+    total_row = connection.execute(
+        (
+            "SELECT COUNT(*) FROM transactions "
+            "WHERE (? IS NULL OR COALESCE(posted_date, authorized_date) >= ?) "
+            "AND (? IS NULL OR COALESCE(posted_date, authorized_date) <= ?) "
+            "AND (? IS NULL OR plaid_account_id = ?) "
+            "AND (? IS NULL OR pending = ?) "
+            "AND (? IS NULL OR amount >= ?) "
+            "AND (? IS NULL OR amount <= ?) "
+            "AND (? IS NULL OR (name LIKE ? OR merchant_name LIKE ?))"
+        ),
+        params,
+    ).fetchone()
+    total = int(total_row[0]) if total_row is not None else 0
+
+    rows = connection.execute(
+        (
+            "SELECT plaid_transaction_id, plaid_account_id, amount, "
+            "iso_currency_code, name, merchant_name, pending, "
+            "COALESCE(posted_date, authorized_date) AS effective_date "
+            "FROM transactions "
+            "WHERE (? IS NULL OR COALESCE(posted_date, authorized_date) >= ?) "
+            "AND (? IS NULL OR COALESCE(posted_date, authorized_date) <= ?) "
+            "AND (? IS NULL OR plaid_account_id = ?) "
+            "AND (? IS NULL OR pending = ?) "
+            "AND (? IS NULL OR amount >= ?) "
+            "AND (? IS NULL OR amount <= ?) "
+            "AND (? IS NULL OR (name LIKE ? OR merchant_name LIKE ?)) "
+            "ORDER BY effective_date DESC, plaid_transaction_id ASC "
+            "LIMIT ? OFFSET ?"
+        ),
+        (*params, query.limit, query.offset),
+    ).fetchall()
+
+    parsed_rows: list[dict[str, object]] = [
+        {
+            "id": str(row[0]),
+            "account_id": str(row[1]),
+            "amount": float(row[2]),
+            "iso_currency_code": str(row[3]) if row[3] is not None else None,
+            "name": str(row[4]),
+            "merchant_name": str(row[5]) if row[5] is not None else None,
+            "pending": bool(row[6]),
+            "date": str(row[7]) if row[7] is not None else None,
+        }
+        for row in rows
+    ]
+
+    return parsed_rows, total
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:

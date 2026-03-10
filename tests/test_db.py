@@ -10,11 +10,13 @@ import pytest
 
 from claw_plaid_ledger.db import (
     AnnotationRow,
+    TransactionQuery,
     get_annotation,
     get_sync_cursor,
     initialize_database,
     normalize_account_for_db,
     normalize_transaction_for_db,
+    query_transactions,
     upsert_account,
     upsert_annotation,
     upsert_sync_state,
@@ -464,3 +466,134 @@ def test_get_annotation_returns_none_for_missing_transaction_id(
 
     with sqlite3.connect(db_path) as connection:
         assert get_annotation(connection, "unknown_txn") is None
+
+
+def _insert_transaction_row(
+    connection: sqlite3.Connection,
+    row: dict[str, str | float | int | None],
+) -> None:
+    connection.execute(
+        (
+            "INSERT INTO transactions ("
+            "plaid_transaction_id, plaid_account_id, amount, "
+            "iso_currency_code, name, merchant_name, pending, "
+            "authorized_date, posted_date, raw_json, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
+        (
+            row["tx_id"],
+            row["account_id"],
+            row["amount"],
+            "USD",
+            row["name"],
+            row["merchant_name"],
+            row["pending"],
+            row["authorized_date"],
+            row["posted_date"],
+            None,
+            "2024-01-01T00:00:00+00:00",
+            "2024-01-01T00:00:00+00:00",
+        ),
+    )
+
+
+def test_query_transactions_filters_and_paginates(tmp_path: Path) -> None:
+    """Query helper applies filters and returns unpaginated matching total."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_1",
+                "account_id": "acct_1",
+                "amount": 12.5,
+                "name": "STARBUCKS #123",
+                "merchant_name": "Starbucks",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-01-15",
+            },
+        )
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_2",
+                "account_id": "acct_2",
+                "amount": 45.0,
+                "name": "GROCERY STORE",
+                "merchant_name": "Whole Foods",
+                "pending": 1,
+                "authorized_date": "2024-01-20",
+                "posted_date": None,
+            },
+        )
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_3",
+                "account_id": "acct_1",
+                "amount": 70.0,
+                "name": "DINNER",
+                "merchant_name": "Fancy Steakhouse",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-02-01",
+            },
+        )
+
+        rows, total = query_transactions(
+            connection,
+            TransactionQuery(
+                start_date="2024-01-10",
+                end_date="2024-01-31",
+                account_id="acct_1",
+                pending=False,
+                min_amount=10.0,
+                max_amount=20.0,
+                keyword="star",
+                limit=10,
+                offset=0,
+            ),
+        )
+
+        page_rows, page_total = query_transactions(
+            connection,
+            TransactionQuery(limit=1, offset=1),
+        )
+
+    assert total == 1
+    assert len(rows) == 1
+    assert rows[0] == {
+        "id": "tx_1",
+        "account_id": "acct_1",
+        "amount": 12.5,
+        "iso_currency_code": "USD",
+        "name": "STARBUCKS #123",
+        "merchant_name": "Starbucks",
+        "pending": False,
+        "date": "2024-01-15",
+    }
+
+    expected_total = 3
+    assert page_total == expected_total
+    assert len(page_rows) == 1
+    assert page_rows[0]["id"] == "tx_2"
+
+
+def test_query_transactions_unknown_filter_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """Query helper returns empty list and zero total for no matches."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        rows, total = query_transactions(
+            connection,
+            TransactionQuery(account_id="missing"),
+        )
+
+    assert rows == []
+    assert total == 0

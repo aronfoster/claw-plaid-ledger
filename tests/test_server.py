@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import http
 import logging
+import sqlite3
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 if TYPE_CHECKING:
     import pathlib
 
+from claw_plaid_ledger.db import initialize_database
 from claw_plaid_ledger.server import app, require_bearer_token
 
 client = TestClient(app)
@@ -380,3 +382,175 @@ class TestStructuredLogging:
         assert any(r.exc_info is not None for r in error_records), (
             "Expected ERROR record to include exc_info (traceback)"
         )
+
+
+def _seed_transactions(db_path: pathlib.Path) -> None:
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.executemany(
+            (
+                "INSERT INTO transactions ("
+                "plaid_transaction_id, plaid_account_id, amount, "
+                "iso_currency_code, name, merchant_name, pending, "
+                "authorized_date, posted_date, raw_json, created_at, "
+                "updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_1",
+                    "acct_1",
+                    12.34,
+                    "USD",
+                    "Starbucks",
+                    "Starbucks",
+                    0,
+                    None,
+                    "2024-01-15",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_2",
+                    "acct_2",
+                    55.0,
+                    "USD",
+                    "GROCERY",
+                    "Whole Foods",
+                    1,
+                    "2024-01-20",
+                    None,
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+
+
+class TestListTransactionsEndpoint:
+    """Tests for GET /transactions endpoint behavior."""
+
+    def test_requires_bearer_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Missing Authorization header returns 401."""
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "db.sqlite")
+        )
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get("/transactions")
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_invalid_token_returns_401(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Wrong bearer token returns 401."""
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "db.sqlite")
+        )
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_list_transactions_supports_filters_and_pagination(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Filtering and pagination return expected rows and totals."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={
+                "start_date": "2024-01-10",
+                "end_date": "2024-01-31",
+                "account_id": "acct_1",
+                "pending": "false",
+                "min_amount": "10",
+                "max_amount": "20",
+                "keyword": "star",
+                "limit": "10",
+                "offset": "0",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json() == {
+            "transactions": [
+                {
+                    "id": "tx_1",
+                    "account_id": "acct_1",
+                    "amount": 12.34,
+                    "iso_currency_code": "USD",
+                    "name": "Starbucks",
+                    "merchant_name": "Starbucks",
+                    "pending": False,
+                    "date": "2024-01-15",
+                }
+            ],
+            "total": 1,
+            "limit": 10,
+            "offset": 0,
+        }
+
+        page_response = client.get(
+            "/transactions",
+            params={"limit": "1", "offset": "1"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert page_response.status_code == http.HTTPStatus.OK
+        expected_total = 2
+        assert page_response.json()["total"] == expected_total
+        assert page_response.json()["transactions"][0]["id"] == "tx_1"
+
+    def test_limit_above_max_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Limit over 500 is rejected by validation with 422."""
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"limit": "501"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_empty_db_returns_empty_envelope(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Empty database returns empty transaction list and total 0."""
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json() == {
+            "transactions": [],
+            "total": 0,
+            "limit": 100,
+            "offset": 0,
+        }
