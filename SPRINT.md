@@ -73,7 +73,7 @@ Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>
 
 ## Task breakdown
 
-### Task 1: Config additions for OpenClaw notification
+### Task 1: Config additions for OpenClaw notification ✅ DONE
 
 **Scope**
 
