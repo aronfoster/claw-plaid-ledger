@@ -506,7 +506,7 @@ New tests in `test_cli.py` (or a dedicated `test_sync_cli.py`). Use
 
 ---
 
-### Task 5: `doctor` extension for per-item sync state
+### Task 5: `doctor` extension for per-item sync state ✅ DONE
 
 **Scope**
 
