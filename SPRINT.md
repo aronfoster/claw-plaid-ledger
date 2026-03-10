@@ -287,7 +287,7 @@ All new tests in `test_items_config.py` using `tmp_path` for file creation.
 
 ---
 
-### Task 3: Propagate `owner` through `run_sync()`
+### Task 3: Propagate `owner` through `run_sync()` ✅ DONE
 
 **Scope**
 
