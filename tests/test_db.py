@@ -13,6 +13,7 @@ from claw_plaid_ledger.db import (
     TransactionQuery,
     get_annotation,
     get_sync_cursor,
+    get_transaction,
     initialize_database,
     normalize_account_for_db,
     normalize_transaction_for_db,
@@ -597,3 +598,56 @@ def test_query_transactions_unknown_filter_returns_empty(
 
     assert rows == []
     assert total == 0
+
+
+def test_get_transaction_returns_full_detail_row(tmp_path: Path) -> None:
+    """Detail query returns a mapped transaction row including raw_json."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_detail",
+                "account_id": "acct_1",
+                "amount": 9.99,
+                "name": "Cafe",
+                "merchant_name": "Cafe Merchant",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-02-02",
+            },
+        )
+        connection.execute(
+            (
+                "UPDATE transactions SET raw_json = ? "
+                "WHERE plaid_transaction_id = ?"
+            ),
+            ('{"foo": "bar"}', "tx_detail"),
+        )
+
+        row = get_transaction(connection, "tx_detail")
+
+    assert row == {
+        "id": "tx_detail",
+        "account_id": "acct_1",
+        "amount": 9.99,
+        "iso_currency_code": "USD",
+        "name": "Cafe",
+        "merchant_name": "Cafe Merchant",
+        "pending": False,
+        "date": "2024-02-02",
+        "raw_json": '{"foo": "bar"}',
+    }
+
+
+def test_get_transaction_returns_none_for_missing_id(tmp_path: Path) -> None:
+    """Detail query returns None when transaction id is unknown."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        row = get_transaction(connection, "missing")
+
+    assert row is None

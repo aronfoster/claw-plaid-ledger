@@ -348,6 +348,36 @@ def query_transactions(
     return parsed_rows, total
 
 
+def get_transaction(
+    connection: sqlite3.Connection,
+    plaid_transaction_id: str,
+) -> dict[str, object] | None:
+    """Return one transaction by Plaid transaction id, if present."""
+    row = connection.execute(
+        (
+            "SELECT plaid_transaction_id, plaid_account_id, amount, "
+            "iso_currency_code, name, merchant_name, pending, "
+            "COALESCE(posted_date, authorized_date) AS effective_date, "
+            "raw_json "
+            "FROM transactions WHERE plaid_transaction_id = ?"
+        ),
+        (plaid_transaction_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": str(row[0]),
+        "account_id": str(row[1]),
+        "amount": float(row[2]),
+        "iso_currency_code": str(row[3]) if row[3] is not None else None,
+        "name": str(row[4]),
+        "merchant_name": str(row[5]) if row[5] is not None else None,
+        "pending": bool(row[6]),
+        "date": str(row[7]) if row[7] is not None else None,
+        "raw_json": str(row[8]) if row[8] is not None else None,
+    }
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:
