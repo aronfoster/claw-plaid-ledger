@@ -15,7 +15,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from claw_plaid_ledger.config import load_config
+from claw_plaid_ledger.config import OpenClawConfig, load_config
 from claw_plaid_ledger.db import (
     AnnotationRow,
     TransactionQuery,
@@ -24,6 +24,7 @@ from claw_plaid_ledger.db import (
     query_transactions,
     upsert_annotation,
 )
+from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
 from claw_plaid_ledger.webhook_auth import verify_plaid_signature
@@ -75,11 +76,17 @@ def _background_sync() -> None:
             summary.modified,
             summary.removed,
         )
-        if (
-            summary.added == 0
-            and summary.modified == 0
-            and summary.removed == 0
-        ):
+        if summary.added + summary.modified + summary.removed > 0:
+            notify_openclaw(
+                summary,
+                OpenClawConfig(
+                    url=config.openclaw_hooks_url,
+                    token=config.openclaw_hooks_token,
+                    agent=config.openclaw_hooks_agent,
+                    wake_mode=config.openclaw_hooks_wake_mode,
+                ),
+            )
+        else:
             logger.warning(
                 "Background sync completed with zero transaction changes; "
                 "verify webhook payload and Plaid item state"

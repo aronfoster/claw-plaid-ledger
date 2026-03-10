@@ -241,7 +241,7 @@ calls.
 
 ---
 
-### Task 3: Wire notification into background sync
+### Task 3: Wire notification into background sync ✅ DONE
 
 **Scope**
 
