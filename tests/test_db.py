@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING
 import pytest
 
 from claw_plaid_ledger.db import (
+    AnnotationRow,
+    get_annotation,
     get_sync_cursor,
     initialize_database,
     normalize_account_for_db,
     normalize_transaction_for_db,
     upsert_account,
+    upsert_annotation,
     upsert_sync_state,
     upsert_transaction,
 )
@@ -30,7 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-REQUIRED_TABLES = {"accounts", "transactions", "sync_state"}
+REQUIRED_TABLES = {"accounts", "transactions", "sync_state", "annotations"}
 
 
 def test_initialize_database_creates_file_and_tables(tmp_path: Path) -> None:
@@ -363,3 +366,101 @@ def test_sync_state_round_trip_and_rerun(tmp_path: Path) -> None:
 
     assert len(rows) == 1
     assert rows[0] == ("item-1", "cursor-b", "2024-01-02T00:00:00+00:00")
+
+
+def test_upsert_annotation_inserts_and_round_trips(tmp_path: Path) -> None:
+    """Annotation upsert inserts a new row with all fields preserved."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            TRANSACTION_INSERT_SQL,
+            (
+                "txn_annotated",
+                "acct_123",
+                "15.25",
+                "Coffee",
+                0,
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            ),
+        )
+        row = AnnotationRow(
+            plaid_transaction_id="txn_annotated",
+            category="food",
+            note="Morning coffee",
+            tags='["discretionary", "recurring"]',
+            created_at="2024-01-01T01:00:00+00:00",
+            updated_at="2024-01-01T01:00:00+00:00",
+        )
+        upsert_annotation(connection, row)
+
+        stored = get_annotation(connection, "txn_annotated")
+
+    assert stored is not None
+    assert stored == row
+
+
+def test_upsert_annotation_updates_and_preserves_created_at(
+    tmp_path: Path,
+) -> None:
+    """Updating an annotation preserves created_at and updates fields."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            TRANSACTION_INSERT_SQL,
+            (
+                "txn_annotated",
+                "acct_123",
+                "15.25",
+                "Coffee",
+                0,
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            ),
+        )
+        upsert_annotation(
+            connection,
+            AnnotationRow(
+                plaid_transaction_id="txn_annotated",
+                category="food",
+                note="Morning coffee",
+                tags='["discretionary"]',
+                created_at="2024-01-01T01:00:00+00:00",
+                updated_at="2024-01-01T01:00:00+00:00",
+            ),
+        )
+        upsert_annotation(
+            connection,
+            AnnotationRow(
+                plaid_transaction_id="txn_annotated",
+                category="dining",
+                note="Lunch",
+                tags='["team"]',
+                created_at="2099-01-01T00:00:00+00:00",
+                updated_at="2024-01-02T01:00:00+00:00",
+            ),
+        )
+
+        stored = get_annotation(connection, "txn_annotated")
+
+    assert stored is not None
+    assert stored.category == "dining"
+    assert stored.note == "Lunch"
+    assert stored.tags == '["team"]'
+    assert stored.created_at == "2024-01-01T01:00:00+00:00"
+    assert stored.updated_at == "2024-01-02T01:00:00+00:00"
+
+
+def test_get_annotation_returns_none_for_missing_transaction_id(
+    tmp_path: Path,
+) -> None:
+    """Fetching an unknown annotation returns None."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert get_annotation(connection, "unknown_txn") is None

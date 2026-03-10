@@ -192,6 +192,70 @@ def delete_transaction(
     )
 
 
+@dataclass(frozen=True)
+class AnnotationRow:
+    """Normalized annotation fields ready for SQL parameter binding."""
+
+    plaid_transaction_id: str
+    category: str | None
+    note: str | None
+    tags: str | None
+    created_at: str
+    updated_at: str
+
+
+def upsert_annotation(
+    connection: sqlite3.Connection,
+    row: AnnotationRow,
+) -> None:
+    """Insert or update one annotation keyed by plaid_transaction_id."""
+    connection.execute(
+        (
+            "INSERT INTO annotations "
+            "(plaid_transaction_id, category, note, tags, created_at, "
+            "updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(plaid_transaction_id) DO UPDATE SET "
+            "category = excluded.category, "
+            "note = excluded.note, "
+            "tags = excluded.tags, "
+            "updated_at = excluded.updated_at"
+        ),
+        (
+            row.plaid_transaction_id,
+            row.category,
+            row.note,
+            row.tags,
+            row.created_at,
+            row.updated_at,
+        ),
+    )
+
+
+def get_annotation(
+    connection: sqlite3.Connection,
+    plaid_transaction_id: str,
+) -> AnnotationRow | None:
+    """Return one annotation by Plaid transaction id, if present."""
+    db_row = connection.execute(
+        (
+            "SELECT plaid_transaction_id, category, note, tags, created_at, "
+            "updated_at FROM annotations WHERE plaid_transaction_id = ?"
+        ),
+        (plaid_transaction_id,),
+    ).fetchone()
+    if db_row is None:
+        return None
+    return AnnotationRow(
+        plaid_transaction_id=str(db_row[0]),
+        category=str(db_row[1]) if db_row[1] is not None else None,
+        note=str(db_row[2]) if db_row[2] is not None else None,
+        tags=str(db_row[3]) if db_row[3] is not None else None,
+        created_at=str(db_row[4]),
+        updated_at=str(db_row[5]),
+    )
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:

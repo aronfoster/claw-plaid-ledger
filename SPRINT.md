@@ -55,7 +55,7 @@ OpenClaw SKILL definition.
 
 ## Task breakdown
 
-### Task 1: `annotations` table and DB helpers
+### Task 1: `annotations` table and DB helpers ✅ DONE
 
 **Scope**
 
