@@ -213,7 +213,7 @@ All new tests in `test_db.py`.
 
 ---
 
-### Task 2: `ItemConfig` and `items.toml` loader
+### Task 2: `ItemConfig` and `items.toml` loader ✅ DONE
 
 **Scope**
 
