@@ -25,6 +25,31 @@ class ConfigError(ValueError):
 DEFAULT_ITEM_ID = "default-item"
 
 
+def _missing_required_vars(
+    values: dict[str, str | None],
+    *,
+    require_plaid: bool,
+    require_plaid_client: bool,
+) -> list[str]:
+    """Return names of required environment variables that are missing."""
+    missing: list[str] = []
+    if not values["CLAW_PLAID_LEDGER_DB_PATH"]:
+        missing.append("CLAW_PLAID_LEDGER_DB_PATH")
+
+    if require_plaid or require_plaid_client:
+        if not values["PLAID_CLIENT_ID"]:
+            missing.append("PLAID_CLIENT_ID")
+        if not values["PLAID_SECRET"]:
+            missing.append("PLAID_SECRET")
+        if not values["PLAID_ENV"]:
+            missing.append("PLAID_ENV")
+
+    if require_plaid and not values["PLAID_ACCESS_TOKEN"]:
+        missing.append("PLAID_ACCESS_TOKEN")
+
+    return missing
+
+
 @dataclass(frozen=True)
 class OpenClawConfig:
     """OpenClaw notification endpoint configuration."""
@@ -84,6 +109,7 @@ def load_config(
     environ: dict[str, str] | None = None,
     *,
     require_plaid: bool = False,
+    require_plaid_client: bool = False,
     env_file: Path | None = None,
 ) -> Config:
     """Load runtime configuration from env vars and optional .env file."""
@@ -117,20 +143,17 @@ def load_config(
         )
         raise ConfigError(msg)
 
-    missing = []
-    if not db_path_raw:
-        missing.append("CLAW_PLAID_LEDGER_DB_PATH")
-
-    if require_plaid:
-        if not plaid_client_id:
-            missing.append("PLAID_CLIENT_ID")
-        if not plaid_secret:
-            missing.append("PLAID_SECRET")
-        if not plaid_env:
-            missing.append("PLAID_ENV")
-        if not plaid_access_token:
-            missing.append("PLAID_ACCESS_TOKEN")
-
+    missing = _missing_required_vars(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": db_path_raw,
+            "PLAID_CLIENT_ID": plaid_client_id,
+            "PLAID_SECRET": plaid_secret,
+            "PLAID_ENV": plaid_env,
+            "PLAID_ACCESS_TOKEN": plaid_access_token,
+        },
+        require_plaid=require_plaid,
+        require_plaid_client=require_plaid_client,
+    )
     if missing:
         raise ConfigError.for_missing_env_vars(missing)
 
