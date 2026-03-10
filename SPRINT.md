@@ -309,7 +309,7 @@ Use `unittest.mock.patch` to mock `notify_openclaw`.
 
 ---
 
-### Task 4: `doctor` extension for notification config
+### Task 4: `doctor` extension for notification config ✅ DONE
 
 **Scope**
 
