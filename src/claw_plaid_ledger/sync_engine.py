@@ -74,6 +74,7 @@ def run_sync(
     adapter: SyncAdapter,
     access_token: str,
     item_id: str = DEFAULT_ITEM_ID,
+    owner: str | None = None,
 ) -> SyncSummary:
     """Run one sync cycle and persist the result into SQLite."""
     initialize_database(db_path)
@@ -104,7 +105,7 @@ def run_sync(
                 raise PlaidTransientError(msg) from exc
 
             for account in result.accounts:
-                upsert_account(connection, account)
+                upsert_account(connection, account, owner=owner)
                 seen_account_ids.add(account.plaid_account_id)
 
             for transaction in result.added:
@@ -136,6 +137,7 @@ def run_sync(
             connection,
             item_id=item_id,
             cursor=cursor,
+            owner=owner,
         )
         connection.commit()
 

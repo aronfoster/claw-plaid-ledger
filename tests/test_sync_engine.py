@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claw_plaid_ledger.db import get_sync_cursor
+from claw_plaid_ledger.db import get_all_sync_state, get_sync_cursor
 from claw_plaid_ledger.plaid_models import (
     AccountData,
     RemovedTransactionData,
@@ -385,3 +385,54 @@ def test_run_sync_propagates_permanent_error(tmp_path: Path) -> None:
             adapter=adapter,
             access_token=SYNC_ACCESS_VALUE,
         )
+
+
+def test_run_sync_persists_owner_when_provided(tmp_path: Path) -> None:
+    """run_sync stores owner on sync_state and accounts when provided."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FakeAdapter((_result("cursor-owner"),))
+
+    run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="item-owner",
+        owner="bob",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        sync_rows = get_all_sync_state(connection)
+        assert len(sync_rows) == 1
+        assert sync_rows[0].item_id == "item-owner"
+        assert sync_rows[0].owner == "bob"
+        assert sync_rows[0].last_synced_at is not None
+        account_owner = connection.execute(
+            "SELECT owner FROM accounts WHERE plaid_account_id = ?",
+            ("acct-1",),
+        ).fetchone()[0]
+        assert account_owner == "bob"
+
+
+def test_run_sync_owner_defaults_to_none(tmp_path: Path) -> None:
+    """run_sync stores null owner when owner argument is omitted."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FakeAdapter((_result("cursor-none"),))
+
+    run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="item-none",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        sync_rows = get_all_sync_state(connection)
+        assert len(sync_rows) == 1
+        assert sync_rows[0].item_id == "item-none"
+        assert sync_rows[0].owner is None
+        assert sync_rows[0].last_synced_at is not None
+        account_owner = connection.execute(
+            "SELECT owner FROM accounts WHERE plaid_account_id = ?",
+            ("acct-1",),
+        ).fetchone()[0]
+        assert account_owner is None
