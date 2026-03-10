@@ -379,7 +379,7 @@ class AnnotationRequest(BaseModel):
 
 ---
 
-### Task 5: `ARCHITECTURE.md` update
+### Task 5: `ARCHITECTURE.md` update ✅ DONE
 
 **Scope**
 

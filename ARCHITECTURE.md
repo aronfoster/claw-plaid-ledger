@@ -2,22 +2,17 @@
 
 ## Current milestone focus
 
-M2 (Local ledger hardening) is complete. Sprint 4 (M3 server skeleton and
-webhook receiver) is complete. The server now:
+M4 (Agent API and annotation layer) is complete. The server now exposes a
+typed REST API so OpenClaw agents can query the transaction ledger and write
+durable annotations — without ever touching SQLite directly.
 
-- Serves `GET /health` and `POST /webhooks/plaid` via FastAPI/uvicorn
-- Enforces bearer token auth on all non-health routes
-- Verifies Plaid HMAC-SHA256 signatures before triggering any sync
-- Enqueues background syncs asynchronously on `SYNC_UPDATES_AVAILABLE`
-- Emits structured logs suitable for systemd/journald at a configurable level
+Sprint 5 added:
 
-Next focus: M3 agent-friendly exports.
-
-- Write markdown summaries and inbox files into the OpenClaw workspace
-- Make exports idempotent and safe to regenerate on every sync run
-
-Merchant normalization, review queues, and notification triggering are
-planned but intentionally deferred until later milestones.
+- `GET /transactions` — paginated, filterable transaction list
+- `GET /transactions/{transaction_id}` — single transaction with merged annotation
+- `PUT /annotations/{transaction_id}` — upsert annotation for a transaction
+- `annotations` table — agent-owned annotation storage (sync engine never reads from or writes to it)
+- Auto-generated OpenAPI spec at `/openapi.json` and Swagger UI at `/docs`
 
 ## Components
 
@@ -30,7 +25,13 @@ planned but intentionally deferred until later milestones.
 
 ## Data flow
 
-Plaid API -> sync engine -> SQLite -> (planned) markdown export -> OpenClaw workspace
+```
+Plaid API -> sync engine -> SQLite -> Agent API -> OpenClaw agent
+```
+
+The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
+never touches `annotations`. Agents read transactions and write annotations
+exclusively through the HTTP API.
 
 ## Boundaries
 
@@ -38,16 +39,75 @@ Plaid API -> sync engine -> SQLite -> (planned) markdown export -> OpenClaw work
 - SQLite is the source of truth for local financial state.
 - Database writes should be deterministic and idempotent across reruns.
 - CLI commands orchestrate workflows but should not contain raw Plaid API setup.
-- Markdown exports in the OpenClaw workspace are derived views of SQLite data;
-  they are overwritten on each export run and never treated as source of truth.
+- The `annotations` table is entirely agent-owned; the sync engine must never
+  read from or write to it.
+- Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) are immutable
+  from the agent's perspective.
 
 ## Key entities
 
 - `account`
 - `transaction`
+- `annotation` (agent-owned; sync engine never touches this)
 - `sync_state`
 
 Deferred entities (`review_item`, rules) land in later phases.
+
+## Schema
+
+### `transactions`
+
+Core Plaid transaction data. Written by the sync engine; read by the API.
+Keyed by `plaid_transaction_id` (Plaid-issued stable string, safe for agents
+to cache across sessions).
+
+**Effective date:** `COALESCE(posted_date, authorized_date)` — for posted
+transactions `posted_date` is set; for pending ones only `authorized_date` is
+set.
+
+**Amount sign convention:** positive = money leaving the account
+(debit/expense), negative = money entering (credit/income). Amounts are
+exposed exactly as stored — not inverted.
+
+### `accounts`
+
+Plaid account metadata. Written by the sync engine on each sync run.
+
+### `sync_state`
+
+One row per Plaid item (institution). Stores the Plaid sync cursor and the
+timestamp of the last successful sync.
+
+### `annotations`
+
+Agent-owned annotation data. **The sync engine never reads from or writes to
+this table.** Created by `init-db`; managed entirely via
+`PUT /annotations/{transaction_id}`.
+
+```sql
+CREATE TABLE IF NOT EXISTS annotations (
+    id                   INTEGER PRIMARY KEY,
+    plaid_transaction_id TEXT NOT NULL UNIQUE
+                         REFERENCES transactions(plaid_transaction_id),
+    category             TEXT,
+    note                 TEXT,
+    tags                 TEXT,          -- JSON array stored as text, e.g. '["food","recurring"]'
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+```
+
+Column notes:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER | Auto-incrementing primary key |
+| `plaid_transaction_id` | TEXT | FK to `transactions.plaid_transaction_id`; unique per annotation |
+| `category` | TEXT \| NULL | Agent-assigned category label |
+| `note` | TEXT \| NULL | Free-text agent note |
+| `tags` | TEXT \| NULL | JSON array stored as text (e.g. `'["food","recurring"]'`); `null` when no tags |
+| `created_at` | TEXT | ISO 8601 UTC timestamp; set on first insert; never changed on update |
+| `updated_at` | TEXT | ISO 8601 UTC timestamp; updated on every upsert |
 
 ## Interfaces
 
@@ -55,29 +115,152 @@ Current operator-facing CLI commands:
 
 - `doctor` — validates config, DB connectivity, schema, and reports row counts;
   with `--verbose` shows redacted config values
-- `init-db` — creates the SQLite database and initializes the schema
+- `init-db` — creates the SQLite database and initializes the schema (safe to
+  run against an existing database; uses `CREATE TABLE IF NOT EXISTS`)
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
   respects `CLAW_PLAID_LEDGER_ITEM_ID` for multi-institution households
 - `serve` — starts the FastAPI/uvicorn HTTP server; binds to
   `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`)
 
-HTTP endpoints (served by `ledger serve`):
+## HTTP endpoints
 
-- `GET /health` — returns `{"status": "ok"}`; no authentication required
-- `POST /webhooks/plaid` — receives Plaid webhook events; requires bearer
-  token auth and Plaid HMAC-SHA256 signature verification (`Plaid-Verification`
-  header); returns 400 on invalid signature; on `SYNC_UPDATES_AVAILABLE`
-  enqueues a background sync via `run_sync` and returns 200 immediately;
-  unrecognised webhook types are acknowledged with 200 and logged at debug level
+All endpoints are served by `ledger serve`.
 
-Planned in M3:
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | None | Service liveness check; returns `{"status": "ok"}` |
+| `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
+| `GET` | `/transactions` | Bearer | Paginated, filtered transaction list |
+| `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation |
+| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
+| `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
+| `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
 
-- `export` — writes markdown transaction summaries into the OpenClaw workspace
+### `GET /health`
 
-Deferred interfaces:
+Returns `{"status": "ok"}`. No authentication required.
 
-- `notify`
-- `reconcile`
+### `POST /webhooks/plaid`
+
+Receives Plaid webhook events. Requires bearer token auth and Plaid
+HMAC-SHA256 signature verification (`Plaid-Verification` header). Returns 400
+on invalid signature. On `SYNC_UPDATES_AVAILABLE` enqueues a background sync
+via `run_sync` and returns 200 immediately. Unrecognised webhook types are
+acknowledged with 200 and logged at debug level.
+
+### `GET /transactions`
+
+Returns a paginated, filtered list of transactions.
+
+**Query parameters** (all optional):
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `start_date` | `YYYY-MM-DD` | — | Filter: effective date ≥ start_date (inclusive). Effective date = `COALESCE(posted_date, authorized_date)` |
+| `end_date` | `YYYY-MM-DD` | — | Filter: effective date ≤ end_date (inclusive) |
+| `account_id` | string | — | Filter: exact match on `plaid_account_id` |
+| `pending` | bool | — | Filter: `true` returns only pending; `false` returns only posted |
+| `min_amount` | float | — | Filter: amount ≥ min_amount (inclusive). Plaid sign: positive = debit |
+| `max_amount` | float | — | Filter: amount ≤ max_amount (inclusive) |
+| `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name` |
+| `limit` | int | `100` | Maximum rows to return; max `500`; `limit > 500` returns HTTP 422 |
+| `offset` | int | `0` | Number of matching rows to skip (for pagination) |
+
+**Response** (HTTP 200):
+
+```json
+{
+  "transactions": [
+    {
+      "id": "<plaid_transaction_id>",
+      "account_id": "<plaid_account_id>",
+      "amount": 12.34,
+      "iso_currency_code": "USD",
+      "name": "Starbucks",
+      "merchant_name": "Starbucks",
+      "pending": false,
+      "date": "2024-01-15"
+    }
+  ],
+  "total": 150,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+- `total` is the full matching count before `limit`/`offset` are applied.
+- Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
+- `date` is `COALESCE(posted_date, authorized_date)`.
+
+### `GET /transactions/{transaction_id}`
+
+Returns full detail for one transaction, including a merged annotation block.
+`transaction_id` in the path is the `plaid_transaction_id` string.
+
+Returns HTTP 404 if not found.
+
+**Response** (HTTP 200):
+
+```json
+{
+  "id": "<plaid_transaction_id>",
+  "account_id": "<plaid_account_id>",
+  "amount": 12.34,
+  "iso_currency_code": "USD",
+  "name": "Starbucks",
+  "merchant_name": "Starbucks",
+  "pending": false,
+  "date": "2024-01-15",
+  "raw_json": "{...}",
+  "annotation": {
+    "category": "food",
+    "note": "Morning coffee",
+    "tags": ["discretionary", "recurring"],
+    "updated_at": "2024-01-16T10:30:00Z"
+  }
+}
+```
+
+- `annotation` is `null` if no annotation exists for this transaction.
+- `tags` in the response is a parsed JSON list (not the raw text stored in
+  SQLite); if stored value is `null`, returns `null` for tags.
+- `raw_json` is the raw Plaid API payload stored at sync time; may be `null`
+  for transactions synced before this field was populated.
+
+### `PUT /annotations/{transaction_id}`
+
+Creates or fully replaces an annotation for a transaction.
+`transaction_id` in the path is the `plaid_transaction_id` string.
+
+This is a **full replace**, not a partial PATCH: every PUT completely overwrites
+the annotation row. Omitted fields are stored as `null`.
+
+**Request body** (all fields optional):
+
+```json
+{
+  "category": "food",
+  "note": "Morning coffee",
+  "tags": ["discretionary", "recurring"]
+}
+```
+
+- `tags` must be a JSON array of strings or `null`.
+- Returns HTTP 404 if `transaction_id` does not exist in `transactions`.
+  Agents cannot annotate phantom transactions.
+- Returns HTTP 200 `{"status": "ok"}` on successful create or update.
+- `created_at` is preserved on updates; `updated_at` is refreshed.
+
+## OpenAPI / SKILL definition
+
+FastAPI auto-generates a machine-readable OpenAPI spec at `GET /openapi.json`
+and a Swagger UI at `GET /docs`. Both are served without authentication
+(consistent with the local-only security posture).
+
+`GET /openapi.json` is the **canonical machine-readable spec** and is intended
+to seed the OpenClaw SKILL definition for M7. Any agent that needs to
+introspect the available API surface should fetch this endpoint rather than
+reading the source code.
 
 ## Configuration
 
