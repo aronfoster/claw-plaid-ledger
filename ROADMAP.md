@@ -87,17 +87,17 @@ multiple owners — without requiring manual `.env` switching per sync run.
 
 **Household structure (expected)**
 
-The household will have approximately 4–5 Plaid items:
+A typical household will have approximately 4–5 Plaid items:
 
 | Item ID (suggested) | Institution | Owner |
 |---|---|---|
-| `usaa-aron` | USAA | Aron |
-| `usaa-wife` | USAA | Wife |
-| `usaa-shared` | USAA | Shared |
-| `amex-aron` | American Express | Aron |
-| `amex-wife` | American Express | Wife |
+| `bank-alice` | First Bank | alice |
+| `bank-bob` | First Bank | bob |
+| `bank-shared` | First Bank | shared |
+| `card-alice` | Card Co | alice |
+| `card-bob` | Card Co | bob |
 
-The exact structure will be confirmed when production accounts are linked.
+The exact structure depends on which institutions are linked.
 Item IDs are operator-assigned strings in config, not Plaid identifiers.
 
 **Scope**
@@ -106,7 +106,7 @@ Item IDs are operator-assigned strings in config, not Plaid identifiers.
   item in sequence, each with its own cursor and access token
 - Multi-item config format: `~/.config/claw-plaid-ledger/items.toml` listing
   item ID, access token env var name, and optional owner tag
-  (`shared` | `aron` | `wife` or any string)
+  (`shared` | `alice` | `bob` or any string)
 - `owner` tag stored in `sync_state` and surfaced on accounts so Hestia can
   answer household-scoped vs. individual-scoped queries without schema changes
   to `transactions`
@@ -118,8 +118,8 @@ Item IDs are operator-assigned strings in config, not Plaid identifiers.
 
 **Design decision to record**
 
-Owner scoping is a naming convention on `item_id` (e.g. `amex-aron`,
-`amex-wife`, `usaa-shared`), not a new `transactions` column. Hestia filters
+Owner scoping is a naming convention on `item_id` (e.g. `card-alice`,
+`card-bob`, `bank-shared`), not a new `transactions` column. Hestia filters
 by account via the `account_id` query parameter after learning which accounts
 belong to which item. This keeps the sync engine and API unchanged.
 
@@ -156,17 +156,17 @@ versa. A development machine configured with `PLAID_ENV=sandbox` and a
 sandbox access token cannot reach or accidentally ingest real transaction
 data regardless of network access.
 
-*OAuth institutions:* USAA and American Express both use OAuth-based Plaid
-Link. The Link flow requires a browser and interactive login at the
+*OAuth institutions:* Many banks and credit card providers use OAuth-based
+Plaid Link. The Link flow requires a browser and interactive login at the
 institution's website. This must be performed on a machine with a GUI (the
-OpenClaw Linux Mint machine is appropriate) or via a temporary browser
-session — not headless.
+OpenClaw machine is appropriate) or via a temporary browser session — not
+headless.
 
 **Scope**
 
 - Runbook document (Markdown, committed to repo) covering:
   - Pre-flight checklist (Plaid dashboard production access request, app
-    review requirements for USAA/AmEx if applicable)
+    review requirements for your institution(s) if applicable)
   - One-time Link flow per institution: how to run it, what the access token
     looks like, where to store it
   - How to populate `items.toml` for the full household structure
@@ -253,7 +253,7 @@ property of Hestia's annotation practice.
     how to handle recurring merchants consistently
   - Big-purchase decision support flow: query recent spending context, check
     available headroom against known budget targets, summarise trade-offs
-  - How to handle the `owner` dimension (shared vs. Aron vs. wife) in
+  - How to handle the `owner` dimension (shared vs. individual members) in
     queries and summaries
 - `AGENTS.md`-style operating constraints for Hestia's ledger interactions:
   - Never attempt to modify `transactions`, `accounts`, or `sync_state` —

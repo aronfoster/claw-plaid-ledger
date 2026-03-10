@@ -8,7 +8,7 @@ household. `ledger sync --all` iterates through all items sequentially, each wit
 cursor and access token. `ledger sync --item <id>` syncs a single named item. The existing
 no-flag `ledger sync` path — one item from env vars — continues to work unchanged.
 
-An `owner` tag (e.g. `aron`, `wife`, `shared`) is stored on `sync_state` and `accounts`
+An `owner` tag (e.g. `alice`, `bob`, `shared`) is stored on `sync_state` and `accounts`
 rows so Hestia can answer household-scoped vs. individual-scoped queries by filtering on
 `account_id` without any change to the transactions table or the Agent API.
 
@@ -43,31 +43,31 @@ sqlite3.OperationalError` to handle both fresh and existing databases idempotent
 
 ```toml
 [[items]]
-id = "usaa-aron"
-access_token_env = "PLAID_ACCESS_TOKEN_USAA_ARON"
-owner = "aron"
+id = "bank-alice"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner = "alice"
 
 [[items]]
-id = "usaa-wife"
-access_token_env = "PLAID_ACCESS_TOKEN_USAA_WIFE"
-owner = "wife"
+id = "bank-bob"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_BOB"
+owner = "bob"
 
 [[items]]
-id = "usaa-shared"
-access_token_env = "PLAID_ACCESS_TOKEN_USAA_SHARED"
+id = "bank-shared"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_SHARED"
 owner = "shared"
 
 [[items]]
-id = "amex-aron"
-access_token_env = "PLAID_ACCESS_TOKEN_AMEX_ARON"
-owner = "aron"
+id = "card-alice"
+access_token_env = "PLAID_ACCESS_TOKEN_CARD_ALICE"
+owner = "alice"
 ```
 
 - `id` (str, required): operator-assigned identifier; used as the `item_id` key in
   `sync_state`
 - `access_token_env` (str, required): name of the environment variable that holds the
   Plaid access token for this item (the token value is never written to the file)
-- `owner` (str, optional): free-form tag, e.g. `"aron"`, `"wife"`, `"shared"`
+- `owner` (str, optional): free-form tag, e.g. `"alice"`, `"bob"`, `"shared"`
 
 **Plaid client adapter construction for multi-item:** `PlaidClientAdapter.from_config`
 already accepts a `Config` object and reads only `plaid_client_id`, `plaid_secret`, and
@@ -91,8 +91,8 @@ the command and exit with code 2 if both are passed.
 
 **Per-item sync output format:**
 
-- `sync[usaa-aron]: accounts=3 added=5 modified=1 removed=0`
-- `sync[amex-wife]: ERROR <message>`
+- `sync[bank-alice]: accounts=3 added=5 modified=1 removed=0`
+- `sync[card-bob]: ERROR <message>`
 
 ---
 
@@ -188,9 +188,9 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 - `initialize_database` is idempotent: calling it on a fresh DB and on a DB that already
   has the old schema both result in a valid DB with `owner` columns on both tables
-- `upsert_account(..., owner="aron")` stores `owner="aron"` and subsequent reads confirm
+- `upsert_account(..., owner="alice")` stores `owner="alice"` and subsequent reads confirm
   the value
-- `upsert_sync_state(..., owner="wife")` stores `owner="wife"` and subsequent reads
+- `upsert_sync_state(..., owner="bob")` stores `owner="bob"` and subsequent reads
   confirm the value
 - `get_all_sync_state` returns all rows, ordered by `item_id`, with correct `owner` and
   `last_synced_at` values
@@ -204,9 +204,9 @@ All new tests in `test_db.py`.
 - Test: `initialize_database` on an existing DB without `owner` column → column added,
   existing data preserved
 - Test: `initialize_database` called twice on the same DB → no error (idempotent)
-- Test: `upsert_account` with `owner="aron"` → row readable with `owner="aron"`; a
-  second `upsert_account` with `owner="wife"` for the same `plaid_account_id` → row
-  updated to `owner="wife"`
+- Test: `upsert_account` with `owner="alice"` → row readable with `owner="alice"`; a
+  second `upsert_account` with `owner="bob"` for the same `plaid_account_id` → row
+  updated to `owner="bob"`
 - Test: `upsert_account` with no `owner` argument → `owner` stored as `None`
 - Test: `upsert_sync_state` with `owner="shared"` → row readable with `owner="shared"`
 - Test: `get_all_sync_state` with multiple rows → returned list is ordered by `item_id`
@@ -335,8 +335,8 @@ behaviour are unchanged.
 
 **Done when**
 
-- `run_sync(..., owner="aron")` causes the `sync_state` row for that `item_id` to have
-  `owner="aron"` and all accounts seen in that sync to have `owner="aron"`
+- `run_sync(..., owner="alice")` causes the `sync_state` row for that `item_id` to have
+  `owner="alice"` and all accounts seen in that sync to have `owner="alice"`
 - `run_sync(...)` called without `owner` (legacy path) stores `owner=None`
 - All existing `test_sync_engine.py` tests continue to pass without modification
 - `mypy --strict` passes
@@ -345,8 +345,8 @@ behaviour are unchanged.
 
 New tests in `test_sync_engine.py`.
 
-- Test: `run_sync` with `owner="wife"` → `sync_state` row has `owner="wife"`;
-  accounts returned from the adapter have `owner="wife"` in the DB
+- Test: `run_sync` with `owner="bob"` → `sync_state` row has `owner="bob"`;
+  accounts returned from the adapter have `owner="bob"` in the DB
 - Test: `run_sync` without `owner` (default) → `sync_state` row has `owner=None`;
   accounts have `owner=None`
 
@@ -420,7 +420,7 @@ ledger sync
 **Path B — single named item:**
 
 ```
-ledger sync --item usaa-aron
+ledger sync --item bank-alice
 ```
 
 - Validate `--item` and `--all` are mutually exclusive; exit 2 if both passed
@@ -472,7 +472,7 @@ CLAW_PLAID_LEDGER_ITEM_ID=
 **Done when**
 
 - `ledger sync` (no flags) behaves identically to Sprint 6 behaviour
-- `ledger sync --item usaa-aron` syncs only that item using the token from the named
+- `ledger sync --item bank-alice` syncs only that item using the token from the named
   env var and stores `owner` from items.toml
 - `ledger sync --all` syncs all items sequentially; a single-item failure does not abort
   other items; exits 1 if any item failed
@@ -492,10 +492,10 @@ New tests in `test_cli.py` (or a dedicated `test_sync_cli.py`). Use
   `ConfigError` naming the missing variable
 - Test: `load_config(require_plaid_client=True)` with all three client vars set but
   `PLAID_ACCESS_TOKEN` absent → no error
-- Test: `ledger sync --item usaa-aron` (item in items.toml, token env set) →
-  `run_sync` called with `item_id="usaa-aron"`, `owner="aron"`, correct `access_token`
+- Test: `ledger sync --item bank-alice` (item in items.toml, token env set) →
+  `run_sync` called with `item_id="bank-alice"`, `owner="alice"`, correct `access_token`
 - Test: `ledger sync --item missing-id` → exits 2, error message includes `"missing-id"`
-- Test: `ledger sync --item usaa-aron` (token env not set) → exits 2, error references
+- Test: `ledger sync --item bank-alice` (token env not set) → exits 2, error references
   the env var name
 - Test: `ledger sync --all` (two items, both succeed) → `run_sync` called twice; output
   includes both item IDs; exits 0
@@ -528,13 +528,13 @@ If `items.toml` has items, print one line per item, cross-referenced with `sync_
 For an item that has been synced:
 
 ```
-doctor: item usaa-aron owner=aron last_synced_at=2024-01-15T08:30:00+00:00
+doctor: item bank-alice owner=alice last_synced_at=2024-01-15T08:30:00+00:00
 ```
 
 For an item that appears in `items.toml` but has no row in `sync_state` yet:
 
 ```
-doctor: item amex-wife owner=wife last_synced_at=never
+doctor: item card-bob owner=bob last_synced_at=never
 ```
 
 If `sync_state` has rows for item IDs that are **not** in `items.toml` (orphans from
@@ -635,9 +635,9 @@ Update `ARCHITECTURE.md` to document the M6 design. No code changes; documentati
 
    ```
    items.toml ─┐
-               ├─ ledger sync --all ─> [usaa-aron] run_sync -> SQLite
-               │                    -> [usaa-wife] run_sync -> SQLite
-               │                    -> [amex-aron] run_sync -> SQLite
+               ├─ ledger sync --all ─> [bank-alice] run_sync -> SQLite
+               │                    -> [bank-bob]  run_sync -> SQLite
+               │                    -> [card-alice] run_sync -> SQLite
    PLAID_ENV   ─┘
    ```
 
