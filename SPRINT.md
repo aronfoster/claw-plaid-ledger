@@ -234,7 +234,7 @@ Response (HTTP 200):
 
 ---
 
-### Task 3: `GET /transactions/{transaction_id}` detail endpoint
+### Task 3: `GET /transactions/{transaction_id}` detail endpoint ✅ DONE
 
 **Scope**
 

@@ -554,3 +554,155 @@ class TestListTransactionsEndpoint:
             "limit": 100,
             "offset": 0,
         }
+
+
+class TestGetTransactionDetailEndpoint:
+    """Tests for GET /transactions/{transaction_id} endpoint behavior."""
+
+    def test_requires_bearer_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Missing Authorization header returns 401."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get("/transactions/tx_1")
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_invalid_token_returns_401(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Wrong bearer token returns 401."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/tx_1",
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_known_id_without_annotation_returns_null_annotation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Known transaction without annotation returns annotation null."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/tx_1",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json() == {
+            "id": "tx_1",
+            "account_id": "acct_1",
+            "amount": 12.34,
+            "iso_currency_code": "USD",
+            "name": "Starbucks",
+            "merchant_name": "Starbucks",
+            "pending": False,
+            "date": "2024-01-15",
+            "raw_json": None,
+            "annotation": None,
+        }
+
+    def test_known_id_with_annotation_parses_tags_list(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Annotation tags are returned as parsed JSON list."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                (
+                    "INSERT INTO annotations ("
+                    "plaid_transaction_id, category, note, tags, "
+                    "created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    "tx_1",
+                    "food",
+                    "Morning coffee",
+                    '["discretionary", "recurring"]',
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-02T00:00:00+00:00",
+                ),
+            )
+
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/tx_1",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json()["annotation"] == {
+            "category": "food",
+            "note": "Morning coffee",
+            "tags": ["discretionary", "recurring"],
+            "updated_at": "2024-01-02T00:00:00+00:00",
+        }
+
+    def test_annotation_with_null_tags_returns_null_tags(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Annotation with NULL tags returns tags as null."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                (
+                    "INSERT INTO annotations ("
+                    "plaid_transaction_id, category, note, tags, "
+                    "created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    "tx_1",
+                    "food",
+                    "Morning coffee",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-02T00:00:00+00:00",
+                ),
+            )
+
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/tx_1",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json()["annotation"]["tags"] is None
+
+    def test_unknown_transaction_id_returns_404(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Unknown transaction id returns 404."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/missing",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.NOT_FOUND

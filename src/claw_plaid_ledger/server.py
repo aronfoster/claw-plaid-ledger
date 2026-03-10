@@ -15,7 +15,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from claw_plaid_ledger.config import load_config
-from claw_plaid_ledger.db import TransactionQuery, query_transactions
+from claw_plaid_ledger.db import (
+    TransactionQuery,
+    get_annotation,
+    get_transaction,
+    query_transactions,
+)
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
 from claw_plaid_ledger.webhook_auth import verify_plaid_signature
@@ -125,6 +130,39 @@ def list_transactions(
         "limit": params.limit,
         "offset": params.offset,
     }
+
+
+@app.get(
+    "/transactions/{transaction_id}",
+    dependencies=[Depends(require_bearer_token)],
+)
+def get_transaction_detail(transaction_id: str) -> dict[str, object]:
+    """Return one transaction with optional merged annotation."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        transaction = get_transaction(connection, transaction_id)
+        if transaction is None:
+            raise HTTPException(
+                status_code=404, detail="Transaction not found"
+            )
+
+        annotation = get_annotation(connection, transaction_id)
+
+    annotation_payload: dict[str, object] | None = None
+    if annotation is not None:
+        tags: list[str] | None = None
+        if annotation.tags is not None:
+            tags_raw = json.loads(annotation.tags)
+            tags = [str(tag) for tag in tags_raw]
+
+        annotation_payload = {
+            "category": annotation.category,
+            "note": annotation.note,
+            "tags": tags,
+            "updated_at": annotation.updated_at,
+        }
+
+    return {**transaction, "annotation": annotation_payload}
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])
