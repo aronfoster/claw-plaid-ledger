@@ -5,42 +5,46 @@ from __future__ import annotations
 import json
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from claw_plaid_ledger.config import OpenClawConfig
+    from claw_plaid_ledger.sync_engine import SyncSummary
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
 
-# PLR0913: The function signature is mandated by the sprint spec (Task 2).
-# All seven keyword-only parameters are required by the caller in server.py
-# and cannot be collapsed into a config object without changing the public API
-# defined in the sprint.  Remove this bypass if/when the API is revised.
-def notify_openclaw(  # noqa: PLR0913
-    *,
-    added: int,
-    modified: int,
-    removed: int,
-    url: str,
-    token: str | None,
-    agent: str,
-    wake_mode: str,
-) -> None:
+
+def notify_openclaw(summary: SyncSummary, config: OpenClawConfig) -> None:
     """
     Send a POST to OpenClaw's /hooks/agent endpoint to wake the agent.
 
-    Does nothing (logs a warning) when token is None or empty.
+    Does nothing (logs a warning) when token is None or empty, or when
+    the configured URL uses a scheme other than http or https.
     Never propagates exceptions.
     """
-    if not token:
+    if not config.token:
         logger.warning("OPENCLAW_HOOKS_TOKEN not set — skipping notification")
         return
 
+    scheme = urllib.parse.urlsplit(config.url).scheme
+    if scheme not in _ALLOWED_SCHEMES:
+        logger.warning(
+            "OpenClaw URL has unsupported scheme %r — skipping notification",
+            scheme,
+        )
+        return
+
     parts = []
-    if added:
-        parts.append(f"{added} added")
-    if modified:
-        parts.append(f"{modified} modified")
-    if removed:
-        parts.append(f"{removed} removed")
+    if summary.added:
+        parts.append(f"{summary.added} added")
+    if summary.modified:
+        parts.append(f"{summary.modified} modified")
+    if summary.removed:
+        parts.append(f"{summary.removed} removed")
 
     message = (
         "Plaid sync complete: "
@@ -50,26 +54,28 @@ def notify_openclaw(  # noqa: PLR0913
 
     payload = {
         "message": message,
-        "name": agent,
-        "wakeMode": wake_mode,
+        "name": config.agent,
+        "wakeMode": config.wake_mode,
     }
 
     data = json.dumps(payload).encode()
-    # S310: urllib.request is the stdlib HTTP client mandated by the sprint
-    # conventions (no httpx at runtime).  The URL is operator-supplied via
-    # OPENCLAW_HOOKS_URL; file: and custom schemes are not a concern here.
+    # S310: the scheme has been validated to be http or https on the lines
+    # above; file: and custom schemes are already rejected with a warning.
+    # ruff cannot perform flow analysis to see this, so the suppression is
+    # narrow (single line, single code) and the root cause is addressed.
     req = urllib.request.Request(  # noqa: S310
-        url,
+        config.url,
         data=data,
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {config.token}",
         },
         method="POST",
     )
 
     try:
-        # S310: same rationale as the Request() call above.
+        # S310: same rationale as the Request() call above — scheme already
+        # validated.  ruff fires on urlopen regardless of argument type.
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             status = resp.status
     except urllib.error.HTTPError as e:

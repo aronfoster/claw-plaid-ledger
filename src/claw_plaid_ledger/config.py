@@ -26,6 +26,16 @@ DEFAULT_ITEM_ID = "default-item"
 
 
 @dataclass(frozen=True)
+class OpenClawConfig:
+    """OpenClaw notification endpoint configuration."""
+
+    url: str
+    token: str | None
+    agent: str
+    wake_mode: str
+
+
+@dataclass(frozen=True)
 class Config:
     """Application configuration values loaded from environment variables."""
 

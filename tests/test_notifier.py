@@ -12,14 +12,40 @@ from unittest.mock import MagicMock, patch
 if TYPE_CHECKING:
     import pytest
 
+from claw_plaid_ledger.config import OpenClawConfig
 from claw_plaid_ledger.notifier import notify_openclaw
+from claw_plaid_ledger.sync_engine import SyncSummary
 
 _URL = "http://127.0.0.1:18789/hooks/agent"
-# Short name so S105 ("hardcoded password") does not fire; this value carries
-# no real security significance — it is only used as a test fixture.
 _TOKEN = "test-token"  # noqa: S105
 _AGENT = "Hestia"
 _WAKE_MODE = "now"
+
+
+def _summary(
+    added: int = 1, modified: int = 0, removed: int = 0
+) -> SyncSummary:
+    """Return a SyncSummary with the given change counts."""
+    return SyncSummary(
+        added=added,
+        modified=modified,
+        removed=removed,
+        accounts=1,
+        next_cursor="cur",
+    )
+
+
+def _config(
+    *,
+    url: str = _URL,
+    token: str | None = _TOKEN,
+    agent: str = _AGENT,
+    wake_mode: str = _WAKE_MODE,
+) -> OpenClawConfig:
+    """Return an OpenClawConfig with the given values."""
+    return OpenClawConfig(
+        url=url, token=token, agent=agent, wake_mode=wake_mode
+    )
 
 
 def _make_mock_resp(status: int = 200) -> MagicMock:
@@ -42,15 +68,7 @@ class TestTokenGuard:
             patch("urllib.request.urlopen") as mock_urlopen,
             caplog.at_level("WARNING"),
         ):
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token=None,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config(token=None))
         mock_urlopen.assert_not_called()
         assert "OPENCLAW_HOOKS_TOKEN not set" in caplog.text
 
@@ -62,17 +80,48 @@ class TestTokenGuard:
             patch("urllib.request.urlopen") as mock_urlopen,
             caplog.at_level("WARNING"),
         ):
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token="",
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config(token=""))
         mock_urlopen.assert_not_called()
         assert "OPENCLAW_HOOKS_TOKEN not set" in caplog.text
+
+
+class TestUrlSchemeGuard:
+    """Tests for the URL scheme validation guard."""
+
+    def test_file_scheme_logs_warning_and_skips_urlopen(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A file: URL must be rejected with a warning."""
+        with (
+            patch("urllib.request.urlopen") as mock_urlopen,
+            caplog.at_level("WARNING"),
+        ):
+            notify_openclaw(_summary(), _config(url="file:///etc/passwd"))
+        mock_urlopen.assert_not_called()
+        assert "unsupported scheme" in caplog.text
+
+    def test_custom_scheme_logs_warning_and_skips_urlopen(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A custom scheme must be rejected with a warning."""
+        with (
+            patch("urllib.request.urlopen") as mock_urlopen,
+            caplog.at_level("WARNING"),
+        ):
+            notify_openclaw(_summary(), _config(url="ftp://example.com/hook"))
+        mock_urlopen.assert_not_called()
+        assert "unsupported scheme" in caplog.text
+
+    def test_https_scheme_is_allowed(self) -> None:
+        """https: is an allowed scheme and must proceed to urlopen."""
+        with patch(
+            "urllib.request.urlopen", return_value=_make_mock_resp()
+        ) as mock_urlopen:
+            notify_openclaw(
+                _summary(),
+                _config(url="https://example.com/hooks/agent"),
+            )
+        mock_urlopen.assert_called_once()
 
 
 class TestMessageConstruction:
@@ -93,13 +142,8 @@ class TestMessageConstruction:
 
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             notify_openclaw(
-                added=added,
-                modified=modified,
-                removed=removed,
-                url=_URL,
-                token=_TOKEN,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
+                _summary(added=added, modified=modified, removed=removed),
+                _config(),
             )
 
         assert len(captured) == 1
@@ -141,15 +185,7 @@ class TestSuccessfulPost:
         with patch(
             "urllib.request.urlopen", return_value=_make_mock_resp()
         ) as mock_open:
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token=_TOKEN,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config())
 
         mock_open.assert_called_once()
         req: urllib.request.Request = mock_open.call_args[0][0]
@@ -168,15 +204,7 @@ class TestSuccessfulPost:
             patch("urllib.request.urlopen", return_value=_make_mock_resp()),
             caplog.at_level("INFO"),
         ):
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token=_TOKEN,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config())
 
         assert "OpenClaw notification sent" in caplog.text
 
@@ -195,15 +223,7 @@ class TestErrorHandling:
             ),
             caplog.at_level("WARNING"),
         ):
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token=_TOKEN,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config())
 
         assert "OpenClaw notification failed (network)" in caplog.text
 
@@ -222,14 +242,6 @@ class TestErrorHandling:
             patch("urllib.request.urlopen", side_effect=http_err),
             caplog.at_level("WARNING"),
         ):
-            notify_openclaw(
-                added=1,
-                modified=0,
-                removed=0,
-                url=_URL,
-                token=_TOKEN,
-                agent=_AGENT,
-                wake_mode=_WAKE_MODE,
-            )
+            notify_openclaw(_summary(), _config())
 
         assert "OpenClaw notification failed: HTTP 401" in caplog.text
