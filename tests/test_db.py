@@ -10,7 +10,9 @@ import pytest
 
 from claw_plaid_ledger.db import (
     AnnotationRow,
+    SyncStateRow,
     TransactionQuery,
+    get_all_sync_state,
     get_annotation,
     get_sync_cursor,
     get_transaction,
@@ -651,3 +653,203 @@ def test_get_transaction_returns_none_for_missing_id(tmp_path: Path) -> None:
         row = get_transaction(connection, "missing")
 
     assert row is None
+
+
+# ---------------------------------------------------------------------------
+# Task 1: owner column migration and helpers
+# ---------------------------------------------------------------------------
+
+
+def _account_column_names(connection: sqlite3.Connection) -> set[str]:
+    rows = connection.execute("PRAGMA table_info(accounts)").fetchall()
+    return {row[1] for row in rows}
+
+
+def _sync_state_column_names(connection: sqlite3.Connection) -> set[str]:
+    rows = connection.execute("PRAGMA table_info(sync_state)").fetchall()
+    return {row[1] for row in rows}
+
+
+def test_initialize_database_fresh_db_has_owner_columns(
+    tmp_path: Path,
+) -> None:
+    """Fresh DB has owner column on both accounts and sync_state."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert "owner" in _account_column_names(connection)
+        assert "owner" in _sync_state_column_names(connection)
+
+
+def test_initialize_database_adds_owner_to_existing_db(tmp_path: Path) -> None:
+    """Migration adds owner column to an existing DB that lacks it."""
+    db_path = tmp_path / "ledger.db"
+
+    # Bootstrap an old-style DB without owner columns
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY,
+                plaid_account_id TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                mask TEXT,
+                type TEXT,
+                subtype TEXT,
+                institution_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sync_state (
+                id INTEGER PRIMARY KEY,
+                item_id TEXT NOT NULL UNIQUE,
+                cursor TEXT,
+                last_synced_at TEXT
+            );
+            INSERT INTO accounts
+                (plaid_account_id, name, created_at, updated_at)
+                VALUES ('acct-old', 'Old Account', '2024-01-01', '2024-01-01');
+            INSERT INTO sync_state (item_id, cursor, last_synced_at)
+                VALUES ('item-old', 'cur-old', '2024-01-01');
+            """
+        )
+
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert "owner" in _account_column_names(connection)
+        assert "owner" in _sync_state_column_names(connection)
+        # Existing data is preserved
+        acct = connection.execute(
+            "SELECT plaid_account_id, name FROM accounts "
+            "WHERE plaid_account_id = 'acct-old'"
+        ).fetchone()
+        assert acct is not None
+        assert acct[0] == "acct-old"
+
+
+def test_initialize_database_idempotent_with_owner_columns(
+    tmp_path: Path,
+) -> None:
+    """Calling initialize_database twice does not raise an error."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    initialize_database(db_path)  # must not raise
+
+    with sqlite3.connect(db_path) as connection:
+        assert "owner" in _account_column_names(connection)
+        assert "owner" in _sync_state_column_names(connection)
+
+
+def test_upsert_account_stores_owner(tmp_path: Path) -> None:
+    """upsert_account stores owner and updates it on conflict."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_account(connection, _account(), owner="alice")
+        row = connection.execute(
+            "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "alice"
+
+        upsert_account(connection, _account(), owner="bob")
+        row = connection.execute(
+            "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "bob"
+
+
+def test_upsert_account_without_owner_stores_none(tmp_path: Path) -> None:
+    """upsert_account with no owner argument stores NULL."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_account(connection, _account())
+        row = connection.execute(
+            "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is None
+
+
+def test_upsert_sync_state_stores_owner(tmp_path: Path) -> None:
+    """upsert_sync_state stores owner and it is readable."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_sync_state(
+            connection,
+            item_id="item-1",
+            cursor="cur-a",
+            owner="shared",
+            last_synced_at="2024-01-01T00:00:00+00:00",
+        )
+        row = connection.execute(
+            "SELECT owner FROM sync_state WHERE item_id = 'item-1'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "shared"
+
+
+def test_get_all_sync_state_ordered_by_item_id(tmp_path: Path) -> None:
+    """get_all_sync_state returns all rows ordered by item_id."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_sync_state(
+            connection,
+            item_id="bank-charlie",
+            cursor="c3",
+            owner="charlie",
+            last_synced_at="2024-01-03T00:00:00+00:00",
+        )
+        upsert_sync_state(
+            connection,
+            item_id="bank-alice",
+            cursor="c1",
+            owner="alice",
+            last_synced_at="2024-01-01T00:00:00+00:00",
+        )
+        upsert_sync_state(
+            connection,
+            item_id="bank-bob",
+            cursor="c2",
+            owner="bob",
+            last_synced_at="2024-01-02T00:00:00+00:00",
+        )
+
+        result = get_all_sync_state(connection)
+
+    assert result == [
+        SyncStateRow(
+            item_id="bank-alice",
+            owner="alice",
+            last_synced_at="2024-01-01T00:00:00+00:00",
+        ),
+        SyncStateRow(
+            item_id="bank-bob",
+            owner="bob",
+            last_synced_at="2024-01-02T00:00:00+00:00",
+        ),
+        SyncStateRow(
+            item_id="bank-charlie",
+            owner="charlie",
+            last_synced_at="2024-01-03T00:00:00+00:00",
+        ),
+    ]
+
+
+def test_get_all_sync_state_empty_table(tmp_path: Path) -> None:
+    """get_all_sync_state returns empty list when table has no rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert get_all_sync_state(connection) == []

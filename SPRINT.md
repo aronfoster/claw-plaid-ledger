@@ -98,7 +98,7 @@ the command and exit with code 2 if both are passed.
 
 ## Task breakdown
 
-### Task 1: Schema migration and DB helpers for `owner`
+### Task 1: Schema migration and DB helpers for `owner` ✅ DONE
 
 **Scope**
 

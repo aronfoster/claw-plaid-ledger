@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     type TEXT,
     subtype TEXT,
     institution_name TEXT,
+    owner TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
     id INTEGER PRIMARY KEY,
     item_id TEXT NOT NULL UNIQUE,
     cursor TEXT,
+    owner TEXT,
     last_synced_at TEXT
 );
 
