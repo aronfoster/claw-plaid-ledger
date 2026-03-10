@@ -125,6 +125,43 @@ def test_load_config_success_with_plaid_requirement() -> None:
     assert cfg.plaid_access_token == access_value
 
 
+def test_load_config_require_plaid_client_missing_client_id() -> None:
+    """require_plaid_client validates shared Plaid client credentials."""
+    with pytest.raises(
+        ConfigError,
+        match=(
+            r"Missing required environment variable\(s\): "
+            r"PLAID_CLIENT_ID"
+        ),
+    ):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "PLAID_SECRET": "secret",
+                "PLAID_ENV": "sandbox",
+            },
+            require_plaid_client=True,
+        )
+
+
+def test_load_config_require_plaid_client_does_not_require_access_token() -> (
+    None
+):
+    """require_plaid_client does not require PLAID_ACCESS_TOKEN."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "PLAID_CLIENT_ID": "client-id",
+            "PLAID_SECRET": "token-value",
+            "PLAID_ENV": "sandbox",
+        },
+        require_plaid_client=True,
+    )
+
+    assert cfg.plaid_client_id == "client-id"
+    assert cfg.plaid_access_token is None
+
+
 def test_load_config_item_id_defaults_to_default_item() -> None:
     """item_id falls back to DEFAULT_ITEM_ID when env var is absent."""
     cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})

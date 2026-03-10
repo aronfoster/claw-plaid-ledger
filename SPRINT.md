@@ -352,7 +352,7 @@ New tests in `test_sync_engine.py`.
 
 ---
 
-### Task 4: `load_config` client flag and `ledger sync --item` / `--all`
+### Task 4: `load_config` client flag and `ledger sync --item` / `--all` ✅ DONE
 
 **Scope**
 

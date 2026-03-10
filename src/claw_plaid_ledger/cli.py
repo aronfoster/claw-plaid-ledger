@@ -17,8 +17,9 @@ from claw_plaid_ledger.config import (
     load_config,
 )
 from claw_plaid_ledger.db import initialize_database
+from claw_plaid_ledger.items_config import load_items_config
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
-from claw_plaid_ledger.sync_engine import run_sync
+from claw_plaid_ledger.sync_engine import SyncSummary, run_sync
 
 app = typer.Typer(
     help=(
@@ -161,9 +162,19 @@ def init_db() -> None:
     typer.echo(f"init-db: initialized database at {config.db_path}")
 
 
-@app.command()
-def sync() -> None:
-    """Sync transactions from Plaid into the local SQLite ledger."""
+def _sync_summary(prefix: str, summary: SyncSummary) -> None:
+    """Print a standard sync summary line."""
+    typer.echo(
+        f"{prefix}: "
+        f"accounts={summary.accounts} "
+        f"added={summary.added} "
+        f"modified={summary.modified} "
+        f"removed={summary.removed}"
+    )
+
+
+def _sync_default_mode() -> None:
+    """Run legacy single-item sync using PLAID_ACCESS_TOKEN."""
     try:
         config = load_config(require_plaid=True)
     except ConfigError as error:
@@ -184,13 +195,119 @@ def sync() -> None:
         access_token=config.plaid_access_token,
         item_id=config.item_id,
     )
-    typer.echo(
-        "sync: "
-        f"accounts={summary.accounts} "
-        f"added={summary.added} "
-        f"modified={summary.modified} "
-        f"removed={summary.removed}"
+    _sync_summary("sync", summary)
+
+
+def _load_client_config_for_sync() -> Config:
+    """Load config for sync paths that only need shared Plaid client vars."""
+    try:
+        return load_config(require_plaid_client=True)
+    except ConfigError as error:
+        typer.echo(f"sync: {error}")
+        raise SystemExit(2) from error
+
+
+def _sync_named_item(item_id: str) -> None:
+    """Run sync for exactly one item from items.toml."""
+    items_config = load_items_config()
+    item_cfg = next((cfg for cfg in items_config if cfg.id == item_id), None)
+    if item_cfg is None:
+        typer.echo(f"sync: item '{item_id}' not found in items.toml")
+        raise SystemExit(2)
+
+    token = os.environ.get(item_cfg.access_token_env)
+    if token is None:
+        typer.echo(f"sync: {item_cfg.access_token_env} is not set")
+        raise SystemExit(2)
+
+    config = _load_client_config_for_sync()
+    adapter = PlaidClientAdapter.from_config(config)
+    summary = run_sync(
+        db_path=config.db_path,
+        adapter=adapter,
+        access_token=token,
+        item_id=item_cfg.id,
+        owner=item_cfg.owner,
     )
+    _sync_summary(f"sync[{item_cfg.id}]", summary)
+
+
+def _sync_all_items() -> None:
+    """Run sync sequentially for all items in items.toml."""
+    items_config = load_items_config()
+    if len(items_config) == 0:
+        typer.echo("sync --all: no items found in items.toml")
+        raise SystemExit(2)
+
+    config = _load_client_config_for_sync()
+    adapter = PlaidClientAdapter.from_config(config)
+    success_count = 0
+    failure_count = 0
+
+    for item_cfg in items_config:
+        token = os.environ.get(item_cfg.access_token_env)
+        if token is None:
+            typer.echo(
+                "sync["
+                f"{item_cfg.id}"
+                "]: ERROR "
+                f"{item_cfg.access_token_env} is not set"
+            )
+            failure_count += 1
+            continue
+
+        try:
+            summary = run_sync(
+                db_path=config.db_path,
+                adapter=adapter,
+                access_token=token,
+                item_id=item_cfg.id,
+                owner=item_cfg.owner,
+            )
+        except (RuntimeError, ValueError, OSError, sqlite3.Error) as exc:
+            typer.echo(f"sync[{item_cfg.id}]: ERROR {exc}")
+            failure_count += 1
+            continue
+
+        _sync_summary(f"sync[{item_cfg.id}]", summary)
+        success_count += 1
+
+    typer.echo(
+        f"sync --all: {success_count} items synced, {failure_count} failed"
+    )
+    if failure_count > 0:
+        raise SystemExit(1)
+
+
+@app.command()
+def sync(
+    item: Annotated[
+        str | None,
+        typer.Option(
+            "--item", help="Sync a single item from items.toml by ID."
+        ),
+    ] = None,
+    all_items: Annotated[
+        int,
+        typer.Option(
+            "--all", count=True, help="Sync all items listed in items.toml."
+        ),
+    ] = 0,
+) -> None:
+    """Sync transactions from Plaid into the local SQLite ledger."""
+    if item is not None and all_items > 0:
+        typer.echo("sync: --item and --all are mutually exclusive")
+        raise SystemExit(2)
+
+    if item is None and all_items == 0:
+        _sync_default_mode()
+        return
+
+    if item is not None:
+        _sync_named_item(item)
+        return
+
+    _sync_all_items()
 
 
 @app.command()
