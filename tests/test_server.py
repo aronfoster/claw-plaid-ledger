@@ -16,11 +16,17 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
+from claw_plaid_ledger.config import OpenClawConfig
+from claw_plaid_ledger.db import get_annotation, initialize_database
+from claw_plaid_ledger.server import (
+    _background_sync,
+    app,
+    require_bearer_token,
+)
+from claw_plaid_ledger.sync_engine import SyncSummary
+
 if TYPE_CHECKING:
     import pathlib
-
-from claw_plaid_ledger.db import get_annotation, initialize_database
-from claw_plaid_ledger.server import app, require_bearer_token
 
 client = TestClient(app)
 
@@ -895,3 +901,103 @@ class TestPutAnnotationEndpoint:
         assert annotation["category"] == "food"
         assert annotation["note"] == "Morning coffee"
         assert annotation["tags"] == ["discretionary", "recurring"]
+
+
+# ---------------------------------------------------------------------------
+# Tests for notify_openclaw wiring in _background_sync
+# ---------------------------------------------------------------------------
+
+
+_OC_TOKEN = "test-oc-token"  # noqa: S105
+_OC_URL = "http://127.0.0.1:18789/hooks/agent"
+
+
+def _make_mock_config(tmp_path: pathlib.Path) -> MagicMock:
+    """Return a minimal mock Config for _background_sync tests."""
+    mock_config = MagicMock()
+    mock_config.plaid_access_token = "access-token"  # noqa: S105
+    mock_config.item_id = "default-item"
+    mock_config.db_path = tmp_path
+    mock_config.openclaw_hooks_url = _OC_URL
+    mock_config.openclaw_hooks_token = _OC_TOKEN
+    mock_config.openclaw_hooks_agent = "Hestia"
+    mock_config.openclaw_hooks_wake_mode = "now"
+    return mock_config
+
+
+class TestBackgroundSyncNotificationWiring:
+    """Tests that _background_sync wires notify_openclaw correctly."""
+
+    def test_notify_called_when_sync_has_changes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """notify_openclaw called once when sync has non-zero changes."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=3, modified=1, removed=0, accounts=1, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+        ):
+            _background_sync()
+
+        expected_openclaw_cfg = OpenClawConfig(
+            url=mock_config.openclaw_hooks_url,
+            token=mock_config.openclaw_hooks_token,
+            agent=mock_config.openclaw_hooks_agent,
+            wake_mode=mock_config.openclaw_hooks_wake_mode,
+        )
+        mock_notify.assert_called_once_with(summary, expected_openclaw_cfg)
+
+    def test_notify_not_called_when_sync_has_no_changes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """notify_openclaw not called when sync returns zero changes."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+        ):
+            _background_sync()
+
+        mock_notify.assert_not_called()
+
+    def test_notify_exception_does_not_propagate(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Exception from notify_openclaw is caught; sync does not crash."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=1, modified=0, removed=0, accounts=1, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch(
+                "claw_plaid_ledger.server.notify_openclaw",
+                side_effect=RuntimeError("notifier bug"),
+            ),
+        ):
+            # Must not raise — except Exception in _background_sync absorbs it.
+            _background_sync()
