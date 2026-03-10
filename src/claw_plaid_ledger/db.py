@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,12 @@ def initialize_database(db_path: Path) -> None:
 
     with sqlite3.connect(db_path) as connection:
         connection.executescript(load_schema_sql())
+        for stmt in (
+            "ALTER TABLE accounts ADD COLUMN owner TEXT",
+            "ALTER TABLE sync_state ADD COLUMN owner TEXT",
+        ):
+            with contextlib.suppress(sqlite3.OperationalError):
+                connection.execute(stmt)
         connection.commit()
 
 
@@ -38,6 +45,7 @@ class NormalizedAccountRow:
     type: str
     subtype: str | None
     institution_name: str | None
+    owner: str | None
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,7 @@ def normalize_account_for_db(
     account: AccountData,
     *,
     institution_name: str | None = None,
+    owner: str | None = None,
 ) -> NormalizedAccountRow:
     """Normalize typed account data for SQLite persistence."""
     return NormalizedAccountRow(
@@ -69,6 +78,7 @@ def normalize_account_for_db(
         type=account.type,
         subtype=account.subtype,
         institution_name=institution_name,
+        owner=owner,
     )
 
 
@@ -102,23 +112,27 @@ def upsert_account(
     account: AccountData,
     *,
     institution_name: str | None = None,
+    owner: str | None = None,
     now_iso: str | None = None,
 ) -> None:
     """Insert or update one account keyed by plaid_account_id."""
     now = now_iso or _utc_now_iso()
-    row = normalize_account_for_db(account, institution_name=institution_name)
+    row = normalize_account_for_db(
+        account, institution_name=institution_name, owner=owner
+    )
     connection.execute(
         (
             "INSERT INTO accounts "
             "(plaid_account_id, name, mask, type, subtype, institution_name, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "owner, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(plaid_account_id) DO UPDATE SET "
             "name = excluded.name, "
             "mask = excluded.mask, "
             "type = excluded.type, "
             "subtype = excluded.subtype, "
             "institution_name = excluded.institution_name, "
+            "owner = excluded.owner, "
             "updated_at = excluded.updated_at"
         ),
         (
@@ -128,6 +142,7 @@ def upsert_account(
             row.type,
             row.subtype,
             row.institution_name,
+            row.owner,
             now,
             now,
         ),
@@ -395,17 +410,46 @@ def upsert_sync_state(
     *,
     item_id: str,
     cursor: str | None,
+    owner: str | None = None,
     last_synced_at: str | None = None,
 ) -> None:
     """Insert or update sync cursor state for a Plaid item."""
     synced_at = last_synced_at or _utc_now_iso()
     connection.execute(
         (
-            "INSERT INTO sync_state (item_id, cursor, last_synced_at) "
-            "VALUES (?, ?, ?) "
+            "INSERT INTO sync_state (item_id, cursor, owner, last_synced_at) "
+            "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(item_id) DO UPDATE SET "
             "cursor = excluded.cursor, "
+            "owner = excluded.owner, "
             "last_synced_at = excluded.last_synced_at"
         ),
-        (item_id, cursor, synced_at),
+        (item_id, cursor, owner, synced_at),
     )
+
+
+@dataclass(frozen=True)
+class SyncStateRow:
+    """One row from sync_state with owner and last-synced timestamp."""
+
+    item_id: str
+    owner: str | None
+    last_synced_at: str | None
+
+
+def get_all_sync_state(
+    connection: sqlite3.Connection,
+) -> list[SyncStateRow]:
+    """Return all sync_state rows ordered by item_id."""
+    rows = connection.execute(
+        "SELECT item_id, owner, last_synced_at "
+        "FROM sync_state ORDER BY item_id"
+    ).fetchall()
+    return [
+        SyncStateRow(
+            item_id=str(row[0]),
+            owner=str(row[1]) if row[1] is not None else None,
+            last_synced_at=str(row[2]) if row[2] is not None else None,
+        )
+        for row in rows
+    ]
