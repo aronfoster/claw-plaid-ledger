@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS annotations (
 
 ---
 
-### Task 2: `GET /transactions` list endpoint
+### Task 2: `GET /transactions` list endpoint ✅ DONE
 
 **Scope**
 
