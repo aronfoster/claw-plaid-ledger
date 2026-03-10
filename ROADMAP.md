@@ -67,7 +67,7 @@ OpenClaw: a `POST` to its local webhook endpoint.
 {
   "message": "Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate.",
   "name": "Hestia",
-  "wakeMode": "next-heartbeat"
+  "wakeMode": "now"
 }
 ```
 
