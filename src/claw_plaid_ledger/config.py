@@ -39,6 +39,10 @@ class Config:
     plaid_webhook_secret: str | None = None
     item_id: str = DEFAULT_ITEM_ID
     log_level: str = "INFO"
+    openclaw_hooks_url: str = "http://127.0.0.1:18789/hooks/agent"
+    openclaw_hooks_token: str | None = None
+    openclaw_hooks_agent: str = "Hestia"
+    openclaw_hooks_wake_mode: str = "now"
 
 
 def _default_env_file() -> Path:
@@ -87,6 +91,13 @@ def load_config(
     api_secret = values.get("CLAW_API_SECRET") or None
     plaid_webhook_secret = values.get("PLAID_WEBHOOK_SECRET") or None
     item_id = values.get("CLAW_PLAID_LEDGER_ITEM_ID") or DEFAULT_ITEM_ID
+    openclaw_hooks_url = (
+        values.get("OPENCLAW_HOOKS_URL")
+        or "http://127.0.0.1:18789/hooks/agent"
+    )
+    openclaw_hooks_token = values.get("OPENCLAW_HOOKS_TOKEN") or None
+    openclaw_hooks_agent = values.get("OPENCLAW_HOOKS_AGENT") or "Hestia"
+    openclaw_hooks_wake_mode = values.get("OPENCLAW_HOOKS_WAKE_MODE") or "now"
     log_level_raw = (values.get("CLAW_LOG_LEVEL") or "INFO").upper()
     if log_level_raw not in _VALID_LOG_LEVELS:
         valid_names = ", ".join(sorted(_VALID_LOG_LEVELS))
@@ -129,4 +140,8 @@ def load_config(
         plaid_webhook_secret=plaid_webhook_secret,
         item_id=item_id,
         log_level=log_level_raw,
+        openclaw_hooks_url=openclaw_hooks_url,
+        openclaw_hooks_token=openclaw_hooks_token,
+        openclaw_hooks_agent=openclaw_hooks_agent,
+        openclaw_hooks_wake_mode=openclaw_hooks_wake_mode,
     )

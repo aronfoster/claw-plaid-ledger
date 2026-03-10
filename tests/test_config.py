@@ -172,3 +172,44 @@ def test_load_config_log_level_defaults_to_info() -> None:
     cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
 
     assert cfg.log_level == "INFO"
+
+
+def test_load_config_openclaw_defaults_when_vars_absent() -> None:
+    """All four OpenClaw vars absent → defaults applied."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.openclaw_hooks_url == "http://127.0.0.1:18789/hooks/agent"
+    assert cfg.openclaw_hooks_token is None
+    assert cfg.openclaw_hooks_agent == "Hestia"
+    assert cfg.openclaw_hooks_wake_mode == "now"
+
+
+def test_load_config_openclaw_reads_all_four_vars() -> None:
+    """All four OpenClaw vars set → values are read correctly."""
+    expected_auth = "test-hooks-auth-value"
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "OPENCLAW_HOOKS_URL": "http://example.com/hooks/agent",
+            "OPENCLAW_HOOKS_TOKEN": expected_auth,
+            "OPENCLAW_HOOKS_AGENT": "Hal9000",
+            "OPENCLAW_HOOKS_WAKE_MODE": "later",
+        }
+    )
+
+    assert cfg.openclaw_hooks_url == "http://example.com/hooks/agent"
+    assert cfg.openclaw_hooks_token == expected_auth
+    assert cfg.openclaw_hooks_agent == "Hal9000"
+    assert cfg.openclaw_hooks_wake_mode == "later"
+
+
+def test_load_config_openclaw_token_empty_string_stored_as_none() -> None:
+    """OPENCLAW_HOOKS_TOKEN set to empty string is stored as None."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "OPENCLAW_HOOKS_TOKEN": "",
+        }
+    )
+
+    assert cfg.openclaw_hooks_token is None
