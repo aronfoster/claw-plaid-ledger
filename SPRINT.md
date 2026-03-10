@@ -134,7 +134,7 @@ OPENCLAW_HOOKS_WAKE_MODE=now
 
 ---
 
-### Task 2: `notifier.py` module
+### Task 2: `notifier.py` module ✅ DONE
 
 **Scope**
 
