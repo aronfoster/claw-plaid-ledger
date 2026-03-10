@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import sys
 from contextlib import redirect_stdout
 from io import StringIO
@@ -14,8 +15,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from claw_plaid_ledger.cli import main, serve
-from claw_plaid_ledger.db import initialize_database
-from claw_plaid_ledger.items_config import ItemConfig
+from claw_plaid_ledger.db import initialize_database, upsert_sync_state
+from claw_plaid_ledger.items_config import ItemConfig, ItemsConfigError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -205,6 +206,168 @@ def test_doctor_openclaw_notification_shows_custom_agent(
 
     assert exit_code == 0
     assert "agent=Hal9000" in output
+
+
+def test_doctor_items_toml_absent_reports_single_item_mode(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports single-item mode when items.toml is absent."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setattr("claw_plaid_ledger.cli.load_items_config", list)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "doctor: items.toml not found — single-item mode" in output
+
+
+def test_doctor_reports_per_item_synced_state(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` prints one per-item status line for synced items."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as conn:
+        upsert_sync_state(
+            conn,
+            item_id="bank-alice",
+            cursor="cursor-1",
+            owner="alice",
+            last_synced_at="2024-01-15T08:30:00+00:00",
+        )
+        upsert_sync_state(
+            conn,
+            item_id="bank-bob",
+            cursor="cursor-2",
+            owner="bob",
+            last_synced_at="2024-01-16T08:30:00+00:00",
+        )
+        conn.commit()
+
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    alice_env_name = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    bob_env_name = "PLAID_ACCESS_TOKEN_BANK_BOB"
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env_name,
+                owner="alice",
+            ),
+            ItemConfig(
+                id="bank-bob",
+                access_token_env=bob_env_name,
+                owner="bob",
+            ),
+        ],
+    )
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert (
+        "doctor: item bank-alice "
+        "owner=alice "
+        "last_synced_at=2024-01-15T08:30:00+00:00" in output
+    )
+    assert (
+        "doctor: item bank-bob "
+        "owner=bob "
+        "last_synced_at=2024-01-16T08:30:00+00:00" in output
+    )
+
+
+def test_doctor_reports_unsynced_item_as_never(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` prints last_synced_at=never for unsynced configured items."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    bob_env_name = "PLAID_ACCESS_TOKEN_CARD_BOB"
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="card-bob",
+                access_token_env=bob_env_name,
+                owner="bob",
+            )
+        ],
+    )
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "doctor: item card-bob owner=bob last_synced_at=never" in output
+
+
+def test_doctor_reports_orphaned_sync_state_rows(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` marks sync_state rows missing from items.toml as orphans."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as conn:
+        upsert_sync_state(
+            conn,
+            item_id="default-item",
+            cursor="cursor-legacy",
+            owner=None,
+            last_synced_at="2024-01-10T06:00:00+00:00",
+        )
+        conn.commit()
+
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    alice_env_name = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env_name,
+                owner="alice",
+            )
+        ],
+    )
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert (
+        "doctor: item default-item "
+        "owner=None "
+        "last_synced_at=2024-01-10T06:00:00+00:00 [not in items.toml]"
+        in output
+    )
+
+
+def test_doctor_items_toml_parse_error_is_warn_only(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` warns and still exits 0 when items.toml cannot be parsed."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
+    def raise_items_error() -> list[ItemConfig]:
+        message = "items[0] missing required field 'id'"
+        raise ItemsConfigError(message)
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config", raise_items_error
+    )
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert (
+        "doctor: items.toml [WARN] parse error: "
+        "items[0] missing required field 'id'"
+    ) in output
 
 
 def test_serve_refuses_without_api_secret(monkeypatch: MonkeyPatch) -> None:

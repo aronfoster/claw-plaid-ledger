@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 import uvicorn
@@ -16,8 +16,12 @@ from claw_plaid_ledger.config import (
     ConfigError,
     load_config,
 )
-from claw_plaid_ledger.db import initialize_database
-from claw_plaid_ledger.items_config import load_items_config
+from claw_plaid_ledger.db import get_all_sync_state, initialize_database
+from claw_plaid_ledger.items_config import (
+    ItemConfig,
+    ItemsConfigError,
+    load_items_config,
+)
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import SyncSummary, run_sync
 
@@ -59,8 +63,88 @@ def _doctor_openclaw_check(config: Config) -> None:
         )
 
 
+def _load_doctor_items_config() -> tuple[
+    list[ItemConfig] | None, ItemsConfigError | None
+]:
+    """Load items.toml for doctor, returning either items or a parse error."""
+    try:
+        items_config = load_items_config()
+    except ItemsConfigError as error:
+        return None, error
+    return items_config, None
+
+
+def _doctor_per_item_sync_state(
+    *,
+    db_path: os.PathLike[str] | str,
+    items_config: list[ItemConfig],
+) -> None:
+    """Print per-item sync state by joining items.toml with sync_state."""
+    with sqlite3.connect(db_path) as conn:
+        sync_state_rows = get_all_sync_state(conn)
+
+    sync_state_by_item_id = {row.item_id: row for row in sync_state_rows}
+    configured_item_ids = {item_cfg.id for item_cfg in items_config}
+
+    for item_cfg in items_config:
+        sync_state_row = sync_state_by_item_id.get(item_cfg.id)
+        if sync_state_row is None:
+            last_synced_at = "never"
+        else:
+            last_synced_at = sync_state_row.last_synced_at or "never"
+        typer.echo(
+            f"doctor: item {item_cfg.id} "
+            f"owner={item_cfg.owner} "
+            f"last_synced_at={last_synced_at}"
+        )
+
+    for sync_state_row in sync_state_rows:
+        if sync_state_row.item_id in configured_item_ids:
+            continue
+        last_synced_at = sync_state_row.last_synced_at or "never"
+        typer.echo(
+            f"doctor: item {sync_state_row.item_id} "
+            f"owner={sync_state_row.owner} "
+            f"last_synced_at={last_synced_at} [not in items.toml]"
+        )
+
+
 _EXPECTED_TABLES = {"accounts", "transactions", "sync_state"}
 _REDACT_KEEP_CHARS = 4
+
+
+def _doctor_db_stats(
+    db_path: os.PathLike[str] | str,
+) -> tuple[str | None, int, str, int, int]:
+    """Collect schema status and row counts for doctor output."""
+    schema_error: str | None = None
+    sync_count = 0
+    last_synced = "never"
+    account_count = 0
+    tx_count = 0
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        existing_tables = {row[0] for row in rows}
+        missing_tables = _EXPECTED_TABLES - existing_tables
+        if missing_tables:
+            schema_error = ", ".join(sorted(missing_tables))
+        else:
+            sync_row = conn.execute(
+                "SELECT COUNT(*), MAX(last_synced_at) FROM sync_state"
+            ).fetchone()
+            account_count = conn.execute(
+                "SELECT COUNT(*) FROM accounts"
+            ).fetchone()[0]
+            tx_count = conn.execute(
+                "SELECT COUNT(*) FROM transactions"
+            ).fetchone()[0]
+            sync_count = sync_row[0]
+            last_synced = sync_row[1] or "never"
+
+    return schema_error, sync_count, last_synced, account_count, tx_count
 
 
 def _redact(value: str | None) -> str:
@@ -86,6 +170,8 @@ def doctor(
 
     typer.echo("doctor: env [OK]")
 
+    items_config, items_config_error = _load_doctor_items_config()
+
     # Confirm DB file exists
     if not config.db_path.exists():
         typer.echo(f"doctor: db [FAIL] file not found: {config.db_path}")
@@ -94,33 +180,14 @@ def doctor(
     typer.echo(f"doctor: db [OK] {config.db_path}")
 
     # Verify schema and collect stats; raise outside try to satisfy TRY301
-    schema_error: str | None = None
-    sync_count = 0
-    last_synced: str = "never"
-    account_count = 0
-    tx_count = 0
-
     try:
-        with sqlite3.connect(config.db_path) as conn:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-            existing_tables = {row[0] for row in rows}
-            missing_tables = _EXPECTED_TABLES - existing_tables
-            if missing_tables:
-                schema_error = ", ".join(sorted(missing_tables))
-            else:
-                sync_row = conn.execute(
-                    "SELECT COUNT(*), MAX(last_synced_at) FROM sync_state"
-                ).fetchone()
-                account_count = conn.execute(
-                    "SELECT COUNT(*) FROM accounts"
-                ).fetchone()[0]
-                tx_count = conn.execute(
-                    "SELECT COUNT(*) FROM transactions"
-                ).fetchone()[0]
-                sync_count = sync_row[0]
-                last_synced = sync_row[1] or "never"
+        (
+            schema_error,
+            sync_count,
+            last_synced,
+            account_count,
+            tx_count,
+        ) = _doctor_db_stats(config.db_path)
     except Exception as exc:
         typer.echo(f"doctor: db [FAIL] {exc}")
         raise SystemExit(1) from exc
@@ -135,6 +202,18 @@ def doctor(
     )
     typer.echo(f"doctor: accounts rows={account_count}")
     typer.echo(f"doctor: transactions rows={tx_count}")
+
+    if items_config_error is not None:
+        typer.echo(
+            f"doctor: items.toml [WARN] parse error: {items_config_error}"
+        )
+    elif items_config == []:
+        typer.echo("doctor: items.toml not found — single-item mode")
+    else:
+        _doctor_per_item_sync_state(
+            db_path=config.db_path,
+            items_config=cast("list[ItemConfig]", items_config),
+        )
 
     if verbose > 0:
         _doctor_verbose_config(config)
