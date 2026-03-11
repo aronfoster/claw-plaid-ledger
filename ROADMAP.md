@@ -46,158 +46,153 @@ and the legacy single-item env-var path remains compatible.
 
 ## Upcoming Milestones
 
-### M7 — Production Plaid migration
+### M7 — Production operations and runbook
 
-**Goal:** A complete, trustworthy runbook for moving from sandbox to live
-bank data without surprises — costs, token lifecycle, OAuth flow, and
-dev/prod isolation all documented before any production credentials are
-created.
+**Focus:** Operational readiness before any household production onboarding.
 
-**Key facts to encode in the runbook**
-
-*Cost model:* Plaid bills per linked item per month, not per sync call.
-`/transactions/sync` (webhook-triggered) has no per-call charge. The only
-action that creates a new billable event is running the Link flow to obtain
-a new access token. Existing access tokens survive server restarts, database
-recreation, and OS reimages — as long as the token value is preserved in
-config, the item remains live and no re-linking is required.
-
-*Token lifecycle:* Access tokens do not expire under normal operation. They
-are invalidated only if explicitly revoked via the Plaid dashboard, or if
-the institution forces re-authentication (rare, institution-dependent).
-
-*Dev/prod isolation:* Sandbox tokens are cryptographically scoped to Plaid's
-sandbox environment and will be rejected by production endpoints, and vice
-versa. A development machine configured with `PLAID_ENV=sandbox` and a
-sandbox access token cannot reach or accidentally ingest real transaction
-data regardless of network access.
-
-*OAuth institutions:* Many banks and credit card providers use OAuth-based
-Plaid Link. The Link flow requires a browser and interactive login at the
-institution's website. This must be performed on a machine with a GUI (the
-OpenClaw machine is appropriate) or via a temporary browser session — not
-headless.
+**Goal:** A complete, trustworthy runbook for moving from sandbox to live bank
+signals without surprises — production Plaid access, cost model clarity, token
+lifecycle handling, OAuth/manual Link expectations, and recovery procedures.
 
 **Scope**
 
-- Runbook document (Markdown, committed to repo) covering:
-  - Pre-flight checklist (Plaid dashboard production access request, app
-    review requirements for your institution(s) if applicable)
-  - One-time Link flow per institution: how to run it, what the access token
-    looks like, where to store it
-  - How to populate `items.toml` for the full household structure
-  - How to run the first production sync and verify data integrity
-  - What to do if an item needs re-linking (lost token, institution forces
-    re-auth)
-  - Backup and recovery for the SQLite database and config files
-- `ledger doctor` extended with a `--production-preflight` flag that checks
-  all required config is present before any live credentials are used
+- Production migration runbook (Markdown, committed) covering:
+  - Plaid production-access prerequisites and dashboard checklist
+  - cost model (billable events tied to Link/item creation, not sync frequency)
+  - access-token lifecycle (persistence, revocation, forced re-auth edge cases)
+  - sandbox/production isolation guarantees and operator safety checks
+  - manual migration and first-live-sync validation checklist
+  - backup/recovery guidance for SQLite + config secrets
+- `ledger doctor --production-preflight` checks required live config before
+  production credentials are used
 
 **Not in scope**
 
-- Automated Link flow (always manual for OAuth institutions)
-- Plaid webhook URL configuration (handled separately via Plaid dashboard)
+- Automatic Link/OAuth automation (manual only)
+- Multi-item household ingestion workflows (handled in M8)
 
 ---
 
-### M8 — systemd deployment
+### M8 — Multi-item management
 
-**Goal:** `ledger serve` and `ledger sync` run reliably on the OpenClaw
-machine without manual intervention — starting on boot, restarting on
-failure, logging to journald, database backed up before it ever holds
-production data.
+**Focus:** Household onboarding and reliable data ingress.
+
+**Goal:** Onboard the real household structure with explicit multi-item
+configuration and sync controls.
 
 **Scope**
 
-- `ledger serve` as a systemd service unit
-  - `Restart=on-failure`, `RestartSec=10`
-  - `EnvironmentFile` pointing to the user config `.env`
-  - Runs as a dedicated non-root user (or the OpenClaw machine's primary user
-    — operator choice, documented either way)
-- `ledger sync --all` as a systemd timer
-  - Fallback polling in case Plaid webhooks are delayed or missed
-  - Suggested interval: every 6 hours (adjustable)
-  - Separate timer instances per item are an alternative if `--all` is not
-    yet available from M6; documented as a stopgap
-- SQLite backup strategy
-  - Nightly `sqlite3 .backup` copy to a second path (e.g. an external drive
-    or the OpenClaw workspace) via a systemd timer or cron
-  - Must run before production data is loaded for the first time
-- Log hygiene
-  - Existing log format is journald-compatible; confirm and document
-  - `CLAW_LOG_LEVEL=INFO` as the production default
-- `ledger doctor` as a one-shot systemd service for post-deploy validation
-- Installation script (`scripts/install-service.sh`) that writes unit files
-  to the correct location for the target user
+- Implement operator-facing manual Link flow for production token capture
+- Finalize `items.toml` household structure with real owner/institution examples
+  (Aron/Michelle, USAA/AmEx)
+- Ensure `ledger sync --all` is the standard household ingestion path
+- Add item inspection/health visibility sufficient for daily operations and
+  relink triage
 
 **Not in scope**
 
-- Docker or container deployment (systemd is the target)
-- TLS termination (local-only server, bearer token is the security boundary)
-- Remote access / port forwarding
+- Canonical duplicate suppression across overlapping items (handled in M9)
 
 ---
 
-### M9 — Hestia SKILL definition
+### M9 — Canonical household views (source precedence)
 
-**Goal:** Hestia can query the ledger, annotate transactions, and answer
-household finance questions with no manual data preparation. This is the
-milestone where the project becomes genuinely useful day-to-day.
+**Focus:** Solve joint-account overlap deterministically.
 
-**Background**
+**Goal:** Preserve all raw Plaid records while exposing one canonical
+household view that suppresses redundant overlap by configuration-driven,
+explainable rules.
 
-The `GET /openapi.json` endpoint already provides a machine-readable API
-surface. This milestone turns that into a SKILL Hestia loads at startup,
-plus the prompting scaffolding that makes her an effective financial
-collaborator rather than just an API wrapper.
+**Design principles**
 
-The annotation table is Hestia's memory. Raw Plaid merchant names (`AMZN
-Mktp US*AB12CD`) are noisy; Hestia annotates them once with category, note,
-and tags, and every future query benefits from that accumulated context.
-Merchant normalization is not a preprocessing problem — it is an emergent
-property of Hestia's annotation practice.
+- Deterministic account-level mapping (no fuzzy-first dedupe engine)
+- Source precedence and account aliasing live in configuration (`items.toml`)
+- Raw ingestion remains complete; suppression happens only in canonical
+  query/view layers
+- Prefer primary-cardholder visibility for shared credit-card institutions
+  (e.g., AmEx) to avoid authorized-user blind spots
+- Every suppression remains auditable via provenance metadata
 
 **Scope**
 
-- `SKILL.md` for Hestia covering:
-  - How to authenticate to the ledger API (bearer token from workspace
-    secrets)
-  - Query patterns for common household questions (monthly spend by category,
-    pending transactions, large transactions above a threshold, spending by
-    owner)
-  - Annotation workflow: when to annotate, how to choose category/note/tags,
-    how to handle recurring merchants consistently
-  - Big-purchase decision support flow: query recent spending context, check
-    available headroom against known budget targets, summarise trade-offs
-  - How to handle the `owner` dimension (shared vs. individual members) in
-    queries and summaries
-- `AGENTS.md`-style operating constraints for Hestia's ledger interactions:
-  - Never attempt to modify `transactions`, `accounts`, or `sync_state` —
-    read-only except for `PUT /annotations`
-  - Do not surface raw Plaid transaction IDs to the user; use merchant name,
-    date, and amount
-  - Prefer annotating a transaction once and querying annotations over
-    re-interpreting raw data on every session
-- Documented example conversations that exercise the core use cases
-- `ARCHITECTURE.md` updated to describe Hestia's expected usage patterns
+- Rename prior “deduplication” effort to **Household identity and Source
+  Precedence**
+- Define canonical account aliasing and precedence rules in config
+- Update API defaults to canonical household transactions, with explicit access
+  to raw/source records when needed
+- Persist duplicate-suppression provenance (winner source + suppressed sources)
+- Add operator-review path for ambiguous or orphaned overlaps
 
 **Not in scope**
 
-- Automated budget rule enforcement (Hestia advises; the human decides)
-- Push alerts to messaging channels based on spending thresholds (possible
-  future work building on M5 notification infrastructure)
-- Multi-user access control (Hestia has full household access by design)
+- Heuristic-heavy fuzzy matching as the primary strategy
+- Full bookkeeping transfer reconciliation
 
 ---
+
+### M10 — Multi-item automation
+
+**Focus:** Automated maintenance for the new household architecture.
+
+**Goal:** Webhook-triggered and background sync flows operate correctly across
+all configured household items.
+
+**Scope**
+
+- Route Plaid webhooks to the correct configured item
+- Remove single-item assumptions from automatic sync paths
+- Preserve idempotent item-scoped sync with overlap-safe execution
+- Ensure notifications/logging include item + owner context
+
+**Not in scope**
+
+- Institution-specific webhook customization beyond robust routing
+
+---
+
+### M11 — Hestia skill definition
+
+**Focus:** Agent-led financial collaboration on top of deterministic household
+ledger logic.
+
+**Goal:** Hestia validates and collaborates with the canonical ledger, with
+special emphasis on anomaly discovery rather than primary deduplication.
+
+**Scope**
+
+- Define Hestia `SKILL.md` and operating constraints for ledger API usage
+- Prompting guidance for household analytics, annotation hygiene, and owner-aware
+  summaries
+- Add an “orphaned transactions” review workflow where Hestia flags anomalies
+  missed by deterministic source-precedence rules
+- Update architecture docs to reflect Hestia as safety net, not dedupe engine
+
+**Not in scope**
+
+- Automated budget enforcement
+- Multi-user authorization expansion
+
+---
+
+## Priority order
+
+1. **M7 (Ops Foundation)** → **M8 (Data Ingress)** → **M9 (Canonical Logic)** →
+   **M10 (Automation)** → **M11 (Agent Integration)**.
 
 ## Deferred / Unscheduled
+
+### systemd deployment
+
+`ledger serve` + scheduled sync timers on the OpenClaw machine remain valuable,
+but are no longer on the critical path for the M7→M11 household production
+pivot. Revisit after canonical household views (M9) are stable.
 
 ### Markdown export
 
 Human-readable transaction summaries written to the OpenClaw workspace.
 Originally planned for M3. Not urgent now that agents have a proper query
 API, but may be useful for contexts where tool calls are unavailable or for
-manual review workflows. Revisit after M9.
+manual review workflows. Revisit after M11.
 
 ### Per-agent token scoping
 
@@ -213,230 +208,6 @@ over-budget alerts. The annotation layer may make this unnecessary for
 day-to-day use; revisit once Hestia has several months of annotation history
 to assess whether rule-based guardrails add value over conversational
 queries.
----
----
-
-## Additions / follow-on milestones to capture before production cutover
-
-### M7a — Production Link and item management
-
-**Goal:** Make live Plaid onboarding an implemented operator workflow, not just
-a runbook. Production use requires more than documenting the process; the
-project needs a clear, repeatable way to create, exchange, store, inspect,
-and repair real Plaid items for a multi-owner household.
-
-**Why this exists**
-
-M7 documents the production migration, but the project also needs explicit
-implementation work around real Link flows, item status inspection, and
-re-link / recovery handling. For this household, expected live items include:
-
-- `first-bank-alice`
-- `first-bank-bob`
-- `card-co-alice`
-- `card-co-bob`
-
-Real institutions may expose overlapping or partially overlapping account
-sets across items. The system must be able to model that cleanly without
-assuming one institution login maps to one unique household account set.
-
-**Scope**
-
-- Implemented operator workflow for real Plaid Link on a GUI-capable machine
-  (OpenClaw box or equivalent)
-- Server-side exchange of `public_token` -> `access_token`
-- Documented and testable persistence path for:
-  - Plaid `item_id`
-  - institution name
-  - owner tag
-  - access token env var name / secret location
-  - linked Plaid account IDs returned by that item
-- Item inspection command or API surface for:
-  - item owner
-  - institution
-  - last successful sync
-  - current health state
-  - whether re-auth is required
-- Repair / relink workflow for:
-  - lost local config
-  - `ITEM_LOGIN_REQUIRED`
-  - institution-mandated re-auth
-  - intentionally replacing an item with a new Link session
-- Explicit operator guidance that sandbox and production tokens are fully
-  separate and non-portable
-- End-to-end production smoke test for linking exactly one real item before
-  onboarding the full household
-
-**Not in scope**
-
-- Fully headless Link automation
-- Automatic institution-specific troubleshooting beyond surfacing the health
-  state and required operator action
-
----
-
-### M7b — Household identity, overlap, and deduplication
-
-**Goal:** Correctly model a real household where multiple Plaid items may
-surface the same underlying financial account and where a shared card may
-appear under more than one owner login. Prevent duplicate accounts and
-duplicate transactions from polluting the ledger while preserving a clear
-audit trail.
-
-**Problem statement**
-
-This household is expected to have overlapping visibility:
-
-- `first-bank` may expose the same underlying bank account under both
-  `alice` and `bob` logins
-- `card-co` may require both spouses' logins to achieve complete transaction
-  visibility, especially if one user's charges are not fully surfaced to the
-  other through alerts or account views
-- The same real-world account number may therefore appear in multiple Plaid
-  items with different owners
-- The same real-world transaction may arrive more than once from separate
-  items and must not be counted twice
-
-The current M6 owner model is necessary but not sufficient. Owner alone is
-not an identity key.
-
-**Design principles to record**
-
-- Distinguish clearly between:
-  - **item owner**: who authenticated the Plaid item
-  - **account ownership**: who legally/operationally owns the real-world account
-  - **account visibility source**: which Plaid items can see that account
-- Never assume `(institution, owner)` uniquely identifies a real account
-- Never assume account mask alone uniquely identifies a real account
-- Preserve raw source records, but expose one canonical account / transaction
-  view to operators and Hestia
-- Deduplication decisions must be deterministic, explainable, and reversible
-
-**Scope**
-
-- Introduce an explicit account-identity / aliasing design so multiple Plaid
-  accounts from different items can be recognized as one canonical household
-  account when appropriate
-- Add a way to mark account relationships such as:
-  - canonical account
-  - duplicate view of canonical account
-  - uncertain / needs operator review
-- Define household account states:
-  - `individual`
-  - `joint`
-  - `shared-liability`
-  - `authorized-user-visible`
-  - `unknown`
-- Record both:
-  - item-level owner (`alice`, `bob`, `shared`, etc.)
-  - canonical account owner classification (`alice`, `bob`, `joint`,
-    `household`, etc.)
-- Add transaction dedupe strategy for cross-item overlap, based on a stable
-  precedence order and/or matching heuristic using fields such as:
-  - posted date / authorized date
-  - amount
-  - merchant / normalized name
-  - pending vs. posted status
-  - Plaid `account_id`
-  - Plaid transaction ID
-  - institution and item source
-- Define what counts as the "same transaction" across different items,
-  especially for:
-  - shared credit-card purchases
-  - pending -> posted transitions
-  - same charge visible through both users' institution logins
-- Add operator-review path for ambiguous duplicates rather than forcing
-  silent merges in low-confidence cases
-- Persist provenance so a canonical transaction can still answer:
-  - which item(s) reported this
-  - which raw transaction row won canonical status
-  - which raw rows were suppressed as duplicates
-- Ensure all spend summaries and future Hestia queries operate on canonical
-  transactions, not raw duplicated rows
-
-**Suggested implementation direction**
-
-A reasonable path is to split raw ingestion from canonical household views:
-
-- Raw tables keep exact Plaid payloads per item/account/transaction
-- Canonical tables or views resolve:
-  - one household account from many source-account aliases
-  - one household transaction from many source-transaction candidates
-
-This avoids losing source fidelity while preventing duplicate spend totals.
-
-**Not in scope**
-
-- Perfect automatic dedupe for every institution edge case on day one
-- Cross-institution reconciliation of transfers as a full bookkeeping engine
-- Double-entry accounting
-
----
-
-### M7c — Multi-item webhook and automatic sync routing
-
-**Goal:** Webhook-triggered freshness must work for a multi-item household,
-not just the single-item environment-variable path.
-
-**Why this exists**
-
-`ledger sync --all` is useful, but production should not depend only on
-manual or timer-driven sync. Once four household items are live, webhook
-handling must identify the correct item and sync only that item (or safely
-fan into the appropriate follow-up action).
-
-**Scope**
-
-- Route Plaid webhooks to the correct configured household item
-- Remove single-item assumptions from background sync paths
-- Support webhook-triggered sync for all configured items
-- Log item ID, institution, and owner on webhook-triggered syncs
-- Define fallback behaviour when a webhook references an unknown or stale item
-- Preserve idempotency and avoid overlapping duplicate sync runs for the same
-  item
-- Ensure OpenClaw notifications reflect the correct household item context
-
-**Not in scope**
-
-- Institution-specific webhook customization
-- Parallel multi-item fanout unless needed for correctness
-
----
-
-### M7d — API support for owner and canonical household views
-
-**Goal:** Give Hestia and operator tools a first-class way to reason about
-owners, overlapping visibility, and canonical household data without forcing
-that logic into prompt folklore.
-
-**Scope**
-
-- `GET /accounts` endpoint exposing:
-  - Plaid account ID
-  - canonical account ID (if different)
-  - institution
-  - item ID
-  - item owner
-  - canonical owner classification
-  - dedupe / alias status
-- Extend transaction responses or add canonical transaction endpoints so
-  clients can distinguish:
-  - raw source transaction
-  - canonical household transaction
-  - duplicate-suppressed source transaction
-- Support filtering by:
-  - item owner
-  - canonical owner
-  - institution
-  - canonical account
-  - raw vs. canonical view
-- Document how Hestia should query household-wide totals without double
-  counting shared-account overlap
-
-**Not in scope**
-
-- Fine-grained multi-user authorization
-- Hiding source provenance from operators
 
 ---
 
