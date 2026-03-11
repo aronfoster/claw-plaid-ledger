@@ -199,7 +199,7 @@ owner             = "bob"
 
 ---
 
-### Task 3: Sprint closeout and acceptance validation
+### Task 3: Sprint closeout and acceptance validation ✅ DONE
 
 **Scope**
 
@@ -238,3 +238,48 @@ Validate M8 acceptance at sprint end and mark completion in this file.
 - Multi-item webhook routing (M10).
 - Automated background Link re-auth / re-link detection.
 - Parallel multi-institution sync.
+
+---
+
+## Sprint 9 closeout ✅ DONE
+
+### What shipped
+
+**`ledger link`** — self-contained Plaid Link browser flow via a temporary
+local HTTP server bound to `127.0.0.1:18790`. Prints `access_token`,
+`item_id`, and a ready-to-paste `items.toml` snippet. Implemented in
+`link_server.py` and `cli.py`; `create_link_token` and
+`exchange_public_token` added to `PlaidClientAdapter` behind the existing
+adapter boundary. Full test coverage in `test_link_server.py` and
+`test_cli.py` (config-error, link-token-error, success, Ctrl-C paths).
+
+**`ledger items`** — per-item health view reading `items.toml` and SQLite.
+Emits one line per configured item showing `id`, `owner`, `token` status
+(`SET`/`MISSING`), `accounts` count, and `last_synced` timestamp. Prints
+a summary line; exits 0 always. Full test coverage in `test_cli.py`
+(no-items, parse-error, mixed tokens, account/sync-state counts).
+
+**`items.toml.example`** — committed at repo root with a concrete two-person
+household structure (bank-alice / card-alice / card-bob with alice/bob owners).
+
+**Documentation** — `RUNBOOK.md` updated with a "Daily operations" section
+(section 1b) and a `ledger link` walkthrough (section 2.3). Scope block
+updated to reflect M8 additions. `ARCHITECTURE.md` updated with Sprint 9
+component additions. `README.md` CLI command table includes `ledger items`
+and `ledger link`. `ROADMAP.md` updated: M8 moved to completed milestones.
+
+### Quality gate result
+
+All checks passed at closeout:
+
+- `uv run --locked ruff format . --check` — ✅
+- `uv run --locked ruff check .` — ✅
+- `uv run --locked mypy .` — ✅
+- `uv run --locked pytest -v` — ✅ 217 passed
+
+### Explicitly deferred follow-ups
+
+- Canonical duplicate suppression across overlapping items → M9.
+- Multi-item webhook routing → M10.
+- Automated background re-auth detection → post-M10.
+- Parallel multi-institution sync → post-M10.
