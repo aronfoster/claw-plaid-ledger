@@ -65,8 +65,8 @@ configuration and sync controls.
 **Scope**
 
 - Implement operator-facing manual Link flow for production token capture
-- Finalize `items.toml` household structure with real owner/institution examples
-  (Aron/Michelle, USAA/AmEx)
+- Finalize `items.toml` household structure with concrete owner/institution examples
+  (e.g. Alice/Bob, bank-alice/card-bob)
 - Ensure `ledger sync --all` is the standard household ingestion path
 - Add item inspection/health visibility sufficient for daily operations and
   relink triage
@@ -92,7 +92,7 @@ explainable rules.
 - Raw ingestion remains complete; suppression happens only in canonical
   query/view layers
 - Prefer primary-cardholder visibility for shared credit-card institutions
-  (e.g., AmEx) to avoid authorized-user blind spots
+  to avoid authorized-user blind spots
 - Every suppression remains auditable via provenance metadata
 
 **Scope**

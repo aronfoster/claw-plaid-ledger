@@ -7,7 +7,7 @@ command line and to confirm the health of every configured item without running 
 full sync. Sprint 9 is complete when `ledger link` captures a production access
 token through a self-contained browser flow, `ledger items` gives an at-a-glance
 health view of all configured items, and the household configuration is documented
-with a concrete Aron/Michelle/USAA/AmEx example.
+with a concrete Alice/Bob/bank-alice/card-bob example.
 
 ## Working agreements
 
@@ -56,10 +56,10 @@ Add to items.toml and set the matching env var:
 
   [[items]]
   id                = "usaa-aron"
-  access_token_env  = "PLAID_ACCESS_TOKEN_USAA_ARON"
-  owner             = "aron"
+  access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+  owner             = "alice"
 
-  export PLAID_ACCESS_TOKEN_USAA_ARON="access-production-xxxx..."
+  export PLAID_ACCESS_TOKEN_BANK_ALICE="access-production-xxxx..."
 ```
 
 **Implementation notes**
@@ -155,8 +155,8 @@ Behavior:
 
 **2b — `items.toml.example`**
 
-Create `items.toml.example` at the repo root. This file is committed and shows the
-real household structure:
+Create `items.toml.example` at the repo root. This file is committed and shows a
+representative two-person household structure:
 
 ```toml
 # items.toml — Household Plaid item configuration
@@ -164,19 +164,19 @@ real household structure:
 # Run: ledger sync --all
 
 [[items]]
-id                = "usaa-aron"
-access_token_env  = "PLAID_ACCESS_TOKEN_USAA_ARON"
-owner             = "aron"
+id                = "bank-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner             = "alice"
 
 [[items]]
-id                = "amex-aron"
-access_token_env  = "PLAID_ACCESS_TOKEN_AMEX_ARON"
-owner             = "aron"
+id                = "card-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_ALICE"
+owner             = "alice"
 
 [[items]]
-id                = "amex-michelle"
-access_token_env  = "PLAID_ACCESS_TOKEN_AMEX_MICHELLE"
-owner             = "michelle"
+id                = "card-bob"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_BOB"
+owner             = "bob"
 ```
 
 **2c — Documentation updates**
@@ -185,15 +185,14 @@ owner             = "michelle"
   and `ledger sync --all`. Update any references to single-item sync to make clear
   that `sync --all` is the standard household path. Reference `items.toml.example`.
 - `ARCHITECTURE.md`: update the `items.toml` example block and the multi-institution
-  section to use Aron/Michelle/USAA/AmEx names instead of alice/bob placeholders.
+  section if any placeholders need refreshing; keep alice/bob examples consistent.
 - `README.md`: add `ledger items` to the command reference table/list if one exists.
 
 **Done when**
 
 - `ledger items` renders the per-item health table against a real or test DB.
 - Items with missing token env vars are clearly flagged as `MISSING` (not a crash).
-- `items.toml.example` is committed at repo root with the Aron/Michelle/USAA/AmEx
-  structure.
+- `items.toml.example` is committed at repo root with a clear example structure.
 - Documentation updates are complete and consistent with the example file.
 - Tests cover: no-`items.toml` path, parse-error path, mixed SET/MISSING tokens,
   account and sync-state counts from a seeded test DB.
