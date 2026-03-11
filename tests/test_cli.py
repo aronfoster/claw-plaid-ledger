@@ -1143,3 +1143,165 @@ def test_link_keyboard_interrupt_exits_1(
 
     assert exit_code == 1
     assert "interrupted" in output
+
+
+# ---------------------------------------------------------------------------
+# ledger items tests
+# ---------------------------------------------------------------------------
+
+
+def test_items_no_items_configured(monkeypatch: MonkeyPatch) -> None:
+    """`items` exits 0 and reports no items when items.toml is absent."""
+    monkeypatch.setattr("claw_plaid_ledger.cli.load_items_config", list)
+
+    exit_code, output = run_main(["items"])
+
+    assert exit_code == 0
+    assert "no items configured" in output
+
+
+def test_items_parse_error_exits_1(monkeypatch: MonkeyPatch) -> None:
+    """`items` exits 1 and reports the error when items.toml is invalid."""
+
+    def raise_items_error() -> list[ItemConfig]:
+        message = "items[0] missing required field 'id'"
+        raise ItemsConfigError(message)
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config", raise_items_error
+    )
+
+    exit_code, output = run_main(["items"])
+
+    assert exit_code == 1
+    assert "items: parse error:" in output
+    assert "items[0] missing required field 'id'" in output
+
+
+def test_items_mixed_tokens_set_and_missing(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`items` shows SET/MISSING per token and a correct summary line."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
+    alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    bob_env = "PLAID_ACCESS_TOKEN_CARD_BOB"
+    monkeypatch.setenv(alice_env, "access-sandbox-token-alice")
+    monkeypatch.delenv(bob_env, raising=False)
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env,
+                owner="alice",
+            ),
+            ItemConfig(
+                id="card-bob",
+                access_token_env=bob_env,
+                owner="bob",
+            ),
+        ],
+    )
+
+    exit_code, output = run_main(["items"])
+
+    assert exit_code == 0
+    assert "items: bank-alice owner=alice token=SET" in output
+    assert "items: card-bob owner=bob token=MISSING" in output
+    assert "items: 1/2 items healthy, 1 need attention" in output
+
+
+def test_items_shows_account_and_sync_counts(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`items` shows correct account and sync-state counts from the DB."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO accounts "
+            "(plaid_account_id, name, item_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "acct-1",
+                "Checking",
+                "bank-alice",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO accounts "
+            "(plaid_account_id, name, item_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "acct-2",
+                "Savings",
+                "bank-alice",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        upsert_sync_state(
+            conn,
+            item_id="bank-alice",
+            cursor="cursor-1",
+            owner="alice",
+            last_synced_at="2026-03-10T14:22:00+00:00",
+        )
+        conn.commit()
+
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    monkeypatch.setenv(alice_env, "access-sandbox-token-alice")
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env,
+                owner="alice",
+            ),
+        ],
+    )
+
+    exit_code, output = run_main(["items"])
+
+    assert exit_code == 0
+    assert "accounts=2" in output
+    assert "last_synced=2026-03-10T14:22:00+00:00" in output
+    assert "items: 1/1 items healthy, 0 need attention" in output
+
+
+def test_items_no_owner_shows_none_placeholder(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`items` shows (none) when owner is not set for an item."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
+    card_env = "PLAID_ACCESS_TOKEN_CARD_SHARED"
+    monkeypatch.setenv(card_env, "access-token-shared")
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="card-shared",
+                access_token_env=card_env,
+                owner=None,
+            ),
+        ],
+    )
+
+    exit_code, output = run_main(["items"])
+
+    assert exit_code == 0
+    assert "owner=(none)" in output

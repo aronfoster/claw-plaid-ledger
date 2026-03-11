@@ -1,0 +1,18 @@
+# items.toml — Household Plaid item configuration
+# Copy to ~/.config/claw-plaid-ledger/items.toml and populate env vars.
+# Run: ledger sync --all
+
+[[items]]
+id                = "bank-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner             = "alice"
+
+[[items]]
+id                = "card-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_ALICE"
+owner             = "alice"
+
+[[items]]
+id                = "card-bob"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_BOB"
+owner             = "bob"

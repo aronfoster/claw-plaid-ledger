@@ -117,7 +117,7 @@ Add to items.toml and set the matching env var:
 
 ---
 
-### Task 2: `ledger items` command and household configuration finalization
+### Task 2: `ledger items` command and household configuration finalization ✅ DONE
 
 **Scope**
 

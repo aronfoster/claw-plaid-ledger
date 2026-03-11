@@ -2,6 +2,22 @@
 
 ## Current milestone focus
 
+M8 (multi-item management) is complete. Sprint 9 adds `ledger link` for
+browser-based Plaid Link token exchange and `ledger items` for at-a-glance
+item health checks across all configured household items.
+
+Sprint 9 added:
+
+- `link_server.py` — local HTTP server for the Plaid Link browser flow
+- `ledger link` CLI command — guides the operator through Plaid Link and
+  prints the resulting `access_token` and `items.toml` snippet
+- `ledger items` CLI command — shows per-item health (token presence,
+  account count, last sync timestamp) for all entries in `items.toml`
+- `items.toml.example` — committed example file with alice/bob/card-bob
+  household structure
+- `accounts.item_id` column — associates each account row with the
+  originating Plaid item for accurate per-item account counts
+
 M7 (production operations and runbook) is complete. Sprint 8 adds a
 committed production runbook and a `ledger doctor --production-preflight`
 command that validates live-readiness configuration without contacting any
@@ -182,8 +198,14 @@ Current operator-facing CLI commands:
   fails; see `RUNBOOK.md` for usage in the production onboarding checklist
 - `init-db` — creates the SQLite database and initializes the schema (safe to
   run against an existing database; uses `CREATE TABLE IF NOT EXISTS`)
+- `items` — shows per-item health (token presence, account count, last sync
+  timestamp) for all entries in `items.toml`; exits 0 always; the standard
+  daily health-check command before running `sync --all`
+- `link` — guides the operator through the Plaid Link browser flow and prints
+  the resulting `access_token` and `items.toml` snippet
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
-  respects `CLAW_PLAID_LEDGER_ITEM_ID` for multi-institution households
+  `sync --all` is the standard household ingestion path; `sync --item <id>`
+  syncs a single item from `items.toml`
 - `serve` — starts the FastAPI/uvicorn HTTP server; binds to
   `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`)
 
@@ -403,23 +425,23 @@ Default path:
 
 `~/.config/claw-plaid-ledger/items.toml`
 
-Example:
+Example (see also `items.toml.example` at the repo root):
 
 ```toml
 [[items]]
-id = "bank-alice"
-access_token_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
-owner = "alice"
+id                = "bank-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner             = "alice"
 
 [[items]]
-id = "bank-bob"
-access_token_env = "PLAID_ACCESS_TOKEN_BANK_BOB"
-owner = "bob"
+id                = "card-alice"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_ALICE"
+owner             = "alice"
 
 [[items]]
-id = "bank-shared"
-access_token_env = "PLAID_ACCESS_TOKEN_BANK_SHARED"
-owner = "shared"
+id                = "card-bob"
+access_token_env  = "PLAID_ACCESS_TOKEN_CARD_BOB"
+owner             = "bob"
 ```
 
 Fields:
@@ -521,6 +543,7 @@ src/claw_plaid_ledger/
   config.py
   db.py
   items_config.py   # multi-item items.toml loader
+  link_server.py    # local HTTP server for Plaid Link flow (M8)
   notifier.py
   plaid_adapter.py
   plaid_models.py
@@ -534,6 +557,8 @@ tests/
   test_cli.py
   test_config.py
   test_db.py
+  test_items_config.py
+  test_link_server.py
   test_notifier.py
   test_plaid_adapter.py
   test_preflight.py
@@ -541,13 +566,14 @@ tests/
   test_sync_engine.py
   test_webhook_auth.py
 
+items.toml.example  # household configuration example (M8)
 pyproject.toml
 README.md
 AGENTS.md
 ARCHITECTURE.md
 BUGS.md
 ROADMAP.md
-RUNBOOK.md        # production operations runbook (M7)
+RUNBOOK.md          # production operations runbook (M7+)
 SPRINT.md
 VISION.md
 ```

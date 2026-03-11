@@ -122,7 +122,9 @@ Notes:
 | `ledger doctor` | Validates config, DB connectivity, schema, and row counts; checks OpenClaw notification config |
 | `ledger doctor --production-preflight` | Validates live-readiness config without contacting external services; exits non-zero on any required failure |
 | `ledger init-db` | Creates the SQLite database and initialises the schema (safe to re-run) |
-| `ledger sync` | Fetches transactions from Plaid and persists them to SQLite |
+| `ledger items` | Shows per-item health (token presence, account count, last sync) for all entries in `items.toml`; exits 0 always |
+| `ledger link` | Connects a Plaid institution via browser and prints the resulting `access_token` and `items.toml` snippet |
+| `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
 
 ## HTTP API

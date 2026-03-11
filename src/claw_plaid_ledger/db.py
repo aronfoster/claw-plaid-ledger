@@ -29,6 +29,7 @@ def initialize_database(db_path: Path) -> None:
         for stmt in (
             "ALTER TABLE accounts ADD COLUMN owner TEXT",
             "ALTER TABLE sync_state ADD COLUMN owner TEXT",
+            "ALTER TABLE accounts ADD COLUMN item_id TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 connection.execute(stmt)
@@ -46,6 +47,7 @@ class NormalizedAccountRow:
     subtype: str | None
     institution_name: str | None
     owner: str | None
+    item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ def normalize_account_for_db(
     *,
     institution_name: str | None = None,
     owner: str | None = None,
+    item_id: str | None = None,
 ) -> NormalizedAccountRow:
     """Normalize typed account data for SQLite persistence."""
     return NormalizedAccountRow(
@@ -79,6 +82,7 @@ def normalize_account_for_db(
         subtype=account.subtype,
         institution_name=institution_name,
         owner=owner,
+        item_id=item_id,
     )
 
 
@@ -109,23 +113,18 @@ def _utc_now_iso() -> str:
 
 def upsert_account(
     connection: sqlite3.Connection,
-    account: AccountData,
+    row: NormalizedAccountRow,
     *,
-    institution_name: str | None = None,
-    owner: str | None = None,
     now_iso: str | None = None,
 ) -> None:
-    """Insert or update one account keyed by plaid_account_id."""
+    """Insert or update one account row keyed by plaid_account_id."""
     now = now_iso or _utc_now_iso()
-    row = normalize_account_for_db(
-        account, institution_name=institution_name, owner=owner
-    )
     connection.execute(
         (
             "INSERT INTO accounts "
-            "(plaid_account_id, name, mask, type, subtype, institution_name, "
-            "owner, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(plaid_account_id, name, mask, type, subtype, "
+            "institution_name, owner, item_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(plaid_account_id) DO UPDATE SET "
             "name = excluded.name, "
             "mask = excluded.mask, "
@@ -133,6 +132,7 @@ def upsert_account(
             "subtype = excluded.subtype, "
             "institution_name = excluded.institution_name, "
             "owner = excluded.owner, "
+            "item_id = excluded.item_id, "
             "updated_at = excluded.updated_at"
         ),
         (
@@ -143,6 +143,7 @@ def upsert_account(
             row.subtype,
             row.institution_name,
             row.owner,
+            row.item_id,
             now,
             now,
         ),

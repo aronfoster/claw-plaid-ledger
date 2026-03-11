@@ -1,4 +1,4 @@
-# Production Operations Runbook — M7
+# Production Operations Runbook — M8
 
 ## 1. Purpose and scope
 
@@ -21,6 +21,48 @@ and to validate the setup before the first real sync.
 - Multi-item household ingestion workflow expansion (M8)
 - Canonical overlap suppression across institutions (M9)
 - Multi-item webhook automation / routing changes (M10)
+
+---
+
+## 1b. Daily operations
+
+### Check item health
+
+Run this before or after a sync to confirm all configured items are
+accessible:
+
+```bash
+ledger items
+```
+
+Expected output when all tokens are set:
+
+```
+items: bank-alice  owner=alice  token=SET  accounts=3  last_synced=2026-03-10T14:22:00+00:00
+items: card-alice  owner=alice  token=SET  accounts=1  last_synced=2026-03-10T14:23:00+00:00
+items: card-bob    owner=bob    token=SET  accounts=2  last_synced=2026-03-10T14:24:00+00:00
+items: 3/3 items healthy, 0 need attention
+```
+
+Items listed as `token=MISSING` need their access-token env var set before
+`ledger sync --all` can reach them.  See `items.toml.example` at the repo root
+for the recommended household configuration format.
+
+### Sync all items
+
+The standard household ingestion path is:
+
+```bash
+ledger sync --all
+```
+
+This reads every item from `~/.config/claw-plaid-ledger/items.toml`,
+fetches the latest transactions from Plaid for each one, and writes them
+to SQLite.  Per-item failures are isolated — one bad token does not
+stop the other items from syncing.
+
+Single-item mode (`ledger sync` with `PLAID_ACCESS_TOKEN`) remains valid
+for simple single-institution setups.
 
 ---
 
