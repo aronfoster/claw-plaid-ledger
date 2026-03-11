@@ -55,7 +55,7 @@ Link complete. Exchanging token...
 Add to items.toml and set the matching env var:
 
   [[items]]
-  id                = "usaa-aron"
+  id                = "bank-alice"
   access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
   owner             = "alice"
 
@@ -132,9 +132,9 @@ status per item:
 
 ```
 $ ledger items
-items: usaa-aron      owner=aron      token=SET    accounts=3  last_synced=2026-03-10T14:22
-items: amex-aron      owner=aron      token=SET    accounts=1  last_synced=2026-03-10T14:23
-items: amex-michelle  owner=michelle  token=MISSING  accounts=0  last_synced=never
+items: bank-alice  owner=alice  token=SET     accounts=3  last_synced=2026-03-10T14:22
+items: card-alice  owner=alice  token=SET     accounts=1  last_synced=2026-03-10T14:23
+items: card-bob    owner=bob    token=MISSING  accounts=0  last_synced=never
 items: 2/3 items healthy, 1 need attention
 ```
 

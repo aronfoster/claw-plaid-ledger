@@ -128,9 +128,8 @@ in code, documentation, examples, or tests.
 
 | Wrong | Right |
 |-------|-------|
-| `owner = "aron"` | `owner = "alice"` |
-| `id = "usaa-aron"` | `id = "bank-alice"` |
-| `PLAID_ACCESS_TOKEN_AMEX_MICHELLE` | `PLAID_ACCESS_TOKEN_CARD_BOB` |
+| `id = "chase-alice"` | `id = "bank-alice"` |
+| `PLAID_ACCESS_TOKEN_CARD_MICHELLE` | `PLAID_ACCESS_TOKEN_CARD_BOB` |
 
 If you are asked to use real names or institution names, substitute generic
 placeholders instead and note the substitution.
