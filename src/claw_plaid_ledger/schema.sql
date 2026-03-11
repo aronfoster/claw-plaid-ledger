@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     institution_name TEXT,
     owner TEXT,
     item_id TEXT,
+    canonical_account_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

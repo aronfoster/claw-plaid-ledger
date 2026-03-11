@@ -102,7 +102,7 @@ owner             = "alice"
 
 ---
 
-### Task 2: DB schema and `ledger apply-precedence` command
+### Task 2: DB schema and `ledger apply-precedence` command ✅ DONE
 
 **Scope**
 

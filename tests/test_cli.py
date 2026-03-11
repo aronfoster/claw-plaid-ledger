@@ -17,7 +17,11 @@ from unittest.mock import patch
 
 from claw_plaid_ledger.cli import main, serve
 from claw_plaid_ledger.db import initialize_database, upsert_sync_state
-from claw_plaid_ledger.items_config import ItemConfig, ItemsConfigError
+from claw_plaid_ledger.items_config import (
+    ItemConfig,
+    ItemsConfigError,
+    SuppressedAccountConfig,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1305,3 +1309,139 @@ def test_items_no_owner_shows_none_placeholder(
 
     assert exit_code == 0
     assert "owner=(none)" in output
+
+
+# ---------------------------------------------------------------------------
+# Task 2: apply-precedence command
+# ---------------------------------------------------------------------------
+
+
+def test_apply_precedence_no_suppressions_exits_zero(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`apply-precedence` exits 0 when no aliases are configured."""
+    alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env,
+                owner="alice",
+            )
+        ],
+    )
+
+    exit_code, output = run_main(["apply-precedence"])
+
+    assert exit_code == 0
+    assert "no suppressions configured" in output
+
+
+def test_apply_precedence_empty_items_config_exits_zero(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`apply-precedence` exits 0 when items.toml has no items."""
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        list,
+    )
+
+    exit_code, output = run_main(["apply-precedence"])
+
+    assert exit_code == 0
+    assert "no suppressions configured" in output
+
+
+def test_apply_precedence_updates_known_account(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`apply-precedence` updates an account that exists in the DB."""
+    alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO accounts "
+            "(plaid_account_id, name, type, created_at, updated_at) "
+            "VALUES ('acct-suppressed', 'Test', 'credit', "
+            "'2024-01-01', '2024-01-01')"
+        )
+
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env,
+                owner="alice",
+                suppressed_accounts=(
+                    SuppressedAccountConfig(
+                        plaid_account_id="acct-suppressed",
+                        canonical_account_id="acct-canonical",
+                    ),
+                ),
+            )
+        ],
+    )
+
+    exit_code, output = run_main(["apply-precedence"])
+
+    assert exit_code == 0
+    assert "loaded 1 alias(es)" in output
+    assert "updated 1 account(s)" in output
+    assert "done" in output
+
+
+def test_apply_precedence_skips_account_not_in_db(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`apply-precedence` reports skipped aliases for unsynced accounts."""
+    alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=alice_env,
+                owner="alice",
+                suppressed_accounts=(
+                    SuppressedAccountConfig(
+                        plaid_account_id="acct-not-synced",
+                        canonical_account_id="acct-canonical",
+                    ),
+                ),
+            )
+        ],
+    )
+
+    exit_code, output = run_main(["apply-precedence"])
+
+    assert exit_code == 0
+    assert "1 alias(es) skipped" in output
+    assert "sync first" in output
+
+
+def test_apply_precedence_config_error_exits_one(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`apply-precedence` exits 1 on ItemsConfigError."""
+    error_msg = "bad config"
+
+    def _raise_config_error() -> list[ItemConfig]:
+        raise ItemsConfigError(error_msg)
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        _raise_config_error,
+    )
+
+    exit_code, output = run_main(["apply-precedence"])
+
+    assert exit_code == 1
+    assert "config error" in output
