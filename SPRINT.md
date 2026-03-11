@@ -150,7 +150,7 @@ Align project docs with M7 so production operations expectations are discoverabl
 
 ---
 
-### Task 6: Sprint closeout and acceptance validation
+### Task 6: Sprint closeout and acceptance validation ✅ DONE
 
 **Scope**
 
@@ -182,6 +182,46 @@ Validate M7 acceptance at sprint end and mark completion in this file.
 ## Explicitly deferred (remain out of scope in Sprint 8)
 
 - Automated Link/OAuth automation.
+- Multi-item household ingestion workflow expansion (M8).
+- Canonical overlap suppression and source precedence (M9).
+- Multi-item webhook automation/routing changes (M10).
+
+---
+
+## Sprint 8 closeout ✅ DONE
+
+**Closeout date:** 2026-03-11
+
+### What shipped
+
+- **`RUNBOOK.md`** — Full production onboarding runbook covering Plaid prerequisites,
+  cost model, access-token lifecycle, sandbox/production isolation, manual migration
+  checklist, backup/recovery, and incident triage appendix.
+- **`ledger doctor --production-preflight`** — New CLI flag that runs a suite of
+  live-readiness checks (required Plaid vars, API secret, DB path, `items.toml`
+  parseability, access-token env vars) and exits non-zero on any hard failure.
+  Sandbox-like environments emit a warning without blocking.
+- **`preflight.py`** — Dedicated, unit-testable module encapsulating all preflight
+  check logic with typed result structures (name, status, message, severity).
+- **Test coverage** — 191 tests passing; dedicated `tests/test_preflight.py` covers
+  success, each required-failure case, `items.toml` parse errors, missing token env
+  vars, and sandbox warning path. CLI-level tests verify rendering and exit codes.
+- **Documentation updates** — `ARCHITECTURE.md` references `RUNBOOK.md` and
+  documents the preflight subsystem; `.env.example` annotates production-sensitive
+  variables; `README.md` includes production preflight usage snippet.
+
+### Quality gate result (final)
+
+```
+uv run --locked ruff format . --check   ✅  23 files already formatted
+uv run --locked ruff check .            ✅  All checks passed!
+uv run --locked mypy .                  ✅  Success: no issues found in 23 source files
+uv run --locked pytest -v               ✅  191 passed in 3.49s
+```
+
+### Explicitly deferred follow-ups
+
+- Automated Plaid Link/OAuth flow (M8+).
 - Multi-item household ingestion workflow expansion (M8).
 - Canonical overlap suppression and source precedence (M9).
 - Multi-item webhook automation/routing changes (M10).
