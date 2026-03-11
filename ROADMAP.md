@@ -42,36 +42,18 @@ Household multi-item sync is implemented via `items.toml` with
 stored on `sync_state` and `accounts`, `doctor` reports per-item sync status,
 and the legacy single-item env-var path remains compatible.
 
+### M7 — Production operations and runbook
+Committed `RUNBOOK.md` covering Plaid production prerequisites, cost model,
+access-token lifecycle, sandbox/production isolation, manual migration
+checklist, backup/recovery, and incident triage. `ledger doctor
+--production-preflight` validates live-readiness configuration without
+contacting any external service, exiting non-zero on any required failure.
+Sandbox `PLAID_ENV` emits a warning without blocking. Dedicated `preflight.py`
+module keeps all check logic pure and unit-testable.
+
 ---
 
 ## Upcoming Milestones
-
-### M7 — Production operations and runbook
-
-**Focus:** Operational readiness before any household production onboarding.
-
-**Goal:** A complete, trustworthy runbook for moving from sandbox to live bank
-signals without surprises — production Plaid access, cost model clarity, token
-lifecycle handling, OAuth/manual Link expectations, and recovery procedures.
-
-**Scope**
-
-- Production migration runbook (Markdown, committed) covering:
-  - Plaid production-access prerequisites and dashboard checklist
-  - cost model (billable events tied to Link/item creation, not sync frequency)
-  - access-token lifecycle (persistence, revocation, forced re-auth edge cases)
-  - sandbox/production isolation guarantees and operator safety checks
-  - manual migration and first-live-sync validation checklist
-  - backup/recovery guidance for SQLite + config secrets
-- `ledger doctor --production-preflight` checks required live config before
-  production credentials are used
-
-**Not in scope**
-
-- Automatic Link/OAuth automation (manual only)
-- Multi-item household ingestion workflows (handled in M8)
-
----
 
 ### M8 — Multi-item management
 
@@ -176,7 +158,7 @@ special emphasis on anomaly discovery rather than primary deduplication.
 
 ## Priority order
 
-1. **M7 (Ops Foundation)** → **M8 (Data Ingress)** → **M9 (Canonical Logic)** →
+1. **M8 (Data Ingress)** → **M9 (Canonical Logic)** →
    **M10 (Automation)** → **M11 (Agent Integration)**.
 
 ## Deferred / Unscheduled
