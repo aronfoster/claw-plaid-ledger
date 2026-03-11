@@ -7,6 +7,14 @@ id                = "bank-alice"
 access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
 owner             = "alice"
 
+  # Alice is an authorized user on bob's shared card.  The canonical view of
+  # this account comes from card-bob, so suppress it here.
+  [[items.suppressed_accounts]]
+  plaid_account_id     = "plaid_acct_YYYY"   # account in THIS item to suppress
+  canonical_account_id = "plaid_acct_XXXX"   # canonical replacement (from card-bob)
+  canonical_from_item  = "card-bob"          # optional — for human auditability
+  note = "AmEx shared card — alice is authorized user; bob's view is canonical"
+
 [[items]]
 id                = "card-alice"
 access_token_env  = "PLAID_ACCESS_TOKEN_CARD_ALICE"
