@@ -10,6 +10,7 @@ from claw_plaid_ledger.db import (
     delete_transaction,
     get_sync_cursor,
     initialize_database,
+    normalize_account_for_db,
     upsert_account,
     upsert_sync_state,
     upsert_transaction,
@@ -105,7 +106,12 @@ def run_sync(
                 raise PlaidTransientError(msg) from exc
 
             for account in result.accounts:
-                upsert_account(connection, account, owner=owner)
+                upsert_account(
+                    connection,
+                    normalize_account_for_db(
+                        account, owner=owner, item_id=item_id
+                    ),
+                )
                 seen_account_ids.add(account.plaid_account_id)
 
             for transaction in result.added:

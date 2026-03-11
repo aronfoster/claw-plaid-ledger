@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     subtype TEXT,
     institution_name TEXT,
     owner TEXT,
+    item_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

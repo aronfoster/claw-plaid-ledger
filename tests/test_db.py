@@ -270,13 +270,15 @@ def test_upsert_account_inserts_then_updates(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as connection:
         upsert_account(
             connection,
-            _account(name="Checking"),
+            normalize_account_for_db(_account(name="Checking")),
             now_iso="2024-01-01T00:00:00+00:00",
         )
         upsert_account(
             connection,
-            _account(name="Primary Checking", mask=None),
-            institution_name="Plaid Bank",
+            normalize_account_for_db(
+                _account(name="Primary Checking", mask=None),
+                institution_name="Plaid Bank",
+            ),
             now_iso="2024-01-02T00:00:00+00:00",
         )
 
@@ -748,14 +750,18 @@ def test_upsert_account_stores_owner(tmp_path: Path) -> None:
     initialize_database(db_path)
 
     with sqlite3.connect(db_path) as connection:
-        upsert_account(connection, _account(), owner="alice")
+        upsert_account(
+            connection, normalize_account_for_db(_account(), owner="alice")
+        )
         row = connection.execute(
             "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
         ).fetchone()
         assert row is not None
         assert row[0] == "alice"
 
-        upsert_account(connection, _account(), owner="bob")
+        upsert_account(
+            connection, normalize_account_for_db(_account(), owner="bob")
+        )
         row = connection.execute(
             "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
         ).fetchone()
@@ -769,7 +775,7 @@ def test_upsert_account_without_owner_stores_none(tmp_path: Path) -> None:
     initialize_database(db_path)
 
     with sqlite3.connect(db_path) as connection:
-        upsert_account(connection, _account())
+        upsert_account(connection, normalize_account_for_db(_account()))
         row = connection.execute(
             "SELECT owner FROM accounts WHERE plaid_account_id = 'acc-1'"
         ).fetchone()

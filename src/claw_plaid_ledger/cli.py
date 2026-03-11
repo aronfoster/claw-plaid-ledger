@@ -515,6 +515,76 @@ def link(
     _print_link_result(access_token, item_id)
 
 
+def _items_query_db(
+    db_path: os.PathLike[str] | str,
+    item_id: str,
+) -> tuple[int, str]:
+    """Return (account_count, last_synced) for one item from the DB."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            acct_row = conn.execute(
+                "SELECT COUNT(*) FROM accounts WHERE item_id = ?",
+                (item_id,),
+            ).fetchone()
+            sync_row = conn.execute(
+                "SELECT last_synced_at FROM sync_state WHERE item_id = ?",
+                (item_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return 0, "never"
+    account_count = int(acct_row[0]) if acct_row else 0
+    last_synced = str(sync_row[0]) if sync_row and sync_row[0] else "never"
+    return account_count, last_synced
+
+
+@app.command()
+def items() -> None:
+    """Show health status for all configured Plaid items."""
+    try:
+        items_config = load_items_config()
+    except ItemsConfigError as error:
+        typer.echo(f"items: parse error: {error}")
+        raise SystemExit(1) from error
+
+    if not items_config:
+        typer.echo("items: no items configured \u2014 create items.toml")
+        return
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        typer.echo(f"items: {error}")
+        raise SystemExit(1) from error
+
+    healthy = 0
+    total = len(items_config)
+
+    for item_cfg in items_config:
+        token_val = os.environ.get(item_cfg.access_token_env)
+        token_status = "SET" if token_val else "MISSING"
+        if token_val:
+            healthy += 1
+
+        account_count, last_synced = _items_query_db(
+            config.db_path, item_cfg.id
+        )
+
+        owner_str = item_cfg.owner if item_cfg.owner is not None else "(none)"
+        typer.echo(
+            f"items: {item_cfg.id} "
+            f"owner={owner_str} "
+            f"token={token_status} "
+            f"accounts={account_count} "
+            f"last_synced={last_synced}"
+        )
+
+    need_attention = total - healthy
+    typer.echo(
+        f"items: {healthy}/{total} items healthy, "
+        f"{need_attention} need attention"
+    )
+
+
 @app.command()
 def serve() -> None:
     """Start the HTTP server on CLAW_SERVER_HOST:CLAW_SERVER_PORT."""
