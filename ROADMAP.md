@@ -30,105 +30,21 @@ parameters and pagination. `GET /transactions/{id}` with merged annotation.
 `annotations` table fully isolated from the sync engine. Auto-generated
 OpenAPI spec at `/openapi.json` and Swagger UI at `/docs`.
 
+### M5 — OpenClaw notification
+Webhook-triggered background sync now wakes OpenClaw/Hestia only when
+transaction changes are non-zero. Notification delivery is configurable via
+`OPENCLAW_HOOKS_*`, failures are non-fatal, and `doctor` reports
+notification readiness.
+
+### M6 — Multi-institution management
+Household multi-item sync is implemented via `items.toml` with
+`ledger sync --all` and `ledger sync --item <id>`. Per-item `owner` tags are
+stored on `sync_state` and `accounts`, `doctor` reports per-item sync status,
+and the legacy single-item env-var path remains compatible.
+
 ---
 
 ## Upcoming Milestones
-
-### M5 — OpenClaw notification
-
-**Goal:** After a webhook-triggered sync, wake Hestia when there are
-transactions worth reviewing. The mechanism is already documented in
-OpenClaw: a `POST` to its local webhook endpoint.
-
-**Scope**
-
-- After a successful background sync where `added + modified + removed > 0`,
-  call OpenClaw's `POST /hooks/agent` endpoint with a message summarising the
-  change counts and a prompt to review for annotation
-- Zero-change syncs must not trigger a notification (the log warning already
-  exists; the notification gate lives in the same place)
-- New config variables:
-  - `OPENCLAW_HOOKS_URL` — defaults to `http://127.0.0.1:18789/hooks/agent`
-  - `OPENCLAW_HOOKS_TOKEN` — required when notification is enabled; if unset,
-    notification is skipped with a warning rather than crashing
-  - `OPENCLAW_HOOKS_AGENT` — name of the agent to invoke (e.g. `Hestia`);
-    defaults to `Hestia`
-  - `OPENCLAW_HOOKS_WAKE_MODE` — `now`, since agents do not have heartbeats configured
-- `doctor` command extended to report whether notification is configured
-- `ARCHITECTURE.md` updated with the full integration pattern
-
-**Documentation**
-
-- https://openclawcn.com/en/docs/automation/webhook/
-
-**Example payload**
-
-```json
-{
-  "message": "Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate.",
-  "name": "Hestia",
-  "wakeMode": "now"
-}
-```
-
-**Not in scope**
-
-- Per-transaction detail in the notification payload (Hestia queries the
-  API herself)
-- Notification routing to messaging channels (WhatsApp, Telegram, etc.) —
-  that is OpenClaw configuration, not ledger configuration
-
----
-
-### M6 — Multi-institution management
-
-**Goal:** Support the full household account structure — multiple institutions,
-multiple owners — without requiring manual `.env` switching per sync run.
-
-**Household structure (expected)**
-
-A typical household will have approximately 4–5 Plaid items:
-
-| Item ID (suggested) | Institution | Owner |
-|---|---|---|
-| `bank-alice` | First Bank | alice |
-| `bank-bob` | First Bank | bob |
-| `bank-shared` | First Bank | shared |
-| `card-alice` | Card Co | alice |
-| `card-bob` | Card Co | bob |
-
-The exact structure depends on which institutions are linked.
-Item IDs are operator-assigned strings in config, not Plaid identifiers.
-
-**Scope**
-
-- `ledger sync --all` command that reads a multi-item config and syncs every
-  item in sequence, each with its own cursor and access token
-- Multi-item config format: `~/.config/claw-plaid-ledger/items.toml` listing
-  item ID, access token env var name, and optional owner tag
-  (`shared` | `alice` | `bob` or any string)
-- `owner` tag stored in `sync_state` and surfaced on accounts so Hestia can
-  answer household-scoped vs. individual-scoped queries without schema changes
-  to `transactions`
-- `ledger sync --item <id>` retains the existing single-item invocation
-  pattern for scripting and debugging
-- `doctor` extended to report per-item sync state and last-synced timestamps
-- Existing single-`CLAW_PLAID_LEDGER_ITEM_ID` path remains valid for simple
-  setups; `items.toml` is additive
-
-**Design decision to record**
-
-Owner scoping is a naming convention on `item_id` (e.g. `card-alice`,
-`card-bob`, `bank-shared`), not a new `transactions` column. Hestia filters
-by account via the `account_id` query parameter after learning which accounts
-belong to which item. This keeps the sync engine and API unchanged.
-
-**Not in scope**
-
-- Parallel/concurrent sync across items
-- Per-item notification routing
-
----
 
 ### M7 — Production Plaid migration
 

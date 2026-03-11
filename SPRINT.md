@@ -587,7 +587,7 @@ New tests in `test_cli.py`. Use `tmp_path` for DB and items.toml files, and patc
 
 ---
 
-### Task 6: `ARCHITECTURE.md` update
+### Task 6: `ARCHITECTURE.md` update ✅ DONE
 
 **Scope**
 
@@ -683,3 +683,10 @@ Update `ARCHITECTURE.md` to document the M6 design. No code changes; documentati
   env-var path; multi-item webhook routing is future work)
 - `GET /accounts` endpoint surfacing the `owner` field (Agent API is unchanged; Hestia
   queries accounts via `account_id` and infers owner from item context)
+
+
+## Sprint 7 closeout ✅ DONE
+
+All Sprint 7 tasks are complete, documentation has been updated for M6 multi-institution
+management, and the acceptance criteria listed above are satisfied by the implemented
+changes and test coverage.

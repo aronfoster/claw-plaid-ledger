@@ -2,6 +2,23 @@
 
 ## Current milestone focus
 
+M6 (multi-institution management) is complete. Sprint 7 adds first-class
+household sync support via `items.toml`, `ledger sync --all`, and
+`ledger sync --item <id>`. Each configured Plaid item can carry an optional
+`owner` tag (for example `alice`, `bob`, or `shared`) that is written to
+`sync_state.owner` and `accounts.owner`.
+
+Sprint 7 added:
+
+- `items_config.py` — typed loader for `~/.config/claw-plaid-ledger/items.toml`
+- `sync --all` and `sync --item <id>` command paths that resolve per-item
+  access tokens from environment-variable names in `items.toml`
+- Sequential per-item sync output and partial-failure handling (`--all`
+  continues, then exits non-zero if any item failed)
+- Owner propagation through sync writes (`sync_state.owner`, `accounts.owner`)
+- `doctor` extension: per-item sync-state reporting when `items.toml` is
+  present
+
 M5 (OpenClaw notification) is complete. After a webhook-triggered sync that
 adds, modifies, or removes at least one transaction, the server sends a `POST`
 to OpenClaw's `/hooks/agent` endpoint to wake the configured agent (Hestia by
@@ -31,6 +48,8 @@ Sprint 5 added:
 - CLI boundary (`typer` library) for operator workflows
 - Config/secrets layer (`config.py`)
 - SQLite bootstrap and persistence layer (`db.py` + `schema.sql`)
+- Multi-item config loader (`items_config.py`) — parses `items.toml` into typed
+  item definitions
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
 - HTTP server (`server.py`) — FastAPI application served via uvicorn
@@ -42,6 +61,12 @@ Sprint 5 added:
 Plaid API -> sync engine -> SQLite -> Agent API -> OpenClaw agent
                   |
                   +--[non-empty sync]--> OpenClaw /hooks/agent (Hestia wake)
+
+items.toml ─┐
+            ├─ ledger sync --all ─> [bank-alice] run_sync -> SQLite
+            │                    -> [bank-bob]   run_sync -> SQLite
+            │                    -> [card-alice] run_sync -> SQLite
+PLAID_ENV  ─┘
 ```
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
@@ -342,6 +367,88 @@ Content-Type: application/json
 Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>
 ```
 
+
+## Multi-institution management
+
+### Purpose
+
+M6 introduces multi-item sync so one command can process every Plaid item in a
+household (for example personal bank, shared credit card, partner accounts)
+without manually editing environment variables between runs.
+
+### `items.toml` location and format
+
+Default path:
+
+`~/.config/claw-plaid-ledger/items.toml`
+
+Example:
+
+```toml
+[[items]]
+id = "bank-alice"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner = "alice"
+
+[[items]]
+id = "bank-bob"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_BOB"
+owner = "bob"
+
+[[items]]
+id = "bank-shared"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_SHARED"
+owner = "shared"
+```
+
+Fields:
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `id` | yes | string | Operator-assigned item identifier used as `sync_state.item_id` |
+| `access_token_env` | yes | string | Name of the environment variable that stores this item's Plaid access token |
+| `owner` | no | string \| null | Free-form ownership tag; omitted/null is treated as `None` |
+
+### `sync --all` behavior
+
+- The CLI loads all `ItemConfig` entries from `items.toml`.
+- It constructs one shared Plaid adapter from shared client credentials
+  (`PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV`).
+- It iterates items sequentially and resolves each access token from the
+  configured `access_token_env` name at runtime.
+- Each item is synced independently via `run_sync` with its own `item_id`,
+  cursor, and `owner`.
+
+Per-item failures are isolated: if one item fails (missing env var, invalid
+token, network issue), the run logs an error for that item and continues with
+the remaining items. The command exits with status code 1 if any item failed,
+or 0 if all items succeeded.
+
+### Owner semantics and design decision
+
+The `owner` tag is stored on:
+
+- `sync_state.owner`
+- `accounts.owner`
+
+Hestia uses this metadata by first determining which accounts belong to which
+item, then filtering transaction queries by `account_id`. No `owner` column was
+added to `transactions`, and no Agent API contract changes were required.
+
+Design decision: ownership scoping is a naming convention anchored at the
+item/account level, not a transaction-level schema dimension. This keeps
+transaction storage unchanged and avoids duplicating owner metadata across every
+transaction row.
+
+### Legacy single-item mode remains valid
+
+The legacy path (`ledger sync` with no item flags) still reads:
+
+- `PLAID_ACCESS_TOKEN`
+- `CLAW_PLAID_LEDGER_ITEM_ID` (default `default-item`)
+
+This mode behaves as before and writes `owner=None`.
+
 ## Configuration
 
 All configuration is loaded from environment variables (or a user `.env` file
@@ -356,8 +463,8 @@ Key variables:
 | `PLAID_CLIENT_ID` | for sync | — | Plaid API client ID |
 | `PLAID_SECRET` | for sync | — | Plaid API secret |
 | `PLAID_ENV` | for sync | — | Plaid environment (`sandbox`, `production`) |
-| `PLAID_ACCESS_TOKEN` | for sync | — | Plaid access token for the linked item |
-| `CLAW_PLAID_LEDGER_ITEM_ID` | no | `default-item` | Sync-state key; one value per institution |
+| `PLAID_ACCESS_TOKEN` | for sync (single-item mode) | — | Plaid access token for the linked item |
+| `CLAW_PLAID_LEDGER_ITEM_ID` | no | `default-item` | Item ID for single-item mode (legacy path) |
 | `CLAW_PLAID_LEDGER_WORKSPACE_PATH` | no | — | Path to OpenClaw workspace for exports |
 | `CLAW_SERVER_HOST` | no | `127.0.0.1` | Host for `ledger serve` to bind to (local-only by default) |
 | `CLAW_SERVER_PORT` | no | `8000` | TCP port for `ledger serve` to listen on |
@@ -368,6 +475,10 @@ Key variables:
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
 | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
+
+`items.toml` is a separate configuration file (not an environment variable)
+used by `sync --all` and `sync --item`. Default path:
+`~/.config/claw-plaid-ledger/items.toml`.
 
 ## Runtime and tooling standards
 
@@ -388,6 +499,7 @@ src/claw_plaid_ledger/
   cli.py
   config.py
   db.py
+  items_config.py   # multi-item items.toml loader
   notifier.py
   plaid_adapter.py
   plaid_models.py
