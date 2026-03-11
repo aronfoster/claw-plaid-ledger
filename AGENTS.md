@@ -129,7 +129,7 @@ in code, documentation, examples, or tests.
 | Wrong | Right |
 |-------|-------|
 | `id = "chase-alice"` | `id = "bank-alice"` |
-| `PLAID_ACCESS_TOKEN_CARD_MICHELLE` | `PLAID_ACCESS_TOKEN_CARD_BOB` |
+| `PLAID_ACCESS_TOKEN_CARD_ARON` | `PLAID_ACCESS_TOKEN_CARD_BOB` |
 
 If you are asked to use real names or institution names, substitute generic
 placeholders instead and note the substitution.
