@@ -1,5 +1,19 @@
 # Roadmap
 
+## Human Questions / Goals
+
+### RUNBOOK improvement
+The order of the RUNBOOK is not from zero to setup, and it should be. It starts assuming items.toml is already populated. I don't even see a cp command I can use to copy the example to the real file. This shouldn't need such manual intervention.
+
+### Heartbeat Confusion
+We should be waking OpenClaw agent with a poke, not using heartbeat. Why are we talking about heartbeats?
+
+### Ledger Link Improvements
+Does this really require the user to copy/paste tokens from the CLI? Explore automatic account entry creation.
+
+### Better Logging
+I haven't been cracking the whip on creating INFO and DEBUG level logs to assist with runtime troubleshooting. Review the entire codebase and add appropriate logging statements.
+
 ## Completed Milestones
 
 ### M0 — Project skeleton
@@ -137,6 +151,7 @@ special emphasis on anomaly discovery rather than primary deduplication.
 - Add an “orphaned transactions” review workflow where Hestia flags anomalies
   missed by deterministic source-precedence rules
 - Update architecture docs to reflect Hestia as safety net, not dedupe engine
+- Ultimately will get ported into a new github project
 
 **Not in scope**
 
@@ -179,10 +194,6 @@ over-budget alerts. The annotation layer may make this unnecessary for
 day-to-day use; revisit once Hestia has several months of annotation history
 to assess whether rule-based guardrails add value over conversational
 queries.
-
----
-
-## Deferred / Unscheduled additions
 
 ### Transfer detection and internal movement suppression
 
