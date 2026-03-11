@@ -22,7 +22,7 @@ live credentials are used.
 
 ## Task breakdown
 
-### Task 1: Author production migration runbook (new `RUNBOOK.md`)
+### Task 1: Author production migration runbook (new `RUNBOOK.md`) ✅ DONE
 
 **Scope**
 
@@ -58,7 +58,7 @@ This is the primary M7 deliverable.
 
 ---
 
-### Task 2: Add `doctor --production-preflight` CLI option
+### Task 2: Add `doctor --production-preflight` CLI option ✅ DONE
 
 **Scope**
 
@@ -88,7 +88,7 @@ live-readiness configuration without contacting external services.
 
 ---
 
-### Task 3: Implement production-preflight check layer in a testable module
+### Task 3: Implement production-preflight check layer in a testable module ✅ DONE
 
 **Scope**
 
@@ -109,7 +109,7 @@ logic so CLI remains thin and behavior is unit-testable.
 
 ---
 
-### Task 4: Add comprehensive tests for preflight and doctor integration
+### Task 4: Add comprehensive tests for preflight and doctor integration ✅ DONE
 
 **Scope**
 
@@ -131,7 +131,7 @@ Expand test coverage to prevent regressions in safety-critical operator paths.
 
 ---
 
-### Task 5: Update operator documentation set
+### Task 5: Update operator documentation set ✅ DONE
 
 **Scope**
 

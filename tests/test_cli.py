@@ -766,3 +766,175 @@ def test_sync_item_and_all_are_mutually_exclusive() -> None:
 
     assert exit_code == INIT_DB_CONFIG_ERROR_EXIT_CODE
     assert "sync: --item and --all are mutually exclusive" in output
+
+
+# ---------------------------------------------------------------------------
+# doctor --production-preflight tests (Task 2 / Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_production_preflight_success(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`doctor --production-preflight` exits 0 with a valid production env."""
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "production")
+    monkeypatch.setenv("CLAW_API_SECRET", "api-secret")
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        lambda _path: [],
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code == 0
+    assert "preflight: all required checks passed" in output
+
+
+def test_doctor_production_preflight_missing_plaid_client_id_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Preflight exits non-zero when PLAID_CLIENT_ID is missing."""
+    monkeypatch.delenv("PLAID_CLIENT_ID", raising=False)
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "production")
+    monkeypatch.setenv("CLAW_API_SECRET", "api-secret")
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        lambda _path: [],
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code != 0
+    assert "PLAID_CLIENT_ID" in output
+    assert "[FAIL]" in output
+
+
+def test_doctor_production_preflight_missing_api_secret_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Preflight exits non-zero when CLAW_API_SECRET is missing."""
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "production")
+    monkeypatch.delenv("CLAW_API_SECRET", raising=False)
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        lambda _path: [],
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code != 0
+    assert "CLAW_API_SECRET" in output
+    assert "[FAIL]" in output
+
+
+def test_doctor_production_preflight_sandbox_warning_exits_zero(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Preflight exits 0 when PLAID_ENV=sandbox (warning, not a hard fail)."""
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    monkeypatch.setenv("CLAW_API_SECRET", "api-secret")
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        lambda _path: [],
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code == 0
+    assert "[WARN]" in output
+    assert "sandbox" in output.lower()
+    assert "preflight: all required checks passed" in output
+
+
+def test_doctor_production_preflight_items_toml_error_exits_nonzero(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Preflight exits non-zero when items.toml cannot be parsed."""
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "production")
+    monkeypatch.setenv("CLAW_API_SECRET", "api-secret")
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+
+    def raise_items_error(_path: object) -> list[ItemConfig]:
+        message = "items[0] missing required field 'id'"
+        raise ItemsConfigError(message)
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        raise_items_error,
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code != 0
+    assert "items.toml" in output
+    assert "[FAIL]" in output
+
+
+def test_doctor_production_preflight_missing_token_env_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Preflight exits non-zero when items.toml token env var is absent."""
+    monkeypatch.setenv("PLAID_CLIENT_ID", "client-id")
+    monkeypatch.setenv("PLAID_SECRET", "plaid-secret")
+    monkeypatch.setenv("PLAID_ENV", "production")
+    monkeypatch.setenv("CLAW_API_SECRET", "api-secret")
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.delenv("PLAID_TOKEN_BANK", raising=False)
+    bank_cfg_env = "PLAID_TOKEN_BANK"
+    monkeypatch.setattr(
+        "claw_plaid_ledger.preflight.load_items_config",
+        lambda _path: [ItemConfig(id="bank", access_token_env=bank_cfg_env)],
+    )
+
+    exit_code, output = run_main(["doctor", "--production-preflight"])
+
+    assert exit_code != 0
+    assert "PLAID_TOKEN_BANK" in output
+    assert "[FAIL]" in output
+
+
+def test_doctor_without_preflight_flag_omits_preflight_output(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Legacy `doctor` invocation exits 0 and shows no preflight output."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "doctor: all checks passed" in output
+    assert "preflight:" not in output

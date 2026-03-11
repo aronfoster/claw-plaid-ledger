@@ -2,6 +2,22 @@
 
 ## Current milestone focus
 
+M7 (production operations and runbook) is complete. Sprint 8 adds a
+committed production runbook and a `ledger doctor --production-preflight`
+command that validates live-readiness configuration without contacting any
+external service.
+
+Sprint 8 added:
+
+- `preflight.py` — typed, unit-testable production preflight check module
+- `ledger doctor --production-preflight` CLI flag that runs preflight
+  checks and exits non-zero if any required check fails
+- `RUNBOOK.md` — operator runbook covering production prerequisites, cost
+  model, access-token lifecycle, sandbox/production isolation, migration
+  checklist, backup/recovery, and incident triage
+
+See `RUNBOOK.md` for the step-by-step production onboarding guide.
+
 M6 (multi-institution management) is complete. Sprint 7 adds first-class
 household sync support via `items.toml`, `ledger sync --all`, and
 `ledger sync --item <id>`. Each configured Plaid item can carry an optional
@@ -50,6 +66,8 @@ Sprint 5 added:
 - SQLite bootstrap and persistence layer (`db.py` + `schema.sql`)
 - Multi-item config loader (`items_config.py`) — parses `items.toml` into typed
   item definitions
+- Production preflight checks (`preflight.py`) — pure, unit-testable checks
+  for live-readiness validation
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
 - HTTP server (`server.py`) — FastAPI application served via uvicorn
@@ -159,6 +177,9 @@ Current operator-facing CLI commands:
 
 - `doctor` — validates config, DB connectivity, schema, and reports row counts;
   with `--verbose` shows redacted config values
+- `doctor --production-preflight` — validates live-readiness configuration
+  without contacting external services; exits non-zero if any required check
+  fails; see `RUNBOOK.md` for usage in the production onboarding checklist
 - `init-db` — creates the SQLite database and initializes the schema (safe to
   run against an existing database; uses `CREATE TABLE IF NOT EXISTS`)
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
@@ -503,6 +524,7 @@ src/claw_plaid_ledger/
   notifier.py
   plaid_adapter.py
   plaid_models.py
+  preflight.py      # production preflight check logic (M7)
   schema.sql
   server.py
   sync_engine.py
@@ -514,6 +536,7 @@ tests/
   test_db.py
   test_notifier.py
   test_plaid_adapter.py
+  test_preflight.py
   test_server.py
   test_sync_engine.py
   test_webhook_auth.py
@@ -524,6 +547,7 @@ AGENTS.md
 ARCHITECTURE.md
 BUGS.md
 ROADMAP.md
+RUNBOOK.md        # production operations runbook (M7)
 SPRINT.md
 VISION.md
 ```
