@@ -17,7 +17,11 @@ from claw_plaid_ledger.config import (
     ConfigError,
     load_config,
 )
-from claw_plaid_ledger.db import get_all_sync_state, initialize_database
+from claw_plaid_ledger.db import (
+    apply_account_precedence,
+    get_all_sync_state,
+    initialize_database,
+)
 from claw_plaid_ledger.items_config import (
     ItemConfig,
     ItemsConfigError,
@@ -583,6 +587,50 @@ def items() -> None:
         f"items: {healthy}/{total} items healthy, "
         f"{need_attention} need attention"
     )
+
+
+@app.command(name="apply-precedence")
+def apply_precedence() -> None:
+    """Write suppression decisions from items.toml to the DB."""
+    try:
+        items_config = load_items_config()
+    except ItemsConfigError as error:
+        typer.echo(f"apply-precedence: config error: {error}")
+        raise SystemExit(1) from error
+
+    alias_count = sum(len(item.suppressed_accounts) for item in items_config)
+
+    if not items_config or alias_count == 0:
+        typer.echo(
+            "apply-precedence: no suppressions configured in items.toml"
+        )
+        raise SystemExit(0)
+
+    typer.echo(
+        f"apply-precedence: loaded {alias_count} alias(es) from items.toml"
+    )
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        typer.echo(f"apply-precedence: {error}")
+        raise SystemExit(1) from error
+
+    try:
+        with sqlite3.connect(config.db_path) as connection:
+            updated = apply_account_precedence(connection, items_config)
+    except sqlite3.Error as error:
+        typer.echo(f"apply-precedence: DB error: {error}")
+        raise SystemExit(1) from error
+
+    skipped = alias_count - updated
+    typer.echo(f"apply-precedence: updated {updated} account(s)")
+    if skipped > 0:
+        typer.echo(
+            f"apply-precedence: {skipped} alias(es) skipped "
+            "\u2014 account not yet in DB (sync first)"
+        )
+    typer.echo("apply-precedence: done")
 
 
 @app.command()

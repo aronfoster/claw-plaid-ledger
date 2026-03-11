@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from claw_plaid_ledger.items_config import ItemConfig
     from claw_plaid_ledger.plaid_models import AccountData, TransactionData
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -30,6 +31,7 @@ def initialize_database(db_path: Path) -> None:
             "ALTER TABLE accounts ADD COLUMN owner TEXT",
             "ALTER TABLE sync_state ADD COLUMN owner TEXT",
             "ALTER TABLE accounts ADD COLUMN item_id TEXT",
+            "ALTER TABLE accounts ADD COLUMN canonical_account_id TEXT",
         ):
             with contextlib.suppress(sqlite3.OperationalError):
                 connection.execute(stmt)
@@ -48,6 +50,7 @@ class NormalizedAccountRow:
     institution_name: str | None
     owner: str | None
     item_id: str | None = None
+    canonical_account_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,8 +126,9 @@ def upsert_account(
         (
             "INSERT INTO accounts "
             "(plaid_account_id, name, mask, type, subtype, "
-            "institution_name, owner, item_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "institution_name, owner, item_id, canonical_account_id, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(plaid_account_id) DO UPDATE SET "
             "name = excluded.name, "
             "mask = excluded.mask, "
@@ -133,6 +137,7 @@ def upsert_account(
             "institution_name = excluded.institution_name, "
             "owner = excluded.owner, "
             "item_id = excluded.item_id, "
+            "canonical_account_id = excluded.canonical_account_id, "
             "updated_at = excluded.updated_at"
         ),
         (
@@ -144,6 +149,7 @@ def upsert_account(
             row.institution_name,
             row.owner,
             row.item_id,
+            row.canonical_account_id,
             now,
             now,
         ),
@@ -194,6 +200,46 @@ def upsert_transaction(
             now,
         ),
     )
+
+
+def apply_account_precedence(
+    connection: sqlite3.Connection,
+    items: list[ItemConfig],
+) -> int:
+    """
+    Write canonical_account_id to suppressed accounts.
+
+    For each SuppressedAccountConfig across all items, sets
+    accounts.canonical_account_id = canonical_account_id WHERE
+    plaid_account_id = suppressed plaid_account_id.
+
+    Also clears canonical_account_id to NULL for any account not currently
+    listed as suppressed in the config (config is the single source of truth).
+
+    Returns the count of rows updated (set to a non-null canonical_account_id).
+    """
+    suppressed_map: dict[str, str] = {}
+    for item in items:
+        for sa in item.suppressed_accounts:
+            suppressed_map[sa.plaid_account_id] = sa.canonical_account_id
+
+    # Clear all existing suppressions first; we will re-apply from config.
+    # This handles stale suppressions (accounts removed from config).
+    connection.execute(
+        "UPDATE accounts SET canonical_account_id = NULL "
+        "WHERE canonical_account_id IS NOT NULL"
+    )
+
+    updated = 0
+    for plaid_account_id, canonical_account_id in suppressed_map.items():
+        cursor = connection.execute(
+            "UPDATE accounts SET canonical_account_id = ? "
+            "WHERE plaid_account_id = ?",
+            (canonical_account_id, plaid_account_id),
+        )
+        updated += cursor.rowcount
+
+    return updated
 
 
 def delete_transaction(

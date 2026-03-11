@@ -10,8 +10,10 @@ import pytest
 
 from claw_plaid_ledger.db import (
     AnnotationRow,
+    NormalizedAccountRow,
     SyncStateRow,
     TransactionQuery,
+    apply_account_precedence,
     get_all_sync_state,
     get_annotation,
     get_sync_cursor,
@@ -25,6 +27,7 @@ from claw_plaid_ledger.db import (
     upsert_sync_state,
     upsert_transaction,
 )
+from claw_plaid_ledger.items_config import ItemConfig, SuppressedAccountConfig
 from claw_plaid_ledger.plaid_models import AccountData, TransactionData
 
 TRANSACTION_INSERT_SQL = (
@@ -859,3 +862,239 @@ def test_get_all_sync_state_empty_table(tmp_path: Path) -> None:
 
     with sqlite3.connect(db_path) as connection:
         assert get_all_sync_state(connection) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 2: canonical_account_id schema, upsert, and apply_account_precedence
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_database_fresh_db_has_canonical_account_id_column(
+    tmp_path: Path,
+) -> None:
+    """Fresh DB has canonical_account_id column on accounts."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("PRAGMA table_info(accounts)").fetchall()
+        col_names = {row[1] for row in rows}
+        assert "canonical_account_id" in col_names
+
+
+def test_initialize_database_adds_canonical_account_id_to_existing_db(
+    tmp_path: Path,
+) -> None:
+    """Migration adds canonical_account_id to an existing DB that lacks it."""
+    db_path = tmp_path / "ledger.db"
+
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY,
+                plaid_account_id TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                mask TEXT,
+                type TEXT,
+                subtype TEXT,
+                institution_name TEXT,
+                owner TEXT,
+                item_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO accounts
+                (plaid_account_id, name, type, created_at, updated_at)
+                VALUES ('acct-old', 'Old Account', 'depository',
+                        '2024-01-01', '2024-01-01');
+            """
+        )
+
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("PRAGMA table_info(accounts)").fetchall()
+        col_names = {row[1] for row in rows}
+        assert "canonical_account_id" in col_names
+        acct = connection.execute(
+            "SELECT plaid_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-old'"
+        ).fetchone()
+        assert acct is not None
+
+
+def test_upsert_account_persists_canonical_account_id(tmp_path: Path) -> None:
+    """upsert_account stores canonical_account_id when provided."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    row = NormalizedAccountRow(
+        plaid_account_id="acct-suppressed",
+        name="Suppressed Account",
+        mask="9999",
+        type="credit",
+        subtype=None,
+        institution_name=None,
+        owner="alice",
+        canonical_account_id="acct-canonical",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_account(connection, row)
+        stored = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-suppressed'"
+        ).fetchone()
+
+    assert stored is not None
+    assert stored[0] == "acct-canonical"
+
+
+def test_upsert_account_canonical_account_id_defaults_to_none(
+    tmp_path: Path,
+) -> None:
+    """upsert_account stores NULL canonical_account_id by default."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_account(connection, normalize_account_for_db(_account()))
+        stored = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acc-1'"
+        ).fetchone()
+
+    assert stored is not None
+    assert stored[0] is None
+
+
+def _make_item(
+    item_id: str = "bank-alice",
+    suppressed: list[tuple[str, str]] | None = None,
+) -> ItemConfig:
+    sa_list = tuple(
+        SuppressedAccountConfig(plaid_account_id=s, canonical_account_id=c)
+        for s, c in (suppressed or [])
+    )
+    bank_alice_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    return ItemConfig(
+        id=item_id,
+        access_token_env=bank_alice_env,
+        owner="alice",
+        suppressed_accounts=sa_list,
+    )
+
+
+def _insert_bare_account(
+    connection: sqlite3.Connection,
+    plaid_account_id: str,
+) -> None:
+    connection.execute(
+        "INSERT INTO accounts "
+        "(plaid_account_id, name, type, created_at, updated_at) "
+        "VALUES (?, 'Test', 'depository', '2024-01-01', '2024-01-01')",
+        (plaid_account_id,),
+    )
+
+
+def test_apply_account_precedence_no_aliases_is_noop(tmp_path: Path) -> None:
+    """apply_account_precedence with no aliases returns 0."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_bare_account(connection, "acct-1")
+        result = apply_account_precedence(connection, [_make_item()])
+
+    assert result == 0
+
+
+def test_apply_account_precedence_sets_known_account(tmp_path: Path) -> None:
+    """apply_account_precedence sets canonical_account_id for DB accounts."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_bare_account(connection, "acct-suppressed")
+        items = [
+            _make_item(suppressed=[("acct-suppressed", "acct-canonical")])
+        ]
+        result = apply_account_precedence(connection, items)
+        stored = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-suppressed'"
+        ).fetchone()
+
+    assert result == 1
+    assert stored is not None
+    assert stored[0] == "acct-canonical"
+
+
+def test_apply_account_precedence_skips_unknown_account(
+    tmp_path: Path,
+) -> None:
+    """apply_account_precedence skips aliases whose account is not in DB."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        items = [
+            _make_item(suppressed=[("acct-not-yet-synced", "acct-canonical")])
+        ]
+        result = apply_account_precedence(connection, items)
+
+    assert result == 0
+
+
+def test_apply_account_precedence_clears_stale_suppression(
+    tmp_path: Path,
+) -> None:
+    """apply_account_precedence clears stale canonical_account_id from DB."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_bare_account(connection, "acct-stale")
+        # First run: set suppression
+        apply_account_precedence(
+            connection,
+            [_make_item(suppressed=[("acct-stale", "acct-canonical")])],
+        )
+        stale_before = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-stale'"
+        ).fetchone()
+
+        # Second run: config no longer has this alias
+        apply_account_precedence(connection, [_make_item()])
+        stale_after = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-stale'"
+        ).fetchone()
+
+    assert stale_before is not None
+    assert stale_before[0] == "acct-canonical"
+    assert stale_after is not None
+    assert stale_after[0] is None
+
+
+def test_apply_account_precedence_idempotent(tmp_path: Path) -> None:
+    """Calling apply_account_precedence twice produces the same result."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    items = [_make_item(suppressed=[("acct-suppressed", "acct-canonical")])]
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_bare_account(connection, "acct-suppressed")
+        apply_account_precedence(connection, items)
+        result = apply_account_precedence(connection, items)
+        stored = connection.execute(
+            "SELECT canonical_account_id FROM accounts "
+            "WHERE plaid_account_id = 'acct-suppressed'"
+        ).fetchone()
+
+    assert result == 1
+    assert stored is not None
+    assert stored[0] == "acct-canonical"
