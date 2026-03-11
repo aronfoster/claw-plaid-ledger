@@ -114,6 +114,28 @@ and `int` instead of `bool`), so the noqa comment is not justified.
 
 ---
 
+## No personal or private information in the repository
+
+This is an open-source project. Do not include real personal information anywhere
+in code, documentation, examples, or tests.
+
+**Prohibited** — never use real:
+- Personal names (use `alice`, `bob`, `carol`, etc.)
+- Financial institution names (use `bank-alice`, `card-bob`, `bank-shared`, etc.)
+- Account numbers, access tokens, or any real credentials
+
+**Examples**
+
+| Wrong | Right |
+|-------|-------|
+| `id = "chase-alice"` | `id = "bank-alice"` |
+| `PLAID_ACCESS_TOKEN_CARD_ARON` | `PLAID_ACCESS_TOKEN_CARD_BOB` |
+
+If you are asked to use real names or institution names, substitute generic
+placeholders instead and note the substitution.
+
+---
+
 ## Sprint tracking
 
 When you complete a task from `SPRINT.md`, mark it done in that file before
