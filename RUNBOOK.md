@@ -6,21 +6,22 @@ This runbook covers the steps an operator needs to move
 `claw-plaid-ledger` from Plaid sandbox to a live production environment
 and to validate the setup before the first real sync.
 
-**In scope for M7:**
+**In scope (M7 + M8):**
 
 - Obtaining Plaid production API access
+- Connecting institutions via the `ledger link` browser flow (M8)
 - Configuring and isolating the production environment
 - Running `ledger doctor --production-preflight` before first live sync
+- Daily item health checks via `ledger items` and `ledger sync --all` (M8)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
 
-**Explicitly out of scope for M7:**
+**Explicitly out of scope (deferred):**
 
-- Automated Plaid Link / OAuth flow (manual token capture only)
-- Multi-item household ingestion workflow expansion (M8)
 - Canonical overlap suppression across institutions (M9)
 - Multi-item webhook automation / routing changes (M10)
+- Automated background re-link / re-auth detection
 
 ---
 
@@ -92,12 +93,55 @@ command:
 |---|---|---|
 | Client ID | Dashboard → Team Settings → Keys | `PLAID_CLIENT_ID` |
 | Production secret | Dashboard → Team Settings → Keys | `PLAID_SECRET` |
-| Access token(s) | Returned by Link flow, store securely | `PLAID_ACCESS_TOKEN` (single-item) or per-item env var (multi-item) |
+| Access token(s) | Returned by `ledger link` flow, store securely | `PLAID_ACCESS_TOKEN` (single-item) or per-item env var (multi-item) |
 | Webhook signing secret | Dashboard → Webhooks → Signing secret | `PLAID_WEBHOOK_SECRET` |
 
 > **Do not use sandbox credentials for production syncs.**  The
 > `PLAID_ENV` value must be `production` (not `sandbox`) when using live
 > bank connections.
+
+### 2.3 Connecting an institution with `ledger link`
+
+`ledger link` starts a temporary local HTTP server, opens the browser,
+guides the operator through the Plaid Link flow, and prints the resulting
+`access_token` and a ready-to-paste `items.toml` snippet:
+
+```bash
+ledger link
+# Creating Plaid link token...
+# Starting local Link server at http://127.0.0.1:18790
+# Opening browser — complete the Plaid Link flow to connect your institution.
+#
+# Link complete. Exchanging token...
+#
+#   access_token : access-production-xxxxxxxxxxxxxxxxxxxxxxxx
+#   item_id      : XXXXXXXXXXXXXXXXXXXXXXXXXX
+#
+# Add to items.toml and set the matching env var:
+#
+#   [[items]]
+#   id                = "bank-alice"
+#   access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+#   owner             = "alice"
+#
+#   export PLAID_ACCESS_TOKEN_BANK_ALICE="access-production-xxxx..."
+```
+
+Run `ledger link` once per institution.  Each completed Link flow
+produces one `access_token`; store it in the `~/.config/claw-plaid-ledger/.env`
+file and add the corresponding `[[items]]` block to `items.toml`.
+
+Optional flags:
+
+```bash
+ledger link --products transactions --products investments
+```
+
+The `--products` flag may be passed multiple times (default: `transactions`).
+Use `ledger link --help` for the full option list.
+
+See `items.toml.example` at the repo root for a two-person household
+configuration example.
 
 ---
 

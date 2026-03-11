@@ -51,31 +51,20 @@ contacting any external service, exiting non-zero on any required failure.
 Sandbox `PLAID_ENV` emits a warning without blocking. Dedicated `preflight.py`
 module keeps all check logic pure and unit-testable.
 
+### M8 — Multi-item management
+`ledger link` guides the operator through the complete Plaid Link browser flow
+using a self-contained local HTTP server (`127.0.0.1:18790`) and prints the
+resulting `access_token` and ready-to-paste `items.toml` snippet.
+`ledger items` provides an at-a-glance health view of every configured item:
+token presence, account count, and last-synced timestamp. `items.toml.example`
+committed at repo root with a concrete alice/bob/bank-alice/card-bob two-person
+household structure. `ledger sync --all` established in docs as the standard
+household ingestion path. `RUNBOOK.md` updated with daily operations and
+`ledger link` walkthrough.
+
 ---
 
 ## Upcoming Milestones
-
-### M8 — Multi-item management
-
-**Focus:** Household onboarding and reliable data ingress.
-
-**Goal:** Onboard the real household structure with explicit multi-item
-configuration and sync controls.
-
-**Scope**
-
-- Implement operator-facing manual Link flow for production token capture
-- Finalize `items.toml` household structure with concrete owner/institution examples
-  (e.g. Alice/Bob, bank-alice/card-bob)
-- Ensure `ledger sync --all` is the standard household ingestion path
-- Add item inspection/health visibility sufficient for daily operations and
-  relink triage
-
-**Not in scope**
-
-- Canonical duplicate suppression across overlapping items (handled in M9)
-
----
 
 ### M9 — Canonical household views (source precedence)
 
