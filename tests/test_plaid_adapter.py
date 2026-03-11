@@ -1,9 +1,8 @@
 """
 Tests for the Plaid adapter boundary.
 
-No Plaid SDK symbols are imported here.  The adapter is tested by
-supplying mock objects at the SDK boundary and verifying that our typed
-internal models are produced correctly.
+The error-path tests do import plaid to construct ApiException instances;
+all other tests mock the SDK entirely via MagicMock.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import plaid  # type: ignore[import-untyped]
 import pytest
 
 from claw_plaid_ledger.config import Config, ConfigError
@@ -24,6 +24,10 @@ from claw_plaid_ledger.plaid_models import (
     RemovedTransactionData,
     SyncResult,
     TransactionData,
+)
+from claw_plaid_ledger.sync_engine import (
+    PlaidPermanentError,
+    PlaidTransientError,
 )
 
 # ---------------------------------------------------------------------------
@@ -376,3 +380,106 @@ def test_sync_transactions_date_as_string_is_parsed() -> None:
 
     result = adapter.sync_transactions("tok")
     assert result.added[0].date == datetime.date(2024, 6, 15)
+
+
+# ---------------------------------------------------------------------------
+# create_link_token
+# ---------------------------------------------------------------------------
+
+
+def test_create_link_token_returns_link_token() -> None:
+    """create_link_token returns the link_token string from the SDK."""
+    adapter, api_mock = _adapter_with_mock_api()
+    resp = MagicMock()
+    resp.link_token = "link-sandbox-abc123"  # noqa: S105
+    api_mock.link_token_create.return_value = resp
+
+    result = adapter.create_link_token(
+        user_client_id="operator",
+        products=["transactions"],
+        country_codes=["US"],
+    )
+
+    assert result == "link-sandbox-abc123"
+    api_mock.link_token_create.assert_called_once()
+
+
+def test_create_link_token_transient_error_429() -> None:
+    """create_link_token raises PlaidTransientError on HTTP 429."""
+    adapter, api_mock = _adapter_with_mock_api()
+    exc = plaid.ApiException(status=429)
+    api_mock.link_token_create.side_effect = exc
+
+    with pytest.raises(PlaidTransientError):
+        adapter.create_link_token(
+            user_client_id="operator",
+            products=["transactions"],
+            country_codes=["US"],
+        )
+
+
+def test_create_link_token_permanent_error_400() -> None:
+    """create_link_token raises PlaidPermanentError on HTTP 400."""
+    adapter, api_mock = _adapter_with_mock_api()
+    exc = plaid.ApiException(status=400)
+    api_mock.link_token_create.side_effect = exc
+
+    with pytest.raises(PlaidPermanentError):
+        adapter.create_link_token(
+            user_client_id="operator",
+            products=["transactions"],
+            country_codes=["US"],
+        )
+
+
+def test_create_link_token_network_error_is_transient() -> None:
+    """create_link_token raises PlaidTransientError on OSError."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.link_token_create.side_effect = OSError("connection refused")
+
+    with pytest.raises(PlaidTransientError):
+        adapter.create_link_token(
+            user_client_id="operator",
+            products=["transactions"],
+            country_codes=["US"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# exchange_public_token
+# ---------------------------------------------------------------------------
+
+
+def test_exchange_public_token_returns_access_token_and_item_id() -> None:
+    """exchange_public_token returns (access_token, item_id) from the SDK."""
+    adapter, api_mock = _adapter_with_mock_api()
+    resp = MagicMock()
+    resp.access_token = "access-sandbox-xyz"  # noqa: S105
+    resp.item_id = "item-abc123"
+    api_mock.item_public_token_exchange.return_value = resp
+
+    access_token, item_id = adapter.exchange_public_token("public-sandbox-tok")
+
+    assert access_token == "access-sandbox-xyz"  # noqa: S105
+    assert item_id == "item-abc123"
+    api_mock.item_public_token_exchange.assert_called_once()
+
+
+def test_exchange_public_token_transient_error_500() -> None:
+    """exchange_public_token raises PlaidTransientError on HTTP 500."""
+    adapter, api_mock = _adapter_with_mock_api()
+    exc = plaid.ApiException(status=500)
+    api_mock.item_public_token_exchange.side_effect = exc
+
+    with pytest.raises(PlaidTransientError):
+        adapter.exchange_public_token("public-tok")
+
+
+def test_exchange_public_token_permanent_error_400() -> None:
+    """exchange_public_token raises PlaidPermanentError on HTTP 400."""
+    adapter, api_mock = _adapter_with_mock_api()
+    exc = plaid.ApiException(status=400)
+    api_mock.item_public_token_exchange.side_effect = exc
+
+    with pytest.raises(PlaidPermanentError):
+        adapter.exchange_public_token("public-tok")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import webbrowser
 from typing import Annotated, cast
 
 import typer
@@ -21,6 +22,11 @@ from claw_plaid_ledger.items_config import (
     ItemConfig,
     ItemsConfigError,
     load_items_config,
+)
+from claw_plaid_ledger.link_server import (
+    LINK_SERVER_HOST,
+    LINK_SERVER_PORT,
+    start_link_server,
 )
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.preflight import (
@@ -422,6 +428,91 @@ def sync(
         return
 
     _sync_all_items()
+
+
+def _print_link_result(access_token: str, item_id: str) -> None:
+    """Print the exchange result and a sample items.toml snippet."""
+    typer.echo("\nLink complete. Exchanging token...\n")
+    typer.echo(f"  access_token : {access_token}")
+    typer.echo(f"  item_id      : {item_id}")
+    typer.echo("\nAdd to items.toml and set the matching env var:\n")
+    typer.echo("  [[items]]")
+    typer.echo('  id                = "bank-alice"')
+    typer.echo('  access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"')
+    typer.echo('  owner             = "alice"')
+    typer.echo("")
+    typer.echo(f'  export PLAID_ACCESS_TOKEN_BANK_ALICE="{access_token}"')
+
+
+@app.command()
+def link(
+    products: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--products",
+            help=(
+                "Plaid product to request (e.g. transactions). "
+                "May be repeated."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Connect a Plaid institution via browser and print the access token."""
+    requested_products = products if products is not None else ["transactions"]
+
+    try:
+        config = load_config(require_plaid_client=True)
+    except ConfigError as error:
+        typer.echo(f"link: {error}")
+        raise SystemExit(2) from error
+
+    adapter = PlaidClientAdapter.from_config(config)
+
+    typer.echo("Creating Plaid link token...")
+    try:
+        link_token = adapter.create_link_token(
+            "operator",
+            requested_products,
+            ["US"],
+        )
+    except (RuntimeError, OSError) as error:
+        typer.echo(f"link: failed to create link token: {error}")
+        raise SystemExit(1) from error
+
+    typer.echo(
+        f"Starting local Link server at "
+        f"http://{LINK_SERVER_HOST}:{LINK_SERVER_PORT}"
+    )
+    server, done_event, result_container = start_link_server(link_token)
+
+    typer.echo(
+        "Opening browser \u2014 complete the Plaid Link flow to "
+        "connect your institution."
+    )
+    webbrowser.open(f"http://{LINK_SERVER_HOST}:{LINK_SERVER_PORT}")
+
+    try:
+        done_event.wait()
+    except KeyboardInterrupt:
+        typer.echo("\nlink: interrupted by user")
+        server.shutdown()
+        raise SystemExit(1) from None
+
+    server.shutdown()
+
+    if not result_container:
+        typer.echo("link: no token received from browser")
+        raise SystemExit(1)
+
+    public_token = result_container[0]
+
+    try:
+        access_token, item_id = adapter.exchange_public_token(public_token)
+    except (RuntimeError, OSError) as error:
+        typer.echo(f"link: failed to exchange token: {error}")
+        raise SystemExit(1) from error
+
+    _print_link_result(access_token, item_id)
 
 
 @app.command()

@@ -14,6 +14,21 @@ from typing import Any
 
 import plaid  # type: ignore[import-untyped]
 from plaid.api import plaid_api  # type: ignore[import-untyped]
+from plaid.model.country_code import (  # type: ignore[import-untyped]
+    CountryCode,
+)
+from plaid.model.item_public_token_exchange_request import (  # type: ignore[import-untyped]
+    ItemPublicTokenExchangeRequest,
+)
+from plaid.model.link_token_create_request import (  # type: ignore[import-untyped]
+    LinkTokenCreateRequest,
+)
+from plaid.model.link_token_create_request_user import (  # type: ignore[import-untyped]
+    LinkTokenCreateRequestUser,
+)
+from plaid.model.products import (  # type: ignore[import-untyped]
+    Products,
+)
 from plaid.model.transactions_sync_request import (  # type: ignore[import-untyped]
     TransactionsSyncRequest,
 )
@@ -177,3 +192,64 @@ class PlaidClientAdapter:
             next_cursor=str(response.next_cursor),
             has_more=bool(response.has_more),
         )
+
+    def create_link_token(
+        self,
+        user_client_id: str,
+        products: list[str],
+        country_codes: list[str],
+    ) -> str:
+        """
+        Create a Plaid Link token for the browser Link flow.
+
+        Calls the Plaid /link/token/create endpoint and returns the
+        ``link_token`` string for use in the Plaid Link JS initializer.
+        """
+        request = LinkTokenCreateRequest(
+            products=[Products(p) for p in products],
+            client_name="claw-plaid-ledger",
+            country_codes=[CountryCode(c) for c in country_codes],
+            language="en",
+            user=LinkTokenCreateRequestUser(client_user_id=user_client_id),
+        )
+        try:
+            response = self._api.link_token_create(request)
+        except plaid.ApiException as exc:
+            status: int = getattr(exc, "status", 0)
+            if (
+                status == _HTTP_TOO_MANY_REQUESTS
+                or status >= _HTTP_SERVER_ERROR_MIN
+            ):
+                msg = f"Plaid transient API error (HTTP {status}): {exc}"
+                raise PlaidTransientError(msg) from exc
+            msg = f"Plaid permanent API error (HTTP {status}): {exc}"
+            raise PlaidPermanentError(msg) from exc
+        except OSError as exc:
+            msg = f"Network error calling Plaid: {exc}"
+            raise PlaidTransientError(msg) from exc
+        return str(response.link_token)
+
+    def exchange_public_token(self, public_token: str) -> tuple[str, str]:
+        """
+        Exchange a Plaid public token for an access token and item ID.
+
+        Calls the Plaid /item/public_token/exchange endpoint and returns
+        ``(access_token, item_id)``.
+        """
+        request = ItemPublicTokenExchangeRequest(public_token=public_token)
+        try:
+            response = self._api.item_public_token_exchange(request)
+        except plaid.ApiException as exc:
+            status = getattr(exc, "status", 0)
+            if (
+                status == _HTTP_TOO_MANY_REQUESTS
+                or status >= _HTTP_SERVER_ERROR_MIN
+            ):
+                msg = f"Plaid transient API error (HTTP {status}): {exc}"
+                raise PlaidTransientError(msg) from exc
+            msg = f"Plaid permanent API error (HTTP {status}): {exc}"
+            raise PlaidPermanentError(msg) from exc
+        except OSError as exc:
+            msg = f"Network error calling Plaid: {exc}"
+            raise PlaidTransientError(msg) from exc
+        return str(response.access_token), str(response.item_id)

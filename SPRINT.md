@@ -27,7 +27,7 @@ with a concrete Alice/Bob/bank-alice/card-bob example.
 
 ---
 
-### Task 1: `ledger link` — Local web-server Plaid Link flow
+### Task 1: `ledger link` — Local web-server Plaid Link flow ✅ DONE
 
 **Scope**
 
