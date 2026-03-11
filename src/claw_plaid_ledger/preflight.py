@@ -12,15 +12,13 @@ from claw_plaid_ledger.items_config import ItemsConfigError, load_items_config
 
 
 class CheckStatus(enum.Enum):
-    """Outcome of a single preflight check."""
+    """Outcome of a single preflight check, ordered by increasing severity."""
 
-    # OK / FAIL / WARN are the three possible outcomes.
-    # "OK" is used instead of "PASS" to avoid false positives from S105
-    # (hardcoded-password detection), which matches on attribute names that
-    # contain the word "pass".
-    OK = "PASS"
-    FAIL = "FAIL"
+    # "OKAY" avoids the S105 false positive that fires when an attribute name
+    # contains the word "pass" (hardcoded-password detection).
+    OKAY = "PASS"
     WARN = "WARN"
+    FAIL = "FAIL"
 
 
 class CheckSeverity(enum.Enum):
@@ -53,11 +51,11 @@ def _check_env_var(
     *,
     severity: CheckSeverity = CheckSeverity.REQUIRED,
 ) -> CheckResult:
-    """Return OK or FAIL for a required environment variable."""
+    """Return OKAY or FAIL for a required environment variable."""
     if environ.get(name):
         return CheckResult(
             name=name,
-            status=CheckStatus.OK,
+            status=CheckStatus.OKAY,
             message=f"{name} is set",
             severity=severity,
         )
@@ -84,7 +82,7 @@ def _check_db_path(environ: dict[str, str]) -> CheckResult:
     if db_path.exists():
         return CheckResult(
             name=name,
-            status=CheckStatus.OK,
+            status=CheckStatus.OKAY,
             message=f"DB file exists: {db_path}",
             severity=CheckSeverity.REQUIRED,
         )
@@ -105,7 +103,7 @@ def _check_db_path(environ: dict[str, str]) -> CheckResult:
         ancestor = up
     return CheckResult(
         name=name,
-        status=CheckStatus.OK,
+        status=CheckStatus.OKAY,
         message=(
             f"DB path {db_path} does not exist yet "
             "(run 'ledger init-db' before first sync)"
@@ -129,7 +127,7 @@ def _check_sandbox_warning(environ: dict[str, str]) -> CheckResult:
         )
     return CheckResult(
         name="PLAID_ENV_SANDBOX",
-        status=CheckStatus.OK,
+        status=CheckStatus.OKAY,
         message=f"PLAID_ENV={plaid_env!r} (not sandbox)",
         severity=CheckSeverity.WARNING,
     )
@@ -140,11 +138,11 @@ def _check_item_token(
     access_token_env: str,
     environ: dict[str, str],
 ) -> CheckResult:
-    """Return OK or FAIL for one item's access-token env var."""
+    """Return OKAY or FAIL for one item's access-token env var."""
     if environ.get(access_token_env):
         return CheckResult(
             name=access_token_env,
-            status=CheckStatus.OK,
+            status=CheckStatus.OKAY,
             message=f"{access_token_env} is set (item={item_id!r})",
             severity=CheckSeverity.REQUIRED,
         )
@@ -181,7 +179,7 @@ def _check_items_config(
         results.append(
             CheckResult(
                 name="items.toml",
-                status=CheckStatus.OK,
+                status=CheckStatus.OKAY,
                 message=(
                     "items.toml not found or empty \u2014 single-item mode"
                 ),
@@ -193,7 +191,7 @@ def _check_items_config(
     results.append(
         CheckResult(
             name="items.toml",
-            status=CheckStatus.OK,
+            status=CheckStatus.OKAY,
             message=f"items.toml loaded: {len(items)} item(s)",
             severity=CheckSeverity.REQUIRED,
         )

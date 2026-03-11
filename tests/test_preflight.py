@@ -92,7 +92,7 @@ def test_db_path_creatable_parent_is_pass(tmp_path: Path) -> None:
     results = run_production_preflight(env)
 
     result = _get_result(results, "CLAW_PLAID_LEDGER_DB_PATH")
-    assert result.status is CheckStatus.OK
+    assert result.status is CheckStatus.OKAY
 
 
 def test_db_path_existing_file_is_pass(tmp_path: Path) -> None:
@@ -104,7 +104,7 @@ def test_db_path_existing_file_is_pass(tmp_path: Path) -> None:
     results = run_production_preflight(env)
 
     result = _get_result(results, "CLAW_PLAID_LEDGER_DB_PATH")
-    assert result.status is CheckStatus.OK
+    assert result.status is CheckStatus.OKAY
 
 
 def test_sandbox_env_is_warning_not_required_fail(tmp_path: Path) -> None:
@@ -146,7 +146,7 @@ def test_production_plaid_env_has_no_sandbox_warning(
     results = run_production_preflight(env)
 
     result = _get_result(results, "PLAID_ENV_SANDBOX")
-    assert result.status is CheckStatus.OK
+    assert result.status is CheckStatus.OKAY
 
 
 def test_items_toml_parse_error_is_required_fail(tmp_path: Path) -> None:
@@ -207,7 +207,7 @@ def test_present_access_token_env_var_is_pass(tmp_path: Path) -> None:
     results = run_production_preflight(env, items_config_path=items_path)
 
     result = _get_result(results, "PLAID_TOKEN_BANK")
-    assert result.status is CheckStatus.OK
+    assert result.status is CheckStatus.OKAY
     assert result.severity is CheckSeverity.REQUIRED
 
 
@@ -219,7 +219,7 @@ def test_absent_items_toml_is_not_a_failure(tmp_path: Path) -> None:
     results = run_production_preflight(env, items_config_path=absent_path)
 
     result = _get_result(results, "items.toml")
-    assert result.status is CheckStatus.OK
+    assert result.status is CheckStatus.OKAY
 
 
 def test_multiple_items_all_tokens_present_all_pass(
@@ -242,8 +242,8 @@ def test_multiple_items_all_tokens_present_all_pass(
 
     results = run_production_preflight(env, items_config_path=items_path)
 
-    assert _get_result(results, "PLAID_TOKEN_ALICE").status is CheckStatus.OK
-    assert _get_result(results, "PLAID_TOKEN_BOB").status is CheckStatus.OK
+    assert _get_result(results, "PLAID_TOKEN_ALICE").status is CheckStatus.OKAY
+    assert _get_result(results, "PLAID_TOKEN_BOB").status is CheckStatus.OKAY
 
 
 def test_partial_items_token_missing_yields_fail(tmp_path: Path) -> None:
@@ -264,5 +264,5 @@ def test_partial_items_token_missing_yields_fail(tmp_path: Path) -> None:
 
     results = run_production_preflight(env, items_config_path=items_path)
 
-    assert _get_result(results, "PLAID_TOKEN_ALICE").status is CheckStatus.OK
+    assert _get_result(results, "PLAID_TOKEN_ALICE").status is CheckStatus.OKAY
     assert _get_result(results, "PLAID_TOKEN_BOB").status is CheckStatus.FAIL
