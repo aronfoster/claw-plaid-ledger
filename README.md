@@ -120,6 +120,7 @@ Notes:
 | Command | Description |
 |---|---|
 | `ledger doctor` | Validates config, DB connectivity, schema, and row counts; checks OpenClaw notification config |
+| `ledger doctor --production-preflight` | Validates live-readiness config without contacting external services; exits non-zero on any required failure |
 | `ledger init-db` | Creates the SQLite database and initialises the schema (safe to re-run) |
 | `ledger sync` | Fetches transactions from Plaid and persists them to SQLite |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
@@ -145,6 +146,21 @@ After a webhook-triggered sync that adds, modifies, or removes at least one
 transaction, the server sends a `POST` to the OpenClaw `/hooks/agent` endpoint
 to wake the configured agent (Hestia by default). Set `OPENCLAW_HOOKS_TOKEN`
 to enable this; leave it unset to disable silently.
+
+## Production preflight
+
+Before using live Plaid credentials for the first time, run the
+production preflight to verify your environment is correctly configured:
+
+```bash
+uv run ledger doctor --production-preflight
+```
+
+All required checks must show `[PASS]` before running a live sync.
+A `[WARN]` on `PLAID_ENV_SANDBOX` means `PLAID_ENV` is still set to
+`sandbox` — update it to `production` for live bank connections.
+
+See `RUNBOOK.md` for the full production onboarding checklist.
 
 ## Example
 

@@ -23,6 +23,11 @@ from claw_plaid_ledger.items_config import (
     load_items_config,
 )
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
+from claw_plaid_ledger.preflight import (
+    CheckSeverity,
+    CheckStatus,
+    run_production_preflight,
+)
 from claw_plaid_ledger.sync_engine import SyncSummary, run_sync
 
 app = typer.Typer(
@@ -156,11 +161,41 @@ def _redact(value: str | None) -> str:
     return f"****{value[-_REDACT_KEEP_CHARS:]}"
 
 
+def _doctor_run_preflight() -> None:
+    """Run production preflight checks and print results."""
+    results = run_production_preflight()
+    failure_count = 0
+    for result in results:
+        typer.echo(
+            f"preflight: {result.name} "
+            f"[{result.status.value}] {result.message}"
+        )
+        if (
+            result.status is CheckStatus.FAIL
+            and result.severity is CheckSeverity.REQUIRED
+        ):
+            failure_count += 1
+    if failure_count > 0:
+        typer.echo(
+            f"preflight: {failure_count} check(s) failed"
+            " \u2014 not production-ready"
+        )
+        raise SystemExit(1)
+    typer.echo("preflight: all required checks passed")
+
+
 @app.command()
 def doctor(
     verbose: Annotated[int, typer.Option("--verbose", "-v", count=True)] = 0,
+    production_preflight: Annotated[
+        int, typer.Option("--production-preflight", count=True)
+    ] = 0,
 ) -> None:
     """Show environment and setup diagnostics for this project."""
+    if production_preflight > 0:
+        _doctor_run_preflight()
+        return
+
     # Validate required env vars
     try:
         config = load_config()
