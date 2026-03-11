@@ -29,7 +29,7 @@ agent API exposes canonical transactions by default.
 
 ---
 
-### Task 1: Config extension — `suppressed_accounts` in `items.toml`
+### Task 1: Config extension — `suppressed_accounts` in `items.toml` ✅ DONE
 
 **Scope**
 
