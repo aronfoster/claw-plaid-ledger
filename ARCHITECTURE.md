@@ -323,7 +323,7 @@ and a Swagger UI at `GET /docs`. Both are served without authentication
 (consistent with the local-only security posture).
 
 `GET /openapi.json` is the **canonical machine-readable spec** and is intended
-to seed the OpenClaw SKILL definition for M7. Any agent that needs to
+to seed the OpenClaw SKILL definition (M11). Any agent that needs to
 introspect the available API surface should fetch this endpoint rather than
 reading the source code.
 
