@@ -98,7 +98,50 @@ include `suppressed_by` provenance when a row comes from a suppressed account.
 
 ## Upcoming Milestones
 
-### M10 — Multi-item automation
+**M10: Automation & Connectivity (The "Production" Pivot)**
+**Focus:** Reliable background operations and external visibility.
+**Integration:** Incorporate the **DNS Configuration** and **Heartbeat Confusion** goals here.
+**Scope:** Route Plaid webhooks to configured items, implement DuckDNS (or similar) for webhook subscription, and ensure the OpenClaw agent is woken via "pokes" rather than scheduled heartbeats.
+
+
+**M11: Advanced Agent API & Logging**
+**Focus:** Giving the agent richer data access.
+**Integration:** This addresses the **More OpenClaw Endpoints** and **Better Logging** human goals.
+**Scope:** Add server endpoints for total spend calculations, filtering by tags/dates, and searching the `notes` field. Implement structured `INFO` and `DEBUG` logging across the codebase to aid the agent in troubleshooting its own tool calls.
+
+
+**M12: Transfer Detection & Movement Suppression**
+**Focus:** Ledger hygiene (Moved up from "Deferred").
+**Scope:** Identify and flag internal transfers between household accounts so that money moved from checking to a credit card payment is not counted as new spending.
+
+
+**M13: Hestia Skill Definition**
+**Focus:** Final agent-led collaboration.
+**Scope:** Define the `SKILL.md` and operating constraints for Hestia, moving the focus to anomaly discovery and annotation hygiene.
+
+
+
+#### Milestone 14: Hardened Deployment & Local Security
+
+* **Goal:** Transition from a manual `ledger serve` to a robust, permanent home service.
+* **Scope:**
+* Provide official `systemd` service templates for Linux/Proxmox environments.
+* Containerization (Docker/LXC) for easier deployment on home servers.
+* Implementation of mTLS or OIDC for local network authentication if multiple devices need API access.
+
+
+
+#### Milestone 15: "Doctor" Auto-Remediation
+
+* **Goal:** Reduce manual intervention for common state issues.
+* **Scope:**
+* Expand `ledger doctor` to not only report but also fix common issues (e.g., missing `items.toml` entries, stale database migrations, or incorrect file permissions).
+* Automated "pre-flight" checks that run before every `sync --all` to ensure the environment is healthy.
+
+----
+# Old Milestone Entries
+
+### MX — Multi-item automation
 
 **Focus:** Automated maintenance for the new household architecture.
 
@@ -118,7 +161,7 @@ all configured household items.
 
 ---
 
-### M11 — Hestia skill definition
+### MX — Hestia skill definition
 
 **Focus:** Agent-led financial collaboration on top of deterministic household
 ledger logic.
@@ -142,11 +185,6 @@ special emphasis on anomaly discovery rather than primary source-precedence mapp
 - Multi-user authorization expansion
 
 ---
-
-## Priority order
-
-1. **M8 (Data Ingress)** → **M9 (Canonical Logic)** →
-   **M10 (Automation)** → **M11 (Agent Integration)**.
 
 ## Deferred / Unscheduled
 
