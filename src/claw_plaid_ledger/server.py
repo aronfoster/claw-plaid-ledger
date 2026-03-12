@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import sqlite3
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from claw_plaid_ledger.db import (
     query_transactions,
     upsert_annotation,
 )
+from claw_plaid_ledger.items_config import load_items_config
 from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
@@ -56,24 +58,49 @@ def require_bearer_token(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _background_sync() -> None:
-    """Load config, build adapter, and run sync; log errors without raising."""
+async def _background_sync(
+    *,
+    access_token: str | None = None,
+    item_id: str | None = None,
+    owner: str | None = None,
+) -> None:
+    """
+    Load config, build adapter, and run sync; log errors without raising.
+
+    When ``access_token`` is ``None`` the function falls back to loading
+    ``PLAID_ACCESS_TOKEN`` from config (existing single-item behavior).
+    When ``item_id`` is ``None`` the function falls back to ``config.item_id``.
+    """
     try:
-        config = load_config(require_plaid=True)
-        if not config.plaid_access_token:
+        # When an access token is injected (multi-item path) we only require
+        # the Plaid client credentials, not PLAID_ACCESS_TOKEN.
+        require_plaid = access_token is None
+        config = load_config(
+            require_plaid=require_plaid,
+            require_plaid_client=not require_plaid,
+        )
+        resolved_token = (
+            access_token
+            if access_token is not None
+            else config.plaid_access_token
+        )
+        if not resolved_token:
             logger.error("Background sync aborted: PLAID_ACCESS_TOKEN not set")
             return
+        resolved_item_id = item_id if item_id is not None else config.item_id
         adapter = PlaidClientAdapter.from_config(config)
-        logger.info("Background sync starting item_id=%s", config.item_id)
+        logger.info("Background sync starting item_id=%s", resolved_item_id)
         summary = run_sync(
             db_path=config.db_path,
             adapter=adapter,
-            access_token=config.plaid_access_token,
-            item_id=config.item_id,
+            access_token=resolved_token,
+            item_id=resolved_item_id,
+            owner=owner,
         )
         logger.info(
-            "Background sync completed accounts=%d added=%d modified=%d"
-            " removed=%d",
+            "Background sync completed item_id=%s accounts=%d added=%d"
+            " modified=%d removed=%d",
+            resolved_item_id,
             summary.accounts,
             summary.added,
             summary.modified,
@@ -236,10 +263,56 @@ async def webhook_plaid(
     logger.info("Plaid webhook received webhook_type=%s", webhook_type)
 
     if webhook_type == _SYNC_UPDATES_AVAILABLE:
-        logger.info(
-            "Enqueuing background sync for webhook_type=%s", webhook_type
-        )
-        background_tasks.add_task(_background_sync)
+        payload_item_id: str | None = payload.get("item_id")
+        enqueued = False
+
+        if payload_item_id:
+            try:
+                items = load_items_config()
+            except (OSError, ValueError):
+                logger.warning(
+                    "Could not load items.toml; falling back to"
+                    " PLAID_ACCESS_TOKEN"
+                )
+                items = []
+
+            if items:
+                cfg = next((c for c in items if c.id == payload_item_id), None)
+                if cfg is not None:
+                    token = os.environ.get(cfg.access_token_env)
+                    if token:
+                        logger.info(
+                            "Enqueuing background sync for item_id=%s"
+                            " webhook_type=%s",
+                            payload_item_id,
+                            webhook_type,
+                        )
+                        background_tasks.add_task(
+                            _background_sync,
+                            access_token=token,
+                            item_id=cfg.id,
+                            owner=cfg.owner,
+                        )
+                        enqueued = True
+                    else:
+                        logger.error(
+                            "item_id %s: env var %s not set;"
+                            " falling back to PLAID_ACCESS_TOKEN",
+                            payload_item_id,
+                            cfg.access_token_env,
+                        )
+                else:
+                    logger.warning(
+                        "item_id %s not found in items.toml;"
+                        " falling back to PLAID_ACCESS_TOKEN",
+                        payload_item_id,
+                    )
+
+        if not enqueued:
+            logger.info(
+                "Enqueuing background sync for webhook_type=%s", webhook_type
+            )
+            background_tasks.add_task(_background_sync)
     else:
         logger.warning("Unrecognised Plaid webhook type: %s", webhook_type)
 

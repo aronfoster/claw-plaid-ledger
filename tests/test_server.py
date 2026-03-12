@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import http
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.config import OpenClawConfig
 from claw_plaid_ledger.db import get_annotation, initialize_database
+from claw_plaid_ledger.items_config import ItemConfig
 from claw_plaid_ledger.server import (
     _background_sync,
     app,
@@ -1066,7 +1068,7 @@ class TestBackgroundSyncNotificationWiring:
             patch("claw_plaid_ledger.server.run_sync", return_value=summary),
             patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
         ):
-            _background_sync()
+            asyncio.run(_background_sync())
 
         expected_openclaw_cfg = OpenClawConfig(
             url=mock_config.openclaw_hooks_url,
@@ -1094,7 +1096,7 @@ class TestBackgroundSyncNotificationWiring:
             patch("claw_plaid_ledger.server.run_sync", return_value=summary),
             patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
         ):
-            _background_sync()
+            asyncio.run(_background_sync())
 
         mock_notify.assert_not_called()
 
@@ -1120,4 +1122,298 @@ class TestBackgroundSyncNotificationWiring:
             ),
         ):
             # Must not raise — except Exception in _background_sync absorbs it.
-            _background_sync()
+            asyncio.run(_background_sync())
+
+
+# ---------------------------------------------------------------------------
+# Tests for multi-item webhook routing
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookItemRouting:
+    """Tests for item_id-based routing in POST /webhooks/plaid."""
+
+    def test_item_id_found_routes_to_configured_access_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """item_id matching a configured item routes to that item's token."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv("PLAID_ACCESS_TOKEN_ALICE", "access-token-alice")
+
+        body = (
+            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b' "item_id": "bank-alice"}'
+        )
+        sig = _make_plaid_sig(body)
+
+        item = ItemConfig(
+            id="bank-alice",
+            # S106: value is an env var name, not a credential
+            access_token_env="PLAID_ACCESS_TOKEN_ALICE",  # noqa: S106
+            owner="alice",
+        )
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        with patch(
+            "claw_plaid_ledger.server.load_items_config", return_value=[item]
+        ):
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once_with(
+            # S106: test fixture value, not a real credential
+            access_token="access-token-alice",  # noqa: S106
+            item_id="bank-alice",
+            owner="alice",
+        )
+
+    def test_item_id_not_in_items_toml_logs_warning_and_falls_back(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """item_id absent from items.toml logs WARNING and falls back."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = (
+            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b' "item_id": "unknown-item"}'
+        )
+        sig = _make_plaid_sig(body)
+
+        item = ItemConfig(
+            id="bank-alice",
+            # S106: value is an env var name, not a credential
+            access_token_env="PLAID_ACCESS_TOKEN_ALICE",  # noqa: S106
+        )
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        with (
+            caplog.at_level(
+                logging.WARNING, logger="claw_plaid_ledger.server"
+            ),
+            patch(
+                "claw_plaid_ledger.server.load_items_config",
+                return_value=[item],
+            ),
+        ):
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once_with()
+        warning_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+        ]
+        assert any("not found in items.toml" in m for m in warning_messages)
+
+    def test_no_items_toml_falls_back_to_legacy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty items list (no items.toml) falls back to legacy sync."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = (
+            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b' "item_id": "bank-alice"}'
+        )
+        sig = _make_plaid_sig(body)
+
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        with patch(
+            "claw_plaid_ledger.server.load_items_config", return_value=[]
+        ):
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once_with()
+
+    def test_no_item_id_in_payload_falls_back_without_consulting_items_toml(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Payload without item_id falls back; items.toml is not consulted."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        with patch("claw_plaid_ledger.server.load_items_config") as mock_load:
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once_with()
+        mock_load.assert_not_called()
+
+    def test_env_var_not_set_for_item_logs_error_and_falls_back(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Missing access-token env var logs ERROR and falls back to legacy."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.delenv("PLAID_ACCESS_TOKEN_ALICE", raising=False)
+
+        body = (
+            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b' "item_id": "bank-alice"}'
+        )
+        sig = _make_plaid_sig(body)
+
+        item = ItemConfig(
+            id="bank-alice",
+            # S106: value is an env var name, not a credential
+            access_token_env="PLAID_ACCESS_TOKEN_ALICE",  # noqa: S106
+        )
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", mock_bg
+        )
+
+        with (
+            caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"),
+            patch(
+                "claw_plaid_ledger.server.load_items_config",
+                return_value=[item],
+            ),
+        ):
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once_with()
+        error_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.ERROR
+        ]
+        assert any("not set" in m for m in error_messages)
+
+
+# ---------------------------------------------------------------------------
+# Tests for _background_sync with injected credentials
+# ---------------------------------------------------------------------------
+
+
+class TestBackgroundSyncInjectedCredentials:
+    """Tests for _background_sync() with explicit access_token / item_id."""
+
+    def test_injected_access_token_is_passed_to_run_sync(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Injected access_token and item_id are forwarded to run_sync."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.server.run_sync", return_value=summary
+            ) as mock_run_sync,
+        ):
+            asyncio.run(
+                _background_sync(
+                    # S106: test fixture value, not a real credential
+                    access_token="injected-token",  # noqa: S106
+                    item_id="bank-alice",
+                    owner="alice",
+                )
+            )
+
+        mock_run_sync.assert_called_once()
+        call_kwargs = mock_run_sync.call_args.kwargs
+        # S105: comparing against a test fixture token, not a real credential
+        assert call_kwargs["access_token"] == "injected-token"  # noqa: S105
+        assert call_kwargs["item_id"] == "bank-alice"
+        assert call_kwargs["owner"] == "alice"
+
+    def test_no_args_uses_config_values_backward_compat(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """_background_sync() with no args uses config token and item_id."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.server.run_sync", return_value=summary
+            ) as mock_run_sync,
+        ):
+            asyncio.run(_background_sync())
+
+        mock_run_sync.assert_called_once()
+        call_kwargs = mock_run_sync.call_args.kwargs
+        assert call_kwargs["access_token"] == mock_config.plaid_access_token
+        assert call_kwargs["item_id"] == mock_config.item_id
