@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import uuid
 import webbrowser
 from typing import Annotated, cast
 
@@ -32,6 +33,10 @@ from claw_plaid_ledger.link_server import (
     LINK_SERVER_PORT,
     start_link_server,
 )
+from claw_plaid_ledger.logging_utils import (
+    CorrelationIdFilter,
+    set_correlation_id,
+)
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.preflight import (
     CheckSeverity,
@@ -46,6 +51,29 @@ app = typer.Typer(
         "SQLite and exporting agent-friendly artifacts."
     ),
 )
+
+_sync_logger = logging.getLogger(__name__)
+
+
+_LOG_FORMAT = (
+    "%(asctime)s %(levelname)s %(name)s [%(correlation_id)s]: %(message)s"
+)
+
+
+def _setup_sync_logging() -> None:
+    """
+    Configure basic logging for CLI sync commands if not already set up.
+
+    This ensures sync_run_id appears in log output for manual syncs.
+    Calling basicConfig when handlers are already configured is a no-op,
+    so this is safe to call unconditionally.
+    """
+    logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
+    for handler in logging.root.handlers:
+        if not any(
+            isinstance(f, CorrelationIdFilter) for f in handler.filters
+        ):
+            handler.addFilter(CorrelationIdFilter())
 
 
 def _doctor_verbose_config(config: Config) -> None:
@@ -314,6 +342,9 @@ def _sync_summary(prefix: str, summary: SyncSummary) -> None:
 
 def _sync_default_mode() -> None:
     """Run legacy single-item sync using PLAID_ACCESS_TOKEN."""
+    _setup_sync_logging()
+    sync_run_id = "sync-" + uuid.uuid4().hex[:8]
+    set_correlation_id(sync_run_id)
     try:
         config = load_config(require_plaid=True)
     except ConfigError as error:
@@ -327,6 +358,7 @@ def _sync_default_mode() -> None:
         typer.echo(f"sync: {message}")
         raise SystemExit(2)
 
+    _sync_logger.info("sync starting sync_run_id=%s", sync_run_id)
     adapter = PlaidClientAdapter.from_config(config)
     summary = run_sync(
         db_path=config.db_path,
@@ -348,6 +380,9 @@ def _load_client_config_for_sync() -> Config:
 
 def _sync_named_item(item_id: str) -> None:
     """Run sync for exactly one item from items.toml."""
+    _setup_sync_logging()
+    sync_run_id = "sync-" + uuid.uuid4().hex[:8]
+    set_correlation_id(sync_run_id)
     items_config = load_items_config()
     item_cfg = next((cfg for cfg in items_config if cfg.id == item_id), None)
     if item_cfg is None:
@@ -359,6 +394,9 @@ def _sync_named_item(item_id: str) -> None:
         typer.echo(f"sync: {item_cfg.access_token_env} is not set")
         raise SystemExit(2)
 
+    _sync_logger.info(
+        "sync starting item_id=%s sync_run_id=%s", item_id, sync_run_id
+    )
     config = _load_client_config_for_sync()
     adapter = PlaidClientAdapter.from_config(config)
     summary = run_sync(
@@ -373,6 +411,7 @@ def _sync_named_item(item_id: str) -> None:
 
 def _sync_all_items() -> None:
     """Run sync sequentially for all items in items.toml."""
+    _setup_sync_logging()
     items_config = load_items_config()
     if len(items_config) == 0:
         typer.echo("sync --all: no items found in items.toml")
@@ -395,6 +434,13 @@ def _sync_all_items() -> None:
             failure_count += 1
             continue
 
+        sync_run_id = "sync-" + uuid.uuid4().hex[:8]
+        set_correlation_id(sync_run_id)
+        _sync_logger.info(
+            "sync starting item_id=%s sync_run_id=%s",
+            item_cfg.id,
+            sync_run_id,
+        )
         try:
             summary = run_sync(
                 db_path=config.db_path,
@@ -776,9 +822,11 @@ def serve() -> None:
         raise SystemExit(1)
 
     logging.basicConfig(
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        format=_LOG_FORMAT,
         level=getattr(logging, log_level_raw),
     )
+    for handler in logging.root.handlers:
+        handler.addFilter(CorrelationIdFilter())
 
     host = os.environ.get("CLAW_SERVER_HOST", "127.0.0.1")
     port_str = os.environ.get("CLAW_SERVER_PORT", "8000")

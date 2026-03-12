@@ -9,18 +9,22 @@ import logging
 import os
 import secrets
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from pathlib import Path
+
+    from starlette.responses import Response
 
 import fastapi
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from claw_plaid_ledger.config import (
     Config,
@@ -41,6 +45,12 @@ from claw_plaid_ledger.db import (
     upsert_annotation,
 )
 from claw_plaid_ledger.items_config import ItemConfig, load_items_config
+from claw_plaid_ledger.logging_utils import (
+    get_correlation_id,
+    redact_webhook_body,
+    reset_correlation_id,
+    set_correlation_id,
+)
 from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
@@ -51,6 +61,46 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 _SYNC_UPDATES_AVAILABLE = "SYNC_UPDATES_AVAILABLE"
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """
+    Attach a unique request_id to every HTTP request.
+
+    - Generates ``request_id = "req-" + uuid4().hex[:8]`` per request.
+    - Stores it in a ``ContextVar`` so all code in the request call stack
+      picks it up via the ``CorrelationIdFilter`` without explicit threading.
+    - Emits INFO logs at request start and end.
+    - Adds ``X-Request-Id`` to the response headers.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Generate request_id, set context var, log, add header."""
+        request_id = "req-" + uuid.uuid4().hex[:8]
+        token = set_correlation_id(request_id)
+        logger.info(
+            "request_start method=%s path=%s request_id=%s",
+            request.method,
+            request.url.path,
+            request_id,
+        )
+        try:
+            response = await call_next(request)
+        finally:
+            reset_correlation_id(token)
+        logger.info(
+            "request_end method=%s path=%s status=%d request_id=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            request_id,
+        )
+        response.headers["X-Request-Id"] = request_id
+        return response
 
 
 def require_bearer_token(
@@ -73,6 +123,7 @@ async def _background_sync(
     access_token: str | None = None,
     item_id: str | None = None,
     owner: str | None = None,
+    sync_run_id: str | None = None,
 ) -> None:
     """
     Load config, build adapter, and run sync; log errors without raising.
@@ -80,7 +131,12 @@ async def _background_sync(
     When ``access_token`` is ``None`` the function falls back to loading
     ``PLAID_ACCESS_TOKEN`` from config (existing single-item behavior).
     When ``item_id`` is ``None`` the function falls back to ``config.item_id``.
+    When ``sync_run_id`` is provided it is used as the correlation ID for all
+    log lines emitted during this sync run; otherwise a new ID is generated.
     """
+    if sync_run_id is None:
+        sync_run_id = "sync-" + uuid.uuid4().hex[:8]
+    ctx_token = set_correlation_id(sync_run_id)
     try:
         # When an access token is injected (multi-item path) we only require
         # the Plaid client credentials, not PLAID_ACCESS_TOKEN.
@@ -95,11 +151,19 @@ async def _background_sync(
             else config.plaid_access_token
         )
         if not resolved_token:
-            logger.error("Background sync aborted: PLAID_ACCESS_TOKEN not set")
+            logger.error(
+                "Background sync aborted: PLAID_ACCESS_TOKEN not set"
+                " sync_run_id=%s",
+                sync_run_id,
+            )
             return
         resolved_item_id = item_id if item_id is not None else config.item_id
         adapter = PlaidClientAdapter.from_config(config)
-        logger.info("Background sync starting item_id=%s", resolved_item_id)
+        logger.info(
+            "Background sync starting item_id=%s sync_run_id=%s",
+            resolved_item_id,
+            sync_run_id,
+        )
         summary = run_sync(
             db_path=config.db_path,
             adapter=adapter,
@@ -109,12 +173,13 @@ async def _background_sync(
         )
         logger.info(
             "Background sync completed item_id=%s accounts=%d added=%d"
-            " modified=%d removed=%d",
+            " modified=%d removed=%d sync_run_id=%s",
             resolved_item_id,
             summary.accounts,
             summary.added,
             summary.modified,
             summary.removed,
+            sync_run_id,
         )
         if summary.added + summary.modified + summary.removed > 0:
             notify_openclaw(
@@ -128,11 +193,15 @@ async def _background_sync(
             )
         else:
             logger.warning(
-                "Background sync completed with zero transaction changes; "
-                "verify webhook payload and Plaid item state"
+                "Background sync completed with zero transaction changes;"
+                " verify webhook payload and Plaid item state"
+                " sync_run_id=%s",
+                sync_run_id,
             )
     except Exception:
-        logger.exception("Background sync failed")
+        logger.exception("Background sync failed sync_run_id=%s", sync_run_id)
+    finally:
+        reset_correlation_id(ctx_token)
 
 
 def _load_sync_states(
@@ -329,6 +398,7 @@ async def lifespan(
 
 
 app = fastapi.FastAPI(title="claw-plaid-ledger", lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 
 
 @app.get("/health")
@@ -518,6 +588,12 @@ def put_annotation(
             updated_at=now,
         )
         upsert_annotation(connection, row)
+        logger.debug(
+            "annotation upserted transaction_id=%s category=%r tags=%s",
+            transaction_id,
+            body.category,
+            body.tags,
+        )
     return {"status": "ok"}
 
 
@@ -537,6 +613,18 @@ async def webhook_plaid(
     payload = json.loads(body)
     webhook_type = payload.get("webhook_type", "")
     logger.info("Plaid webhook received webhook_type=%s", webhook_type)
+    logger.debug(
+        "webhook payload (redacted): %s", redact_webhook_body(payload)
+    )
+
+    # Derive a sync_run_id from the current request_id so the resulting sync
+    # run is traceable back to this webhook event in the logs.
+    request_id = get_correlation_id()
+    sync_run_id = (
+        "sync-" + request_id[4:]
+        if request_id.startswith("req-")
+        else "sync-" + uuid.uuid4().hex[:8]
+    )
 
     if webhook_type == _SYNC_UPDATES_AVAILABLE:
         payload_item_id: str | None = payload.get("item_id")
@@ -559,15 +647,17 @@ async def webhook_plaid(
                     if token:
                         logger.info(
                             "Enqueuing background sync for item_id=%s"
-                            " webhook_type=%s",
+                            " webhook_type=%s sync_run_id=%s",
                             payload_item_id,
                             webhook_type,
+                            sync_run_id,
                         )
                         background_tasks.add_task(
                             _background_sync,
                             access_token=token,
                             item_id=cfg.id,
                             owner=cfg.owner,
+                            sync_run_id=sync_run_id,
                         )
                         enqueued = True
                     else:
@@ -586,9 +676,13 @@ async def webhook_plaid(
 
         if not enqueued:
             logger.info(
-                "Enqueuing background sync for webhook_type=%s", webhook_type
+                "Enqueuing background sync for webhook_type=%s sync_run_id=%s",
+                webhook_type,
+                sync_run_id,
             )
-            background_tasks.add_task(_background_sync)
+            background_tasks.add_task(
+                _background_sync, sync_run_id=sync_run_id
+            )
     else:
         logger.warning("Unrecognised Plaid webhook type: %s", webhook_type)
 

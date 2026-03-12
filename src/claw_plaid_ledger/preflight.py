@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import enum
+import logging
 import tomllib
 from dataclasses import dataclass
 from os import environ as os_environ
 from pathlib import Path
 
 from claw_plaid_ledger.items_config import ItemsConfigError, load_items_config
+
+logger = logging.getLogger(__name__)
 
 
 class CheckStatus(enum.Enum):
@@ -217,4 +220,11 @@ def run_production_preflight(
     results.append(_check_db_path(env))
     results.extend(_check_items_config(items_config_path, env))
     results.append(_check_sandbox_warning(env))
+    for result in results:
+        logger.debug(
+            "preflight check %s [%s]: %s",
+            result.name,
+            result.status.value,
+            result.message,
+        )
     return results

@@ -171,7 +171,7 @@ are unchanged.
 
 ---
 
-## Task 3: Structured logging with correlation IDs
+## Task 3: Structured logging with correlation IDs ✅ DONE
 
 ### Scope
 
