@@ -24,7 +24,7 @@ Debug logs are audited to ensure no secrets are emitted.
 
 ---
 
-## Task 1: Total spend summary endpoint
+## Task 1: Total spend summary endpoint ✅ DONE
 
 ### Scope
 

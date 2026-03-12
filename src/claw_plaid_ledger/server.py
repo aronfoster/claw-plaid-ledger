@@ -10,7 +10,7 @@ import os
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Literal
 
 if TYPE_CHECKING:
@@ -31,10 +31,12 @@ from claw_plaid_ledger.config import (
 )
 from claw_plaid_ledger.db import (
     AnnotationRow,
+    SpendQuery,
     TransactionQuery,
     get_all_sync_state,
     get_annotation,
     get_transaction,
+    query_spend,
     query_transactions,
     upsert_annotation,
 )
@@ -375,6 +377,63 @@ def list_transactions(
         "total": total,
         "limit": params.limit,
         "offset": params.offset,
+    }
+
+
+class SpendListQuery(BaseModel):
+    """
+    Scalar query parameters for GET /spend.
+
+    List-typed params (tags) and bool params (include_pending) are declared
+    separately on the endpoint to satisfy FastAPI's multi-value and
+    FBT001/FBT002 constraints.
+    """
+
+    start_date: date
+    end_date: date
+    owner: str | None = None
+    # bool | None avoids FBT001/FBT002; None is treated as False (conservative
+    # default: exclude pending transactions unless caller opts in).
+    include_pending: bool | None = None
+    view: Literal["canonical", "raw"] = "canonical"
+
+
+@app.get("/spend", dependencies=[Depends(require_bearer_token)])
+def get_spend(
+    params: Annotated[SpendListQuery, Depends()],
+    tags: Annotated[list[str] | None, Query()] = None,
+) -> dict[str, object]:
+    """
+    Return aggregate spend totals for a date window with optional filters.
+
+    Sums transaction amounts over the inclusive date window.  Positive amounts
+    are debits (money leaving the account); negative amounts are credits —
+    the sum is returned as-is per Plaid conventions.  Pass ``tags`` multiple
+    times to require all listed tags (AND semantics).
+    """
+    resolved_tags: list[str] = tags or []
+    include_pending = params.include_pending is True
+    config = load_config()
+    spend_query = SpendQuery(
+        start_date=params.start_date.isoformat(),
+        end_date=params.end_date.isoformat(),
+        owner=params.owner,
+        tags=tuple(resolved_tags),
+        include_pending=include_pending,
+        canonical_only=params.view == "canonical",
+    )
+    with sqlite3.connect(config.db_path) as connection:
+        total_spend, transaction_count = query_spend(connection, spend_query)
+    return {
+        "start_date": params.start_date.isoformat(),
+        "end_date": params.end_date.isoformat(),
+        "total_spend": total_spend,
+        "transaction_count": transaction_count,
+        "includes_pending": include_pending,
+        "filters": {
+            "owner": params.owner,
+            "tags": resolved_tags,
+        },
     }
 
 

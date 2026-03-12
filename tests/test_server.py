@@ -1742,3 +1742,535 @@ class TestScheduledSyncLoop:
         asyncio.run(_run())
         assert len(check_calls) == _EXPECTED_ONE_CALL
         assert check_calls[0] is cfg
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /spend
+# ---------------------------------------------------------------------------
+
+
+_SPEND_JAN_CANONICAL_COUNT = 3
+_SPEND_JAN_CANONICAL_TOTAL = 350.0
+_SPEND_JAN_GROCERIES_COUNT = 2
+_SPEND_JAN_GROCERIES_TOTAL = 150.0
+_SPEND_JAN_ALICE_COUNT = 2
+_SPEND_JAN_ALICE_TOTAL = 150.0
+_SPEND_JAN_PENDING_COUNT = 4
+_SPEND_JAN_PENDING_TOTAL = 425.0
+_SPEND_JAN_RAW_COUNT = 4
+_SPEND_JAN_RAW_TOTAL = 1349.0
+
+
+def _seed_spend_data(db_path: pathlib.Path) -> None:
+    """
+    Seed richer fixture data for GET /spend tests.
+
+    Accounts:
+      acct_alice  owner=alice   canonical (not suppressed)
+      acct_bob    owner=bob     canonical
+      acct_dup    owner=alice   suppressed (canonical_account_id=acct_alice)
+
+    Transactions (non-pending unless noted):
+      tx_a1  acct_alice  100.0  posted 2025-01-10
+      tx_a2  acct_alice   50.0  posted 2025-01-20
+      tx_b1  acct_bob    200.0  posted 2025-01-15
+      tx_ap  acct_alice   75.0  PENDING authorized 2025-01-05
+      tx_af  acct_alice   30.0  posted 2025-02-10
+      tx_dup acct_dup    999.0  posted 2025-01-10
+
+    Annotations:
+      tx_a1  tags=["groceries","food"]
+      tx_a2  tags=["groceries"]
+      tx_b1  tags=["transport"]
+      (tx_ap, tx_af, tx_dup have no annotations)
+    """
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.executemany(
+            (
+                "INSERT INTO accounts (plaid_account_id, name, owner, "
+                "canonical_account_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "acct_alice",
+                    "Alice Bank",
+                    "alice",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "acct_bob",
+                    "Bob Bank",
+                    "bob",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "acct_dup",
+                    "Alice Dup",
+                    "alice",
+                    "acct_alice",
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+        connection.executemany(
+            (
+                "INSERT INTO transactions (plaid_transaction_id, "
+                "plaid_account_id, amount, iso_currency_code, name, "
+                "merchant_name, pending, authorized_date, posted_date, "
+                "raw_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_a1",
+                    "acct_alice",
+                    100.0,
+                    "USD",
+                    "Grocery Store",
+                    None,
+                    0,
+                    None,
+                    "2025-01-10",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_a2",
+                    "acct_alice",
+                    50.0,
+                    "USD",
+                    "Farmer Market",
+                    None,
+                    0,
+                    None,
+                    "2025-01-20",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_b1",
+                    "acct_bob",
+                    200.0,
+                    "USD",
+                    "Transit",
+                    None,
+                    0,
+                    None,
+                    "2025-01-15",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_ap",
+                    "acct_alice",
+                    75.0,
+                    "USD",
+                    "Pending Charge",
+                    None,
+                    1,
+                    "2025-01-05",
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_af",
+                    "acct_alice",
+                    30.0,
+                    "USD",
+                    "Coffee",
+                    None,
+                    0,
+                    None,
+                    "2025-02-10",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_dup",
+                    "acct_dup",
+                    999.0,
+                    "USD",
+                    "Dup Charge",
+                    None,
+                    0,
+                    None,
+                    "2025-01-10",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+        connection.executemany(
+            (
+                "INSERT INTO annotations (plaid_transaction_id, category, "
+                "note, tags, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_a1",
+                    "food",
+                    None,
+                    '["groceries","food"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_a2",
+                    "food",
+                    None,
+                    '["groceries"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_b1",
+                    "transport",
+                    None,
+                    '["transport"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+
+
+class TestGetSpendEndpoint:
+    """Tests for GET /spend endpoint behavior."""
+
+    def test_unauthenticated_returns_401(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Missing Authorization header returns 401."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={"start_date": "2025-01-01", "end_date": "2025-01-31"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_missing_start_date_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Omitting start_date returns HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={"end_date": "2025-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_missing_end_date_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Omitting end_date returns HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={"start_date": "2025-01-01"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_invalid_date_format_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Non-ISO date strings return HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={"start_date": "not-a-date", "end_date": "2025-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_basic_spend_in_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Basic window returns correct total_spend and transaction_count."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Canonical non-pending Jan 2025: tx_a1(100)+tx_a2(50)+tx_b1(200)
+        response = client.get(
+            "/spend",
+            params={"start_date": "2025-01-01", "end_date": "2025-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2025-01-01"
+        assert body["end_date"] == "2025-01-31"
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        assert body["includes_pending"] is False
+        assert body["filters"]["owner"] is None
+        assert body["filters"]["tags"] == []
+
+    def test_empty_window_returns_zeros(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Date window with no matches returns zeros, not an error."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={"start_date": "2020-01-01", "end_date": "2020-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == 0.0
+        assert body["transaction_count"] == 0
+
+    def test_single_tag_filter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=groceries restricts to transactions with that tag."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_a1(100) + tx_a2(50) both have "groceries" tag
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "tags": "groceries",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_GROCERIES_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_GROCERIES_COUNT
+        assert body["filters"]["tags"] == ["groceries"]
+
+    def test_two_tag_and_filter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=groceries&tags=food restricts to transactions with both."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Only tx_a1(100) has both "groceries" AND "food"
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("tags", "groceries"),
+                ("tags", "food"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        _two_tag_count = 1
+        _two_tag_total = 100.0
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_two_tag_total)
+        assert body["transaction_count"] == _two_tag_count
+
+    def test_tag_no_match_returns_zeros(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """A tag that matches nothing returns zeros."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "tags": "nonexistent-tag",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == 0.0
+        assert body["transaction_count"] == 0
+
+    def test_include_pending_false_excludes_pending(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Default include_pending=false excludes pending transactions."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_ap (75.0 pending) must NOT appear; tx_a1+tx_a2+tx_b1=350
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "include_pending": "false",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        assert body["includes_pending"] is False
+
+    def test_include_pending_true_includes_pending(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """include_pending=true adds pending transactions to the total."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_a1(100) + tx_a2(50) + tx_b1(200) + tx_ap(75) = 425
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "include_pending": "true",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_PENDING_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_PENDING_COUNT
+        assert body["includes_pending"] is True
+
+    def test_owner_filter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?owner=alice restricts spend to Alice's accounts."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # acct_alice owner=alice: tx_a1(100) + tx_a2(50) = 150
+        # acct_dup is suppressed (canonical_account_id set) so excluded
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "owner": "alice",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_ALICE_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_ALICE_COUNT
+        assert body["filters"]["owner"] == "alice"
+
+    def test_view_raw_includes_suppressed_accounts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """view=raw includes transactions from suppressed accounts."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Raw view: tx_a1(100) + tx_a2(50) + tx_b1(200) + tx_dup(999) = 1349
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "view": "raw",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_RAW_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_RAW_COUNT
+
+    def test_view_canonical_excludes_suppressed_accounts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """view=canonical excludes suppressed-account transactions."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Canonical: tx_dup on acct_dup (suppressed) is excluded → 350
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "view": "canonical",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert (
+            response.json()["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        )
+        assert response.json()["total_spend"] == pytest.approx(
+            _SPEND_JAN_CANONICAL_TOTAL
+        )
