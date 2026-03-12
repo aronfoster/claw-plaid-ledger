@@ -395,6 +395,27 @@ def _seed_transactions(db_path: pathlib.Path) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.executemany(
             (
+                "INSERT INTO accounts ("
+                "plaid_account_id, name, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "acct_1",
+                    "Account 1",
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                (
+                    "acct_2",
+                    "Account 2",
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+        connection.executemany(
+            (
                 "INSERT INTO transactions ("
                 "plaid_transaction_id, plaid_account_id, amount, "
                 "iso_currency_code, name, merchant_name, pending, "
@@ -522,6 +543,57 @@ class TestListTransactionsEndpoint:
         assert page_response.json()["total"] == expected_total
         assert page_response.json()["transactions"][0]["id"] == "tx_1"
 
+    def test_default_view_is_canonical_and_view_raw_opt_out(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Canonical view hides suppressed-account transactions by default."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                (
+                    "UPDATE accounts SET canonical_account_id = ? "
+                    "WHERE plaid_account_id = ?"
+                ),
+                ("acct_1", "acct_2"),
+            )
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        canonical_response = client.get(
+            "/transactions", headers={"Authorization": f"Bearer {_TOKEN}"}
+        )
+        raw_response = client.get(
+            "/transactions",
+            params={"view": "raw"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert canonical_response.status_code == http.HTTPStatus.OK
+        assert canonical_response.json()["total"] == 1
+        assert canonical_response.json()["transactions"][0]["id"] == "tx_1"
+
+        assert raw_response.status_code == http.HTTPStatus.OK
+        expected_raw_total = 2
+        assert raw_response.json()["total"] == expected_raw_total
+
+    def test_invalid_view_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Unsupported view query value is rejected with HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"view": "invalid"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
     def test_limit_above_max_returns_422(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
@@ -619,6 +691,7 @@ class TestGetTransactionDetailEndpoint:
             "pending": False,
             "date": "2024-01-15",
             "raw_json": None,
+            "suppressed_by": None,
             "annotation": None,
         }
 
@@ -696,6 +769,32 @@ class TestGetTransactionDetailEndpoint:
 
         assert response.status_code == http.HTTPStatus.OK
         assert response.json()["annotation"]["tags"] is None
+
+    def test_suppressed_transaction_includes_suppressed_by(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Detail response surfaces canonical account provenance."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                (
+                    "UPDATE accounts SET canonical_account_id = ? "
+                    "WHERE plaid_account_id = ?"
+                ),
+                ("acct_1", "acct_2"),
+            )
+
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/tx_2",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json()["suppressed_by"] == "acct_1"
 
     def test_unknown_transaction_id_returns_404(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path

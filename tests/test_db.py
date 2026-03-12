@@ -482,6 +482,19 @@ def _insert_transaction_row(
 ) -> None:
     connection.execute(
         (
+            "INSERT OR IGNORE INTO accounts ("
+            "plaid_account_id, name, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?)"
+        ),
+        (
+            row["account_id"],
+            f"Account {row['account_id']}",
+            "2024-01-01T00:00:00+00:00",
+            "2024-01-01T00:00:00+00:00",
+        ),
+    )
+    connection.execute(
+        (
             "INSERT INTO transactions ("
             "plaid_transaction_id, plaid_account_id, amount, "
             "iso_currency_code, name, merchant_name, pending, "
@@ -607,6 +620,64 @@ def test_query_transactions_unknown_filter_returns_empty(
     assert total == 0
 
 
+def test_query_transactions_canonical_filter_and_raw_opt_out(
+    tmp_path: Path,
+) -> None:
+    """Canonical view excludes suppressed accounts; raw view returns all."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_canonical",
+                "account_id": "acct_keep",
+                "amount": 5.0,
+                "name": "Keep",
+                "merchant_name": "Keep",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-01-01",
+            },
+        )
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_suppressed",
+                "account_id": "acct_hide",
+                "amount": 6.0,
+                "name": "Hide",
+                "merchant_name": "Hide",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-01-02",
+            },
+        )
+        connection.execute(
+            (
+                "UPDATE accounts SET canonical_account_id = ? "
+                "WHERE plaid_account_id = ?"
+            ),
+            ("acct_keep", "acct_hide"),
+        )
+
+        canonical_rows, canonical_total = query_transactions(
+            connection,
+            TransactionQuery(),
+        )
+        raw_rows, raw_total = query_transactions(
+            connection,
+            TransactionQuery(canonical_only=False),
+        )
+
+    assert canonical_total == 1
+    assert [row["id"] for row in canonical_rows] == ["tx_canonical"]
+    expected_raw_total = 2
+    assert raw_total == expected_raw_total
+    assert {row["id"] for row in raw_rows} == {"tx_canonical", "tx_suppressed"}
+
+
 def test_get_transaction_returns_full_detail_row(tmp_path: Path) -> None:
     """Detail query returns a mapped transaction row including raw_json."""
     db_path = tmp_path / "ledger.db"
@@ -646,7 +717,43 @@ def test_get_transaction_returns_full_detail_row(tmp_path: Path) -> None:
         "pending": False,
         "date": "2024-02-02",
         "raw_json": '{"foo": "bar"}',
+        "suppressed_by": None,
     }
+
+
+def test_get_transaction_returns_suppression_provenance(
+    tmp_path: Path,
+) -> None:
+    """Detail query includes suppressed_by for suppressed accounts."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        _insert_transaction_row(
+            connection,
+            {
+                "tx_id": "tx_suppressed_detail",
+                "account_id": "acct_2",
+                "amount": 2.5,
+                "name": "Suppressed",
+                "merchant_name": "Suppressed",
+                "pending": 0,
+                "authorized_date": None,
+                "posted_date": "2024-02-03",
+            },
+        )
+        connection.execute(
+            (
+                "UPDATE accounts SET canonical_account_id = ? "
+                "WHERE plaid_account_id = ?"
+            ),
+            ("acct_1", "acct_2"),
+        )
+
+        row = get_transaction(connection, "tx_suppressed_detail")
+
+    assert row is not None
+    assert row["suppressed_by"] == "acct_1"
 
 
 def test_get_transaction_returns_none_for_missing_id(tmp_path: Path) -> None:
