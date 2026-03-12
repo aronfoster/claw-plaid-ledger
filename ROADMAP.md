@@ -1,25 +1,5 @@
 # Roadmap
 
-## Human Questions / Goals
-
-### RUNBOOK improvement
-The order of the RUNBOOK is not from zero to setup, and it should be. It starts assuming items.toml is already populated. I don't even see a cp command I can use to copy the example to the real file. This shouldn't need such manual intervention.
-
-### Heartbeat Confusion
-We should be waking OpenClaw agent with a poke, not using heartbeat. We should be getting all transactions via webhook. Why are we talking about heartbeats and scheduled sync? Let's make the distinction clear.
-
-### Ledger Link Improvements
-Does this really require the user to copy/paste tokens from the CLI? Explore automatic account entry creation.
-
-### Better Logging
-I haven't been cracking the whip on creating INFO and DEBUG level logs to assist with runtime troubleshooting. Review the entire codebase and add appropriate logging statements.
-
-### More OpenClaw Endpoints
-There are a lot of useful endpoints we should add so OpenClaw agent Hestia can answer a lot of questions without having to do math and filtering herself. I especially want to enable filtering by tags and dates. Maybe include/exclude pending. And functions that get total spend. Maybe something to search the notes field?
-
-### DNS Configuration
-Include steps and as much automated setup for duckdns or another DNS so that we can successfully subscribe to transactions.
-
 ## Completed Milestones
 
 ### M0 — Project skeleton
@@ -82,8 +62,6 @@ household structure. `ledger sync --all` established in docs as the standard
 household ingestion path. `RUNBOOK.md` updated with daily operations and
 `ledger link` walkthrough.
 
-
-
 ### M9 — Canonical household views (source precedence)
 Configuration now supports per-item `suppressed_accounts` mappings in
 `items.toml`. `ledger apply-precedence` writes canonical source precedence to
@@ -98,101 +76,139 @@ include `suppressed_by` provenance when a row comes from a suppressed account.
 
 ## Upcoming Milestones
 
-**M10: Automation & Connectivity (The "Production" Pivot)**
-**Focus:** Reliable background operations and external visibility.
-**Integration:** Incorporate the **DNS Configuration** and **Heartbeat Confusion** goals here.
-**Scope:** Route Plaid webhooks to configured items, implement DuckDNS (or similar) for webhook subscription, and ensure the OpenClaw agent is woken via "pokes" rather than scheduled heartbeats.
+### M10 — Automation & connectivity
 
+**Focus:** Reliable background operations and external reachability.
 
-**M11: Advanced Agent API & Logging**
-**Focus:** Giving the agent richer data access.
-**Integration:** This addresses the **More OpenClaw Endpoints** and **Better Logging** human goals.
-**Scope:** Add server endpoints for total spend calculations, filtering by tags/dates, and searching the `notes` field. Implement structured `INFO` and `DEBUG` logging across the codebase to aid the agent in troubleshooting its own tool calls.
-
-
-**M12: Transfer Detection & Movement Suppression**
-**Focus:** Ledger hygiene (Moved up from "Deferred").
-**Scope:** Identify and flag internal transfers between household accounts so that money moved from checking to a credit card payment is not counted as new spending.
-
-
-**M13: Hestia Skill Definition**
-**Focus:** Final agent-led collaboration.
-**Scope:** Define the `SKILL.md` and operating constraints for Hestia, moving the focus to anomaly discovery and annotation hygiene.
-
-
-
-#### Milestone 14: Hardened Deployment & Local Security
-
-* **Goal:** Transition from a manual `ledger serve` to a robust, permanent home service.
-* **Scope:**
-* Provide official `systemd` service templates for Linux/Proxmox environments.
-* Containerization (Docker/LXC) for easier deployment on home servers.
-* Implementation of mTLS or OIDC for local network authentication if multiple devices need API access.
-
-
-
-#### Milestone 15: "Doctor" Auto-Remediation
-
-* **Goal:** Reduce manual intervention for common state issues.
-* **Scope:**
-* Expand `ledger doctor` to not only report but also fix common issues (e.g., missing `items.toml` entries, stale database migrations, or incorrect file permissions).
-* Automated "pre-flight" checks that run before every `sync --all` to ensure the environment is healthy.
-
-----
-# Old Milestone Entries
-
-### MX — Multi-item automation
-
-**Focus:** Automated maintenance for the new household architecture.
-
-**Goal:** Webhook-triggered and background sync flows operate correctly across
-all configured household items.
+**Goal:** Move from manually triggered sync patterns to webhook-first ingestion
+with deterministic item routing and explicit OpenClaw poke behavior.
 
 **Scope**
 
-- Route Plaid webhooks to the correct configured item
-- Remove single-item assumptions from automatic sync paths
-- Preserve idempotent item-scoped sync with overlap-safe execution
-- Ensure notifications/logging include item + owner context
+- Route Plaid webhooks to the correct configured item in a multi-item household.
+- Remove remaining single-item assumptions in automatic sync paths.
+- Clarify and codify runtime behavior:
+  - **Webhooks = primary change trigger**
+  - **Scheduled sync = fallback/recovery only**
+  - **OpenClaw poke = post-sync notification behavior**
+- Add DNS setup guidance and automation hooks (DuckDNS or equivalent) needed to
+  maintain a stable webhook URL.
 
-**Not in scope**
+**Design questions for PM/user**
 
-- Institution-specific webhook customization beyond robust routing
+- Should scheduled sync be enabled by default as a safety net, or opt-in only?
+- Which DNS provider(s) should be officially supported in docs/scripts
+  (DuckDNS only vs. provider-agnostic templates)?
+- What is the expected “poke” policy: only when net transaction delta > 0, or
+  also for account metadata and balance-only changes?
 
----
+### M11 — Advanced agent API & logging
 
-### MX — Hestia skill definition
+**Focus:** Richer machine-usable analytics plus operational observability.
 
-**Focus:** Agent-led financial collaboration on top of deterministic household
-ledger logic.
-
-**Goal:** Hestia validates and collaborates with the canonical ledger, with
-special emphasis on anomaly discovery rather than primary source-precedence mapping.
+**Goal:** Let Hestia answer common finance questions through first-class
+endpoints and make runtime troubleshooting possible from logs alone.
 
 **Scope**
 
-- Define Hestia `SKILL.md` and operating constraints for ledger API usage
-- Prompting guidance for household analytics, annotation hygiene, and owner-aware
-  summaries
-- Add an “orphaned transactions” review workflow where Hestia flags anomalies
-  missed by deterministic source-precedence rules
-- Update architecture docs to reflect Hestia as safety net, not source-precedence engine
-- Ultimately will get ported into a new github project
+- Add agent-focused API capabilities:
+  - Total spend endpoints (date-window and tag-aware)
+  - Include/exclude pending controls
+  - Server-side filtering by tags and dates
+  - Search over notes/memo fields
+- Introduce structured INFO/DEBUG logging conventions across CLI, sync, and API
+  layers with correlation IDs for request/sync tracing.
 
-**Not in scope**
+**Design questions for PM/user**
 
-- Automated budget enforcement
-- Multi-user authorization expansion
+- Should spend totals be pre-taxonomy (raw categories only) or annotation-aware
+  (agent/human tags take precedence)?
+- Should note-search be exact, substring, or full-text indexed search?
+- Should DEBUG logs include raw webhook payloads by default, or redact-by-default
+  with an explicit unsafe debug flag?
 
----
+### M12 — Transfer detection & movement suppression
+
+**Focus:** Ledger hygiene for household-level spend accuracy.
+
+**Goal:** Detect likely internal money movement so transfers do not inflate
+spending metrics.
+
+**Scope**
+
+- Identify transfer candidates across household accounts using amount/date/account
+  heuristics.
+- Mark transfer-linked rows with suppression metadata while preserving full raw
+  visibility and auditability.
+- Expose transfer status in API responses so agent summaries can include/exclude
+  movement explicitly.
+
+**Design questions for PM/user**
+
+- Should suppression default to automatic when confidence is high, or always
+  require operator confirmation?
+- How should partial matches be handled (fees, timing offsets, split transfers)?
+- Do we want a “review queue” UX now, or postpone until ambiguous cases appear
+  in production?
+
+### M13 — Hestia skill definition
+
+**Focus:** Finalize agent operating contract on top of canonical ledger logic.
+
+**Goal:** Publish Hestia `SKILL.md` guidance that reinforces deterministic data
+usage, anomaly discovery, and annotation hygiene.
+
+**Scope**
+
+- Define Hestia API usage constraints and guardrails.
+- Add prompting guidance for owner-aware summaries and anomaly review.
+- Document “orphaned transactions” and discrepancy workflows where Hestia acts
+  as a safety net, not a source-precedence override.
+- Align architecture docs with the agent role boundary.
+
+### M14 — Hardened deployment & local security
+
+**Focus:** Durable home-server operations with explicit local trust boundaries.
+
+**Goal:** Transition from ad-hoc `ledger serve` sessions to repeatable,
+production-like local deployment patterns.
+
+**Scope**
+
+- Provide official `systemd` service and timer templates for Linux/Proxmox.
+- Offer container deployment examples (Docker/LXC) for self-hosted setups.
+- Add local-network auth hardening options (mTLS or OIDC-style front-proxy
+  integration).
+
+**Design questions for PM/user**
+
+- Which deployment target is primary for support burden: `systemd` or container?
+- Is local single-user bearer auth still acceptable, or is multi-device auth now
+  a release requirement?
+
+### M15 — `doctor` auto-remediation
+
+**Focus:** Reduce manual maintenance and recovery toil.
+
+**Goal:** Expand diagnostics into safe, explicit remediation workflows.
+
+**Scope**
+
+- Add `ledger doctor --fix` style flows for common recoverable issues:
+  - Missing/incomplete `items.toml` bootstrap
+  - Stale or pending migrations
+  - File permission and path readiness problems
+- Add pre-sync health checks before `sync --all` with clear, actionable errors.
+- Preserve dry-run and audit output so operators can review planned fixes.
+
+**Design questions for PM/user**
+
+- Should auto-fix be interactive by default, or non-interactive with
+  `--yes/--force` semantics?
+- What risk level is acceptable for auto-remediation (config edits only vs.
+  database mutations)?
 
 ## Deferred / Unscheduled
-
-### systemd deployment
-
-`ledger serve` + scheduled sync timers on the OpenClaw machine remain valuable,
-but are no longer on the critical path for the M7→M11 household production
-pivot. Revisit after canonical household views (M9) are stable.
 
 ### Markdown export
 
@@ -215,13 +231,6 @@ over-budget alerts. The annotation layer may make this unnecessary for
 day-to-day use; revisit once Hestia has several months of annotation history
 to assess whether rule-based guardrails add value over conversational
 queries.
-
-### Transfer detection and internal movement suppression
-
-Once canonical accounts exist, add optional logic to identify likely internal
-transfers between household accounts so "money moved from checking to card
-payment" does not read like new spending. Defer until raw/canonical account
-identity and duplicate handling are stable.
 
 ### Operator review queue for ambiguous identity matches
 
