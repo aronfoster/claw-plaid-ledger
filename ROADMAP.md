@@ -114,43 +114,12 @@ endpoints and make runtime troubleshooting possible from logs alone.
   - Total spend endpoints (date-window and tag-aware)
   - Include/exclude pending controls
   - Server-side filtering by tags and dates
-  - Search over notes/memo fields
+  - Search substring over notes/memo fields
 - Introduce structured INFO/DEBUG logging conventions across CLI, sync, and API
   layers with correlation IDs for request/sync tracing.
+  - DEBUG logs should not include secrets (e.g. bearer tokens). If it is possible to redact secrets, include webhook payloads. Logs can contain financial and account data.
 
-**Design questions for PM/user**
-
-- Should spend totals be pre-taxonomy (raw categories only) or annotation-aware
-  (agent/human tags take precedence)?
-- Should note-search be exact, substring, or full-text indexed search?
-- Should DEBUG logs include raw webhook payloads by default, or redact-by-default
-  with an explicit unsafe debug flag?
-
-### M12 — Transfer detection & movement suppression
-
-**Focus:** Ledger hygiene for household-level spend accuracy.
-
-**Goal:** Detect likely internal money movement so transfers do not inflate
-spending metrics.
-
-**Scope**
-
-- Identify transfer candidates across household accounts using amount/date/account
-  heuristics.
-- Mark transfer-linked rows with suppression metadata while preserving full raw
-  visibility and auditability.
-- Expose transfer status in API responses so agent summaries can include/exclude
-  movement explicitly.
-
-**Design questions for PM/user**
-
-- Should suppression default to automatic when confidence is high, or always
-  require operator confirmation?
-- How should partial matches be handled (fees, timing offsets, split transfers)?
-- Do we want a “review queue” UX now, or postpone until ambiguous cases appear
-  in production?
-
-### M13 — Hestia skill definition
+### M12 — Hestia skill definition
 
 **Focus:** Finalize agent operating contract on top of canonical ledger logic.
 
@@ -159,13 +128,14 @@ usage, anomaly discovery, and annotation hygiene.
 
 **Scope**
 
+- Created as separate files for easy copying into a new OpenClaw SKILL project.
 - Define Hestia API usage constraints and guardrails.
 - Add prompting guidance for owner-aware summaries and anomaly review.
 - Document “orphaned transactions” and discrepancy workflows where Hestia acts
   as a safety net, not a source-precedence override.
 - Align architecture docs with the agent role boundary.
 
-### M14 — Hardened deployment & local security
+### M13 — Hardened deployment & local security
 
 **Focus:** Durable home-server operations with explicit local trust boundaries.
 
@@ -185,7 +155,7 @@ production-like local deployment patterns.
 - Is local single-user bearer auth still acceptable, or is multi-device auth now
   a release requirement?
 
-### M15 — `doctor` auto-remediation
+### M14 — `doctor` auto-remediation
 
 **Focus:** Reduce manual maintenance and recovery toil.
 
