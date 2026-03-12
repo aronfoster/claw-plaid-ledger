@@ -115,7 +115,7 @@ configured.
 
 ---
 
-### Task 2: Scheduled sync fallback
+### Task 2: Scheduled sync fallback ✅ DONE
 
 **Scope**
 

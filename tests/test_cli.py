@@ -213,6 +213,54 @@ def test_doctor_openclaw_notification_shows_custom_agent(
     assert "agent=Hal9000" in output
 
 
+def test_doctor_scheduled_sync_disabled_by_default(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports scheduled sync DISABLED when env var is absent."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.delenv("CLAW_SCHEDULED_SYNC_ENABLED", raising=False)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "scheduled-sync: DISABLED" in output
+    assert "CLAW_SCHEDULED_SYNC_ENABLED=true" in output
+
+
+def test_doctor_scheduled_sync_enabled_shows_config(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports scheduled sync ENABLED with fallback window."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_SCHEDULED_SYNC_ENABLED", "true")
+    monkeypatch.setenv("CLAW_SCHEDULED_SYNC_FALLBACK_HOURS", "12")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "scheduled-sync: ENABLED" in output
+    assert "12h" in output
+    assert "60min" in output
+
+
+def test_doctor_scheduled_sync_does_not_cause_nonzero_exit(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` exits zero regardless of scheduled sync configuration."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_SCHEDULED_SYNC_ENABLED", "false")
+
+    exit_code, _ = run_main(["doctor"])
+
+    assert exit_code == 0
+
+
 def test_doctor_items_toml_absent_reports_single_item_mode(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:

@@ -60,6 +60,9 @@ class OpenClawConfig:
     wake_mode: str
 
 
+_MIN_SCHEDULED_SYNC_FALLBACK_HOURS = 1
+
+
 @dataclass(frozen=True)
 class Config:
     """Application configuration values loaded from environment variables."""
@@ -78,6 +81,8 @@ class Config:
     openclaw_hooks_token: str | None = None
     openclaw_hooks_agent: str = "Hestia"
     openclaw_hooks_wake_mode: str = "now"
+    scheduled_sync_enabled: bool = False
+    scheduled_sync_fallback_hours: int = 24
 
 
 def _default_env_file() -> Path:
@@ -156,6 +161,25 @@ def load_config(
         )
         raise ConfigError(msg)
 
+    scheduled_sync_enabled = (
+        values.get("CLAW_SCHEDULED_SYNC_ENABLED", "").strip().lower() == "true"
+    )
+    fallback_hours_raw = values.get("CLAW_SCHEDULED_SYNC_FALLBACK_HOURS", "24")
+    try:
+        scheduled_sync_fallback_hours = int(fallback_hours_raw)
+    except ValueError as exc:
+        msg = (
+            f"Invalid CLAW_SCHEDULED_SYNC_FALLBACK_HOURS:"
+            f" {fallback_hours_raw!r} is not an integer"
+        )
+        raise ConfigError(msg) from exc
+    if scheduled_sync_fallback_hours < _MIN_SCHEDULED_SYNC_FALLBACK_HOURS:
+        msg = (
+            f"CLAW_SCHEDULED_SYNC_FALLBACK_HOURS must be >= 1;"
+            f" got {scheduled_sync_fallback_hours}"
+        )
+        raise ConfigError(msg)
+
     missing = _missing_required_vars(
         {
             "CLAW_PLAID_LEDGER_DB_PATH": db_path_raw,
@@ -190,4 +214,6 @@ def load_config(
         openclaw_hooks_token=openclaw_hooks_token,
         openclaw_hooks_agent=openclaw_hooks_agent,
         openclaw_hooks_wake_mode=openclaw_hooks_wake_mode,
+        scheduled_sync_enabled=scheduled_sync_enabled,
+        scheduled_sync_fallback_hours=scheduled_sync_fallback_hours,
     )

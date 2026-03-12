@@ -63,6 +63,20 @@ def _doctor_verbose_config(config: Config) -> None:
     )
 
 
+def _doctor_scheduled_sync_check(config: Config) -> None:
+    """Report scheduled sync configuration status (informational only)."""
+    if config.scheduled_sync_enabled:
+        typer.echo(
+            f"doctor: scheduled-sync: ENABLED \u2014 fallback window"
+            f" {config.scheduled_sync_fallback_hours}h, check interval 60min"
+        )
+    else:
+        typer.echo(
+            "doctor: scheduled-sync: DISABLED"
+            " (set CLAW_SCHEDULED_SYNC_ENABLED=true to enable)"
+        )
+
+
 def _doctor_openclaw_check(config: Config) -> None:
     """Report OpenClaw notification configuration status."""
     if config.openclaw_hooks_token is not None:
@@ -269,6 +283,7 @@ def doctor(
         typer.echo("doctor: CLAW_API_SECRET [FAIL] not set")
 
     _doctor_openclaw_check(config)
+    _doctor_scheduled_sync_check(config)
 
     typer.echo("doctor: all checks passed")
 
