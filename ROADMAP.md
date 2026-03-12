@@ -1,5 +1,10 @@
 # Roadmap
 
+## Human Questions / Goals
+
+### Errors Visible to OpenClaw
+When claw-plaid-ledger logs warnings or errors, make the existence of those clear to OpenClaw so OpenClaw can alert users.
+
 ## Completed Milestones
 
 ### M0 — Project skeleton
@@ -86,21 +91,15 @@ with deterministic item routing and explicit OpenClaw poke behavior.
 **Scope**
 
 - Route Plaid webhooks to the correct configured item in a multi-item household.
-- Remove remaining single-item assumptions in automatic sync paths.
+- Leave single-item fallback in automatic sync paths but prioriotize multi-item.
 - Clarify and codify runtime behavior:
   - **Webhooks = primary change trigger**
   - **Scheduled sync = fallback/recovery only**
+    - Flag to enable schedule sync as fallback (24 hours no updates)
   - **OpenClaw poke = post-sync notification behavior**
-- Add DNS setup guidance and automation hooks (DuckDNS or equivalent) needed to
+    - Poke on every transaction update for now
+- Add DNS setup guidance and automation hooks (DuckDNS) needed to
   maintain a stable webhook URL.
-
-**Design questions for PM/user**
-
-- Should scheduled sync be enabled by default as a safety net, or opt-in only?
-- Which DNS provider(s) should be officially supported in docs/scripts
-  (DuckDNS only vs. provider-agnostic templates)?
-- What is the expected “poke” policy: only when net transaction delta > 0, or
-  also for account metadata and balance-only changes?
 
 ### M11 — Advanced agent API & logging
 
