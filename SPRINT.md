@@ -24,7 +24,7 @@ hygiene without overriding canonical source-precedence rules.
 
 ---
 
-## Task 1: Create the Hestia skill file bundle
+## Task 1: Create the Hestia skill file bundle ✅ DONE
 
 ### Scope
 
