@@ -77,29 +77,24 @@ to canonical household transactions (`GET /transactions` with `view=canonical`)
 while preserving full raw access via `?view=raw`. Transaction detail responses
 include `suppressed_by` provenance when a row comes from a suppressed account.
 
+### M10 — Automation & connectivity
+
+Webhook-first multi-item routing is implemented: `POST /webhooks/plaid`
+extracts `item_id` from the payload, matches it against `items.toml`, and
+passes the correct access token to `_background_sync()`.  Unknown item IDs
+log a WARNING and fall back to the `PLAID_ACCESS_TOKEN` singleton.
+`_background_sync()` accepts optional `access_token`, `item_id`, and `owner`
+parameters while remaining fully backward-compatible with no-argument callers.
+An opt-in scheduled sync fallback loop (`CLAW_SCHEDULED_SYNC_ENABLED=true`)
+wakes every 60 minutes and syncs any item silent for longer than
+`CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` (default 24 h; minimum 1).  `doctor`
+reports the scheduled sync state.  `scripts/duckdns-update.sh` and
+`RUNBOOK.md` sections 10–11 provide a complete DuckDNS setup walkthrough and
+scheduled sync operations note.
+
 ---
 
 ## Upcoming Milestones
-
-### M10 — Automation & connectivity
-
-**Focus:** Reliable background operations and external reachability.
-
-**Goal:** Move from manually triggered sync patterns to webhook-first ingestion
-with deterministic item routing and explicit OpenClaw poke behavior.
-
-**Scope**
-
-- Route Plaid webhooks to the correct configured item in a multi-item household.
-- Leave single-item fallback in automatic sync paths but prioriotize multi-item.
-- Clarify and codify runtime behavior:
-  - **Webhooks = primary change trigger**
-  - **Scheduled sync = fallback/recovery only**
-    - Flag to enable schedule sync as fallback (24 hours no updates)
-  - **OpenClaw poke = post-sync notification behavior**
-    - Poke on every transaction update for now
-- Add DNS setup guidance and automation hooks (DuckDNS) needed to
-  maintain a stable webhook URL.
 
 ### M11 — Advanced agent API & logging
 

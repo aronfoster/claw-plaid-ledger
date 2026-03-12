@@ -130,6 +130,8 @@ The template file `.env.example` includes all supported keys. Key variables:
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; leave unset to disable notifications |
 | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake after a sync |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw |
+| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
+| `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1 |
 
 Notes:
 

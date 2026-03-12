@@ -1,4 +1,4 @@
-# Production Operations Runbook — M9
+# Production Operations Runbook — M10
 
 ## 1. Purpose and scope
 
@@ -6,7 +6,7 @@ This runbook covers the steps an operator needs to move
 `claw-plaid-ledger` from Plaid sandbox to a live production environment
 and to validate the setup before the first real sync.
 
-**In scope (M7 + M9):**
+**In scope (M7 + M9 + M10):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -16,13 +16,14 @@ and to validate the setup before the first real sync.
 - Running `ledger doctor --production-preflight` before first live sync
 - Daily item health checks via `ledger items` and `ledger sync --all` (M8)
 - Canonical-vs-raw transaction view behavior for agent/API consumers (M9)
+- Multi-item webhook routing and scheduled sync fallback (M10)
+- Stable public webhook URL setup with DuckDNS (M10)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
 
 **Explicitly out of scope (deferred):**
 
-- Multi-item webhook automation / routing changes (M10)
 - Automated background re-link / re-auth detection
 
 ---
@@ -134,7 +135,9 @@ command:
       (live credential, treat as a secret).
 - [ ] A **webhook URL** is configured if you intend to receive push
       notifications from Plaid (`POST /webhooks/plaid` on the running
-      server).
+      server).  Home servers need a stable public URL — see
+      **Section 10 — Stable webhook URL with DuckDNS** for setup
+      instructions.
 - [ ] The **webhook signing secret** is noted from the dashboard
       (Webhooks → Signing secret).  This is the `PLAID_WEBHOOK_SECRET`
       value.
@@ -433,6 +436,19 @@ Check that `sync_state rows=1` (or more for multi-item) and
 `last_synced_at` is a recent timestamp.
 
 ### Step 8 — (Optional) Start the HTTP server
+
+Before starting `ledger serve`, confirm your intent for the scheduled sync
+fallback (M10):
+
+- **Webhooks only (default):** leave `CLAW_SCHEDULED_SYNC_ENABLED` unset or
+  set to `false`.  No background loop is started.
+- **Scheduled fallback enabled:** set `CLAW_SCHEDULED_SYNC_ENABLED=true`
+  (and optionally `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS`).  The loop starts
+  automatically and runs every 60 minutes.  Run `ledger doctor` to confirm
+  the reported state before and after enabling.
+
+For a stable public webhook URL (required for Plaid to deliver events to a
+home server), see **Section 10 — Stable webhook URL with DuckDNS** below.
 
 ```bash
 ledger serve
