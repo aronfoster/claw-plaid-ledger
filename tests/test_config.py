@@ -250,3 +250,101 @@ def test_load_config_openclaw_token_empty_string_stored_as_none() -> None:
     )
 
     assert cfg.openclaw_hooks_token is None
+
+
+# ---------------------------------------------------------------------------
+# Scheduled sync configuration
+# ---------------------------------------------------------------------------
+
+_DEFAULT_FALLBACK_HOURS = 24
+_CUSTOM_FALLBACK_HOURS = 48
+_MINIMUM_FALLBACK_HOURS = 1
+
+
+def test_scheduled_sync_disabled_by_default() -> None:
+    """CLAW_SCHEDULED_SYNC_ENABLED defaults to False when absent."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.scheduled_sync_enabled is False
+
+
+def test_scheduled_sync_enabled_when_set_true() -> None:
+    """CLAW_SCHEDULED_SYNC_ENABLED=true enables the feature."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_SCHEDULED_SYNC_ENABLED": "true",
+        }
+    )
+
+    assert cfg.scheduled_sync_enabled is True
+
+
+def test_scheduled_sync_fallback_hours_defaults_to_24() -> None:
+    """CLAW_SCHEDULED_SYNC_FALLBACK_HOURS defaults to 24 when absent."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.scheduled_sync_fallback_hours == _DEFAULT_FALLBACK_HOURS
+
+
+def test_scheduled_sync_fallback_hours_read_from_env_var() -> None:
+    """CLAW_SCHEDULED_SYNC_FALLBACK_HOURS is parsed from the environment."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_SCHEDULED_SYNC_FALLBACK_HOURS": "48",
+        }
+    )
+
+    assert cfg.scheduled_sync_fallback_hours == _CUSTOM_FALLBACK_HOURS
+
+
+def test_scheduled_sync_fallback_hours_zero_rejected() -> None:
+    """CLAW_SCHEDULED_SYNC_FALLBACK_HOURS=0 raises a startup ConfigError."""
+    with pytest.raises(
+        ConfigError, match="CLAW_SCHEDULED_SYNC_FALLBACK_HOURS"
+    ):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_SCHEDULED_SYNC_FALLBACK_HOURS": "0",
+            }
+        )
+
+
+def test_scheduled_sync_fallback_hours_negative_rejected() -> None:
+    """Negative CLAW_SCHEDULED_SYNC_FALLBACK_HOURS raises ConfigError."""
+    with pytest.raises(
+        ConfigError, match="CLAW_SCHEDULED_SYNC_FALLBACK_HOURS"
+    ):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_SCHEDULED_SYNC_FALLBACK_HOURS": "-5",
+            }
+        )
+
+
+def test_scheduled_sync_fallback_hours_non_integer_rejected() -> None:
+    """Non-integer CLAW_SCHEDULED_SYNC_FALLBACK_HOURS raises ConfigError."""
+    with pytest.raises(
+        ConfigError, match="CLAW_SCHEDULED_SYNC_FALLBACK_HOURS"
+    ):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_SCHEDULED_SYNC_FALLBACK_HOURS": "not-a-number",
+            }
+        )
+
+
+def test_scheduled_sync_fallback_hours_minimum_one_accepted() -> None:
+    """CLAW_SCHEDULED_SYNC_FALLBACK_HOURS=1 is the minimum valid value."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_SCHEDULED_SYNC_FALLBACK_HOURS": "1",
+        }
+    )
+
+    assert cfg.scheduled_sync_fallback_hours == _MINIMUM_FALLBACK_HOURS

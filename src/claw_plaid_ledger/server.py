@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
 import secrets
 import sqlite3
-from datetime import UTC, datetime
-from typing import Annotated, Literal
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Annotated, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from pathlib import Path
 
 import fastapi
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
@@ -16,6 +23,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from claw_plaid_ledger.config import (
+    Config,
+    ConfigError,
     OpenClawConfig,
     load_api_secret,
     load_config,
@@ -23,18 +32,17 @@ from claw_plaid_ledger.config import (
 from claw_plaid_ledger.db import (
     AnnotationRow,
     TransactionQuery,
+    get_all_sync_state,
     get_annotation,
     get_transaction,
     query_transactions,
     upsert_annotation,
 )
-from claw_plaid_ledger.items_config import load_items_config
+from claw_plaid_ledger.items_config import ItemConfig, load_items_config
 from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
 from claw_plaid_ledger.webhook_auth import verify_plaid_signature
-
-app = fastapi.FastAPI(title="claw-plaid-ledger")
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -123,6 +131,202 @@ async def _background_sync(
             )
     except Exception:
         logger.exception("Background sync failed")
+
+
+def _load_sync_states(
+    db_path: Path,
+) -> dict[str, str | None] | None:
+    """Load sync_state rows from the DB, returning None on failure."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            return {
+                row.item_id: row.last_synced_at
+                for row in get_all_sync_state(conn)
+            }
+    except Exception:
+        logger.exception(
+            "scheduled-sync: failed to read sync_state from DB; aborting pass"
+        )
+        return None
+
+
+def _hours_since_sync(
+    last_synced_str: str | None,
+    now: datetime,
+    fallback_window: timedelta,
+) -> tuple[bool, float | None]:
+    """Return (overdue, hours_since) for a given last_synced_at string."""
+    if last_synced_str is None:
+        return True, None
+    last_synced_dt = datetime.fromisoformat(last_synced_str)
+    elapsed = now - last_synced_dt
+    hours_since = elapsed.total_seconds() / 3600
+    return elapsed >= fallback_window, hours_since
+
+
+async def _sync_item_if_overdue(
+    item_cfg: ItemConfig,
+    last_synced_str: str | None,
+    now: datetime,
+    fallback_window: timedelta,
+) -> None:
+    """Sync one configured item if it is overdue; log and skip if recent."""
+    overdue, hours_since = _hours_since_sync(
+        last_synced_str, now, fallback_window
+    )
+    hours_desc = f"{hours_since:.1f}h" if hours_since is not None else "never"
+    if not overdue:
+        logger.debug(
+            "scheduled-sync: item %s is recent (%s since last sync); skipping",
+            item_cfg.id,
+            hours_desc,
+        )
+        return
+    logger.info(
+        "scheduled-sync: item %s overdue (%s since last sync);"
+        " triggering fallback sync",
+        item_cfg.id,
+        hours_desc,
+    )
+    token = os.environ.get(item_cfg.access_token_env)
+    if not token:
+        logger.error(
+            "scheduled-sync: item %s: env var %s not set; skipping",
+            item_cfg.id,
+            item_cfg.access_token_env,
+        )
+        return
+    await _background_sync(
+        access_token=token,
+        item_id=item_cfg.id,
+        owner=item_cfg.owner,
+    )
+
+
+async def _check_multi_item(
+    items: list[ItemConfig],
+    sync_states: dict[str, str | None],
+    now: datetime,
+    fallback_window: timedelta,
+) -> None:
+    """Check and sync overdue items from a multi-item items.toml list."""
+    for item_cfg in items:
+        try:
+            await _sync_item_if_overdue(
+                item_cfg,
+                sync_states.get(item_cfg.id),
+                now,
+                fallback_window,
+            )
+        except Exception:
+            logger.exception(
+                "scheduled-sync: error checking item %s; continuing",
+                item_cfg.id,
+            )
+
+
+async def _check_and_sync_overdue_items(config: Config) -> None:
+    """
+    Sync any configured item whose last sync is older than the fallback window.
+
+    Iterates items from items.toml (single-item env-var fallback when absent).
+    Items overdue or never synced get a _background_sync() call.  One item
+    failing does not prevent the others from being checked.
+    """
+    fallback_window = timedelta(hours=config.scheduled_sync_fallback_hours)
+    now = datetime.now(tz=UTC)
+
+    try:
+        items = load_items_config()
+    except (OSError, ValueError):
+        logger.warning(
+            "scheduled-sync: could not load items.toml;"
+            " using single-item fallback"
+        )
+        items = []
+
+    sync_states = _load_sync_states(config.db_path)
+    if sync_states is None:
+        return
+
+    if items:
+        await _check_multi_item(items, sync_states, now, fallback_window)
+    else:
+        # Single-item fallback: check the configured default item_id.
+        # _background_sync() with no args loads PLAID_ACCESS_TOKEN from config.
+        try:
+            overdue, hours_since = _hours_since_sync(
+                sync_states.get(config.item_id), now, fallback_window
+            )
+            hours_desc = (
+                f"{hours_since:.1f}h" if hours_since is not None else "never"
+            )
+            if overdue:
+                logger.info(
+                    "scheduled-sync: item %s overdue (%s since last sync);"
+                    " triggering fallback sync",
+                    config.item_id,
+                    hours_desc,
+                )
+                await _background_sync()
+            else:
+                logger.debug(
+                    "scheduled-sync: item %s is recent"
+                    " (%s since last sync); skipping",
+                    config.item_id,
+                    hours_desc,
+                )
+        except Exception:
+            logger.exception(
+                "scheduled-sync: error checking single-item fallback;"
+                " aborting pass"
+            )
+
+
+# Poll interval for the scheduled sync loop.  This is the check frequency,
+# not the fallback window (configured via CLAW_SCHEDULED_SYNC_FALLBACK_HOURS).
+# 60 minutes is a reasonable balance between responsiveness and overhead.
+_SCHEDULED_SYNC_POLL_INTERVAL_SECONDS = 3600
+
+
+async def _scheduled_sync_loop(config: Config) -> None:
+    """Run forever, waking every 60 minutes to check for overdue items."""
+    while True:
+        await asyncio.sleep(_SCHEDULED_SYNC_POLL_INTERVAL_SECONDS)
+        await _check_and_sync_overdue_items(config)
+
+
+@asynccontextmanager
+async def lifespan(
+    _app: fastapi.FastAPI,
+) -> AsyncGenerator[None, None]:
+    """Start and cleanly stop the scheduled sync background task."""
+    task: asyncio.Task[None] | None = None
+    try:
+        cfg = load_config()
+    except ConfigError:
+        logger.warning(
+            "lifespan: could not load config; scheduled sync will not start"
+        )
+        cfg = None
+
+    if cfg is not None and cfg.scheduled_sync_enabled:
+        logger.info(
+            "lifespan: starting scheduled sync loop (fallback_hours=%d)",
+            cfg.scheduled_sync_fallback_hours,
+        )
+        task = asyncio.create_task(_scheduled_sync_loop(cfg))
+
+    yield
+
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        logger.info("lifespan: scheduled sync loop stopped")
+
+
+app = fastapi.FastAPI(title="claw-plaid-ledger", lifespan=lifespan)
 
 
 @app.get("/health")
