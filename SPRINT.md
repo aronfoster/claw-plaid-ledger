@@ -277,7 +277,7 @@ on `GET /transactions/{id}`.
 
 ---
 
-### Task 4: `ledger overlaps` command
+### Task 4: `ledger overlaps` command ✅ DONE
 
 **Scope**
 
