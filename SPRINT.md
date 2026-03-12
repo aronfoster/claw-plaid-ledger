@@ -317,7 +317,7 @@ INFO level. Quality over quantity.
 
 ---
 
-## Task 4: Sprint closeout, docs, and acceptance validation
+## Task 4: Sprint closeout, docs, and acceptance validation ✅ DONE
 
 ### Scope
 
@@ -374,3 +374,30 @@ all acceptance criteria.
 - Per-agent token scoping.
 - Markdown export.
 - M12 Hestia skill definition (next milestone).
+
+---
+
+## Sprint 12 closeout ✅ DONE
+
+### What shipped
+
+- `GET /spend` endpoint is live with required date params, canonical/raw view
+  support, owner filtering, pending controls, and AND-semantics tag filters.
+- `GET /transactions` now supports AND-semantics `tags` filtering and
+  `search_notes=true` to extend keyword matching into annotation notes while
+  preserving no-new-params behavior.
+- Structured logging now carries correlation IDs across request and sync flows:
+  request middleware emits `request_id`, sync paths emit `sync_run_id`, and
+  API responses include `X-Request-Id`.
+- Secret-safe logging guardrails are in place, including webhook payload
+  redaction before DEBUG-level logging.
+- Documentation has been updated across architecture, runbook, roadmap, and
+  readme to reflect M11 behavior and operator workflows.
+
+### Deferred follow-ups (explicit)
+
+- Parallel multi-institution sync remains deferred.
+- Automatic `apply-precedence` on every sync remains deferred.
+- Per-agent token scoping remains deferred.
+- Markdown export remains deferred.
+- M12 Hestia skill definition remains deferred to the next milestone.

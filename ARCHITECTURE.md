@@ -2,6 +2,24 @@
 
 ## Current milestone focus
 
+M11 (advanced agent API & logging) is complete. Sprint 12 adds a spend
+summary endpoint, richer transaction filtering, and correlation-ID logging
+with secret-safe redaction.
+
+Sprint 12 added:
+
+- `GET /spend` — aggregate spend totals with required date window, optional
+  owner filter, AND-semantics tag filters, pending include/exclude control,
+  and `view=canonical|raw` support
+- `GET /transactions` filter enhancements — optional AND-semantics `tags` and
+  `search_notes=true` to include annotation notes in keyword search
+- Request correlation middleware — per-request `request_id` appears in log
+  lines and response header `X-Request-Id`
+- Sync correlation IDs — each sync run carries `sync_run_id`, including CLI
+  syncs, scheduled syncs, and webhook-triggered background syncs
+- Secret-safe debug logging — webhook payload logging uses redaction; bearer
+  tokens, Plaid secrets, and access tokens are never logged
+
 M10 (automation & connectivity) is complete. Sprint 11 adds webhook-first
 multi-item routing, an opt-in scheduled sync fallback, and DuckDNS setup
 guidance so operators can maintain a stable public webhook URL.
@@ -314,7 +332,8 @@ All endpoints are served by `ledger serve`.
 |---|---|---|---|
 | `GET` | `/health` | None | Service liveness check; returns `{"status": "ok"}` |
 | `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
-| `GET` | `/transactions` | Bearer | Paginated, filtered transaction list |
+| `GET` | `/transactions` | Bearer | Paginated, filtered transaction list (supports tags and optional note search) |
+| `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window with optional owner/tag filters |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
 | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
@@ -359,7 +378,9 @@ Returns a paginated, filtered list of transactions.
 | `pending` | bool | — | Filter: `true` returns only pending; `false` returns only posted |
 | `min_amount` | float | — | Filter: amount ≥ min_amount (inclusive). Plaid sign: positive = debit |
 | `max_amount` | float | — | Filter: amount ≤ max_amount (inclusive) |
-| `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name` |
+| `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name`; also matches `annotations.note` when `search_notes=true` |
+| `tags` | list[string] | `[]` | Filter: transaction annotation must include **all** listed tags (AND semantics); pass `?tags=a&tags=b` |
+| `search_notes` | bool | `false` | If true and `keyword` is set, include annotation `note` in keyword search |
 | `limit` | int | `100` | Maximum rows to return; max `500`; `limit > 500` returns HTTP 422 |
 | `offset` | int | `0` | Number of matching rows to skip (for pagination) |
 | `view` | `canonical` \\| `raw` | `canonical` | `canonical` excludes suppressed-account rows via source precedence; `raw` returns all rows |
@@ -389,6 +410,41 @@ Returns a paginated, filtered list of transactions.
 - `total` is the full matching count before `limit`/`offset` are applied.
 - Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
 - `date` is `COALESCE(posted_date, authorized_date)`.
+
+### `GET /spend`
+
+Returns aggregate spend totals for a required date window.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `start_date` | `YYYY-MM-DD` | required | Window start (inclusive). Missing or invalid values return HTTP 422. |
+| `end_date` | `YYYY-MM-DD` | required | Window end (inclusive). Missing or invalid values return HTTP 422. |
+| `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
+| `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
+| `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
+| `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
+
+**Response** (HTTP 200):
+
+```json
+{
+  "start_date": "2025-01-01",
+  "end_date": "2025-01-31",
+  "total_spend": 1234.56,
+  "transaction_count": 42,
+  "includes_pending": false,
+  "filters": {
+    "owner": "alice",
+    "tags": ["groceries"]
+  }
+}
+```
+
+- `total_spend` is the arithmetic sum of `amount` (Plaid sign convention is preserved).
+- `transaction_count` is the number of matching rows before aggregation.
+- Empty windows return zeros (`total_spend=0`, `transaction_count=0`) not `null`.
 
 ### `GET /transactions/{transaction_id}`
 
@@ -703,3 +759,28 @@ A change is ready to merge only when all required checks pass:
 2. `uv run --locked ruff check .`
 3. `uv run --locked mypy .`
 4. `uv run --locked pytest`
+
+## Logging conventions
+
+The runtime uses a correlation-aware log format:
+
+```
+%(asctime)s %(levelname)s %(name)s [%(correlation_id)s]: %(message)s
+```
+
+Correlation behavior:
+
+- Request scope: middleware generates `request_id` (`req-xxxxxxxx`), stores it
+  in request context, logs request start/end, and returns `X-Request-Id` on
+  every response.
+- Sync scope: each sync run emits a `sync_run_id` (`sync-xxxxxxxx`) propagated
+  through sync-layer log lines (CLI, scheduled loop, webhook-triggered sync).
+- Outside request/sync scope, `correlation_id` renders as `-`.
+
+Secret-redaction policy:
+
+- Never log bearer tokens, Plaid secrets, or Plaid access tokens at any level.
+- DEBUG webhook payload logs must be redacted first (remove token/secret/password
+  fields and sensitive headers) before emission.
+- Transaction/account data and sync cursors may be logged at DEBUG/INFO as needed
+  for operations.
