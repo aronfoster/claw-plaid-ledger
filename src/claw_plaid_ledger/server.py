@@ -350,13 +350,24 @@ class TransactionListQuery(BaseModel):
     view: Literal["canonical", "raw"] = "canonical"
     limit: int = Query(default=100, le=500)
     offset: int = 0
+    # bool | None avoids FBT001/FBT002; None is treated as False (default:
+    # keyword searches do not include annotation notes unless opted in).
+    search_notes: bool | None = None
 
 
 @app.get("/transactions", dependencies=[Depends(require_bearer_token)])
 def list_transactions(
     params: Annotated[TransactionListQuery, Depends()],
+    tags: Annotated[list[str] | None, Query()] = None,
 ) -> dict[str, object]:
-    """List transactions with optional filtering and pagination."""
+    """
+    List transactions with optional filtering and pagination.
+
+    Pass ``tags`` multiple times to require all listed tags (AND semantics).
+    Set ``search_notes=true`` together with ``keyword`` to also match the
+    annotation note field in addition to ``name`` and ``merchant_name``.
+    """
+    resolved_tags: tuple[str, ...] = tuple(tags) if tags else ()
     config = load_config()
     query = TransactionQuery(
         start_date=params.start_date,
@@ -369,6 +380,8 @@ def list_transactions(
         canonical_only=params.view == "canonical",
         limit=params.limit,
         offset=params.offset,
+        tags=resolved_tags,
+        search_notes=params.search_notes is True,
     )
     with sqlite3.connect(config.db_path) as connection:
         rows, total = query_transactions(connection, query)

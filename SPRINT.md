@@ -114,7 +114,7 @@ GET /spend
 
 ---
 
-## Task 2: Enhanced transaction filtering — tags and annotation notes
+## Task 2: Enhanced transaction filtering — tags and annotation notes ✅ DONE
 
 ### Scope
 
