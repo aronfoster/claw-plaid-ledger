@@ -194,7 +194,7 @@ layer that makes suppression durable and auditable.
 
 ---
 
-### Task 3: Canonical query layer and API defaults
+### Task 3: Canonical query layer and API defaults ✅ DONE
 
 **Scope**
 

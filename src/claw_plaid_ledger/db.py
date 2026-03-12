@@ -329,6 +329,7 @@ class TransactionQuery:
     min_amount: float | None = None
     max_amount: float | None = None
     keyword: str | None = None
+    canonical_only: bool = True
     limit: int = 100
     offset: int = 0
 
@@ -359,16 +360,26 @@ def query_transactions(
         keyword_like,
     )
 
+    from_clause = "FROM transactions t "
+    canonical_filter = ""
+    effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
+    if query.canonical_only:
+        from_clause += (
+            "JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
+        )
+        canonical_filter = "AND a.canonical_account_id IS NULL "
+
     total_row = connection.execute(
         (
-            "SELECT COUNT(*) FROM transactions "
-            "WHERE (? IS NULL OR COALESCE(posted_date, authorized_date) >= ?) "
-            "AND (? IS NULL OR COALESCE(posted_date, authorized_date) <= ?) "
-            "AND (? IS NULL OR plaid_account_id = ?) "
-            "AND (? IS NULL OR pending = ?) "
-            "AND (? IS NULL OR amount >= ?) "
-            "AND (? IS NULL OR amount <= ?) "
-            "AND (? IS NULL OR (name LIKE ? OR merchant_name LIKE ?))"
+            f"SELECT COUNT(*) {from_clause}"
+            f"WHERE (? IS NULL OR {effective_date_sql} >= ?) "
+            f"AND (? IS NULL OR {effective_date_sql} <= ?) "
+            "AND (? IS NULL OR t.plaid_account_id = ?) "
+            "AND (? IS NULL OR t.pending = ?) "
+            "AND (? IS NULL OR t.amount >= ?) "
+            "AND (? IS NULL OR t.amount <= ?) "
+            "AND (? IS NULL OR (t.name LIKE ? OR t.merchant_name LIKE ?)) "
+            f"{canonical_filter}"
         ),
         params,
     ).fetchone()
@@ -376,17 +387,18 @@ def query_transactions(
 
     rows = connection.execute(
         (
-            "SELECT plaid_transaction_id, plaid_account_id, amount, "
-            "iso_currency_code, name, merchant_name, pending, "
-            "COALESCE(posted_date, authorized_date) AS effective_date "
-            "FROM transactions "
-            "WHERE (? IS NULL OR COALESCE(posted_date, authorized_date) >= ?) "
-            "AND (? IS NULL OR COALESCE(posted_date, authorized_date) <= ?) "
-            "AND (? IS NULL OR plaid_account_id = ?) "
-            "AND (? IS NULL OR pending = ?) "
-            "AND (? IS NULL OR amount >= ?) "
-            "AND (? IS NULL OR amount <= ?) "
-            "AND (? IS NULL OR (name LIKE ? OR merchant_name LIKE ?)) "
+            f"SELECT t.plaid_transaction_id, t.plaid_account_id, t.amount, "
+            "t.iso_currency_code, t.name, t.merchant_name, t.pending, "
+            f"{effective_date_sql} AS effective_date "
+            f"{from_clause}"
+            f"WHERE (? IS NULL OR {effective_date_sql} >= ?) "
+            f"AND (? IS NULL OR {effective_date_sql} <= ?) "
+            "AND (? IS NULL OR t.plaid_account_id = ?) "
+            "AND (? IS NULL OR t.pending = ?) "
+            "AND (? IS NULL OR t.amount >= ?) "
+            "AND (? IS NULL OR t.amount <= ?) "
+            "AND (? IS NULL OR (t.name LIKE ? OR t.merchant_name LIKE ?)) "
+            f"{canonical_filter}"
             "ORDER BY effective_date DESC, plaid_transaction_id ASC "
             "LIMIT ? OFFSET ?"
         ),
@@ -417,11 +429,13 @@ def get_transaction(
     """Return one transaction by Plaid transaction id, if present."""
     row = connection.execute(
         (
-            "SELECT plaid_transaction_id, plaid_account_id, amount, "
-            "iso_currency_code, name, merchant_name, pending, "
+            "SELECT t.plaid_transaction_id, t.plaid_account_id, t.amount, "
+            "t.iso_currency_code, t.name, t.merchant_name, t.pending, "
             "COALESCE(posted_date, authorized_date) AS effective_date, "
-            "raw_json "
-            "FROM transactions WHERE plaid_transaction_id = ?"
+            "raw_json, a.canonical_account_id "
+            "FROM transactions t "
+            "LEFT JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
+            "WHERE t.plaid_transaction_id = ?"
         ),
         (plaid_transaction_id,),
     ).fetchone()
@@ -437,6 +451,7 @@ def get_transaction(
         "pending": bool(row[6]),
         "date": str(row[7]) if row[7] is not None else None,
         "raw_json": str(row[8]) if row[8] is not None else None,
+        "suppressed_by": str(row[9]) if row[9] is not None else None,
     }
 
 

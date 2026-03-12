@@ -8,7 +8,7 @@ import os
 import secrets
 import sqlite3
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import fastapi
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
@@ -111,6 +111,7 @@ class TransactionListQuery(BaseModel):
     min_amount: float | None = None
     max_amount: float | None = None
     keyword: str | None = None
+    view: Literal["canonical", "raw"] = "canonical"
     limit: int = Query(default=100, le=500)
     offset: int = 0
 
@@ -129,6 +130,7 @@ def list_transactions(
         min_amount=params.min_amount,
         max_amount=params.max_amount,
         keyword=params.keyword,
+        canonical_only=params.view == "canonical",
         limit=params.limit,
         offset=params.offset,
     )
