@@ -2,6 +2,35 @@
 
 ## Current milestone focus
 
+M10 (automation & connectivity) is complete. Sprint 11 adds webhook-first
+multi-item routing, an opt-in scheduled sync fallback, and DuckDNS setup
+guidance so operators can maintain a stable public webhook URL.
+
+Sprint 11 added:
+
+- Multi-item webhook routing — `POST /webhooks/plaid` now extracts `item_id`
+  from the payload, looks up the matching `ItemConfig` in `items.toml`, and
+  passes the correct access token to `_background_sync()`.  Unknown item IDs
+  log a WARNING and fall back to the `PLAID_ACCESS_TOKEN` single-item path.
+- `_background_sync()` refactored — optional `access_token`, `item_id`, and
+  `owner` parameters allow per-item context injection; calling with no
+  arguments preserves the existing single-item behavior.
+- `CLAW_SCHEDULED_SYNC_ENABLED` / `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` —
+  opt-in background loop that syncs items silent for longer than the fallback
+  window (default 24 h); validated at startup; minimum value is 1.
+- FastAPI `lifespan` context manager — starts `_scheduled_sync_loop()` on
+  server startup when the scheduled sync is enabled; cancels it cleanly on
+  shutdown.
+- `_scheduled_sync_loop()` / `_check_and_sync_overdue_items()` /
+  `_sync_item_if_overdue()` — helpers that check `sync_state.last_synced_at`
+  per item and call `_background_sync()` for overdue items.
+- `doctor` scheduled-sync report — new entry reports ENABLED/DISABLED state
+  and configuration.
+- `scripts/duckdns-update.sh` — POSIX shell script for keeping a DuckDNS
+  dynamic DNS record current; suitable for cron or a systemd timer.
+- `RUNBOOK.md` sections 10 and 11 — DuckDNS setup walkthrough and scheduled
+  sync operations note.
+
 M9 (canonical household views / source precedence) is complete. Sprint 10
 adds config-driven suppression metadata (`suppressed_accounts`),
 `ledger apply-precedence`, `ledger overlaps`, and a canonical transaction view
@@ -106,7 +135,11 @@ Sprint 5 added:
   for live-readiness validation
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
-- HTTP server (`server.py`) — FastAPI application served via uvicorn
+- HTTP server (`server.py`) — FastAPI application served via uvicorn; includes
+  multi-item webhook routing, `_background_sync()` with per-item context
+  injection, the `lifespan` context manager, and the optional scheduled sync
+  background loop (`_scheduled_sync_loop`, `_check_and_sync_overdue_items`,
+  `_sync_item_if_overdue`)
 - OpenClaw notifier (`notifier.py`) — sends `POST /hooks/agent` to wake Hestia after a non-empty sync
 
 ## Data flow
@@ -122,6 +155,23 @@ items.toml ─┐
             │                    -> [bank-bob]   run_sync -> SQLite
             │                    -> [card-alice] run_sync -> SQLite
 PLAID_ENV  ─┘
+
+Webhook-first ingestion (M10):
+
+POST /webhooks/plaid (SYNC_UPDATES_AVAILABLE)
+  └─ extract item_id from payload
+       ├─ item_id found in items.toml ──> _background_sync(token, item_id, owner)
+       ├─ item_id not in items.toml ────> WARNING + _background_sync() [legacy]
+       └─ no item_id / no items.toml ──> _background_sync() [legacy]
+
+Scheduled sync fallback (M10, opt-in):
+
+_scheduled_sync_loop (every 60 min)
+  └─ _check_and_sync_overdue_items
+       ├─ items.toml present ──> per-item last_synced_at check
+       │                             overdue → _background_sync(token, item_id, owner)
+       │                             recent  → skip (DEBUG log)
+       └─ no items.toml ──────> single-item PLAID_ACCESS_TOKEN fallback
 ```
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
@@ -278,9 +328,22 @@ Returns `{"status": "ok"}`. No authentication required.
 
 Receives Plaid webhook events. Requires bearer token auth and Plaid
 HMAC-SHA256 signature verification (`Plaid-Verification` header). Returns 400
-on invalid signature. On `SYNC_UPDATES_AVAILABLE` enqueues a background sync
-via `run_sync` and returns 200 immediately. Unrecognised webhook types are
-acknowledged with 200 and logged at debug level.
+on invalid signature.
+
+On `SYNC_UPDATES_AVAILABLE`:
+
+1. Extracts `item_id` from the payload.
+2. If `item_id` is present and matches a configured `ItemConfig` in
+   `items.toml`, enqueues `_background_sync()` with that item's access token,
+   item ID, and owner.
+3. If `item_id` is present but not found in `items.toml`, logs a WARNING and
+   falls back to the `PLAID_ACCESS_TOKEN` single-item sync.
+4. If `item_id` is absent or `items.toml` is not loadable, falls back to the
+   single-item sync silently.
+
+Returns 200 immediately; the sync runs in the background.
+Unrecognised webhook types are acknowledged with 200 and logged at warning
+level.
 
 ### `GET /transactions`
 
@@ -566,6 +629,8 @@ Key variables:
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
 | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
+| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
+| `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1; values ≤ 0 cause a startup error |
 
 `items.toml` is a separate configuration file (not an environment variable)
 used by `sync --all` and `sync --item`. Default path:
@@ -597,9 +662,13 @@ src/claw_plaid_ledger/
   plaid_models.py
   preflight.py      # production preflight check logic (M7)
   schema.sql
-  server.py
+  server.py         # webhook routing, scheduled sync loop (M10)
   sync_engine.py
   webhook_auth.py
+
+scripts/
+  duckdns-update.sh # DuckDNS IP-update script for cron/systemd (M10)
+  install-hooks.sh
 
 tests/
   test_cli.py
@@ -621,7 +690,7 @@ AGENTS.md
 ARCHITECTURE.md
 BUGS.md
 ROADMAP.md
-RUNBOOK.md          # production operations runbook (M7+)
+RUNBOOK.md          # production operations runbook (M7+, M10)
 SPRINT.md
 VISION.md
 ```

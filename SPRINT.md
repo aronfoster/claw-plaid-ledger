@@ -277,7 +277,7 @@ URL for Plaid to deliver webhooks. Add practical DuckDNS setup instructions to
 
 ---
 
-### Task 4: Sprint closeout, docs, and acceptance validation
+### Task 4: Sprint closeout, docs, and acceptance validation ✅ DONE
 
 **Scope**
 
@@ -337,3 +337,38 @@ acceptance criteria.
 - Transfer detection and internal movement suppression (M12).
 - Per-agent token scoping.
 - Richer operator review queue UX.
+
+---
+
+## Sprint 11 closeout ✅ DONE
+
+### What shipped
+
+- **Task 1 — Multi-item webhook routing:** `POST /webhooks/plaid` now extracts
+  `item_id` from the Plaid payload, resolves the matching `ItemConfig` from
+  `items.toml`, and passes the correct access token to `_background_sync()`.
+  Unknown item IDs log a WARNING and fall back to the `PLAID_ACCESS_TOKEN`
+  single-item path; callers with no `items.toml` are fully backward-compatible.
+
+- **Task 2 — Scheduled sync fallback:** Opt-in background loop controlled by
+  `CLAW_SCHEDULED_SYNC_ENABLED` (default `false`) and
+  `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` (default `24`, minimum `1`).  The loop
+  wakes every 60 minutes, checks `sync_state.last_synced_at` per item, and
+  calls `_background_sync()` for overdue items.  One item failing does not
+  block others.  FastAPI `lifespan` context manager starts and stops the task
+  cleanly.  `doctor` reports enabled/disabled state.
+
+- **Task 3 — DuckDNS webhook URL setup:** `scripts/duckdns-update.sh` POSIX
+  shell script committed and made executable.  `RUNBOOK.md` sections 10 and 11
+  cover DuckDNS setup end-to-end and the scheduled sync fallback operations
+  note.
+
+- **Task 4 — Sprint closeout, docs, and acceptance validation:**
+  `ARCHITECTURE.md`, `RUNBOOK.md`, `ROADMAP.md`, and `README.md` updated to
+  reflect M10 implementation.  M10 moved from Upcoming to Completed in
+  `ROADMAP.md`.  Quality gate passed.
+
+### Explicitly deferred follow-ups
+
+The items listed in "Explicitly deferred (remain out of scope in Sprint 11)"
+above carry forward unchanged into the Sprint 12 / M11 backlog.
