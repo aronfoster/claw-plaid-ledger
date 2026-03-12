@@ -218,7 +218,7 @@ values ≤ 0 with a startup error.
 
 ---
 
-### Task 3: DuckDNS webhook URL setup guidance
+### Task 3: DuckDNS webhook URL setup guidance ✅ DONE
 
 **Scope**
 

@@ -589,3 +589,131 @@ from recent weeks are missing.
 5. If sandbox data was written to your production DB, the safest
    recovery is to restore from a backup taken before the contamination,
    then re-sync with correct production credentials.
+
+---
+
+## 10. Stable webhook URL with DuckDNS
+
+### 10.1 Why a stable public URL is needed
+
+Plaid requires a pre-registered webhook URL in the dashboard before it
+will deliver events.  Home internet connections typically have a
+dynamic public IP address that changes whenever the router reconnects,
+which would break the registered URL.  DuckDNS provides a free dynamic
+DNS service that maps a stable subdomain (`<subdomain>.duckdns.org`) to
+your current public IP, so the URL you register with Plaid never
+changes even when your IP does.
+
+### 10.2 Account and subdomain registration
+
+1. Visit [duckdns.org](https://www.duckdns.org) and sign in with a
+   GitHub, Google, or Twitter account.
+2. In the **domains** section, type a subdomain name of your choice
+   (e.g. `myledger`) and click **add domain**.
+3. Note the full hostname: `myledger.duckdns.org`.
+
+### 10.3 Finding your DuckDNS token
+
+After signing in, your token is displayed at the top of the DuckDNS
+dashboard page.  It looks like a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+Keep it secret — it grants write access to all your DuckDNS subdomains.
+
+### 10.4 Updating the DNS record automatically
+
+Use the included script to keep the DuckDNS record current:
+
+```bash
+DUCKDNS_TOKEN=<your-token> DUCKDNS_DOMAIN=myledger \
+    ./scripts/duckdns-update.sh
+```
+
+For automatic updates, add a cron entry (edit with `crontab -e`):
+
+```
+*/5 * * * * DUCKDNS_TOKEN=<your-token> DUCKDNS_DOMAIN=myledger /path/to/scripts/duckdns-update.sh >> /var/log/duckdns.log 2>&1
+```
+
+A systemd timer is an equivalent alternative for systemd-based hosts.
+
+### 10.5 Pointing Plaid to your webhook URL
+
+Register the following URL in the Plaid dashboard
+(Developers → Webhooks → Add webhook URL):
+
+```
+https://myledger.duckdns.org/webhooks/plaid
+```
+
+Replace `myledger` with your chosen subdomain.
+
+### 10.6 Router and firewall port-forward requirements
+
+`ledger serve` listens on plain HTTP internally (default port 8000,
+configurable via `CLAW_SERVER_PORT`).  For Plaid to reach it you need:
+
+1. **Port-forward** on your router: external TCP port 443 → internal
+   IP of the server host, port `CLAW_SERVER_PORT` (or the port your
+   reverse proxy listens on internally).
+2. A **reverse proxy** (nginx, Caddy, or similar) to terminate TLS and
+   forward requests to `ledger serve`.  Plaid requires HTTPS; the
+   server itself speaks plain HTTP.
+
+### 10.7 TLS termination
+
+`ledger serve` does not handle TLS directly.  Recommended setup:
+
+- **Caddy** — automatic HTTPS with Let's Encrypt, minimal config:
+
+  ```
+  myledger.duckdns.org {
+      reverse_proxy localhost:8000
+  }
+  ```
+
+- **nginx** — obtain a certificate with Certbot, then proxy:
+
+  ```nginx
+  server {
+      listen 443 ssl;
+      server_name myledger.duckdns.org;
+      # ... ssl_certificate / ssl_certificate_key lines ...
+      location / {
+          proxy_pass http://127.0.0.1:8000;
+      }
+  }
+  ```
+
+### 10.8 Testing the webhook URL before registering with Plaid
+
+Verify the full HTTPS path is reachable before entering it in the
+dashboard:
+
+```bash
+curl -v https://myledger.duckdns.org/health
+```
+
+Expected response: `{"status": "ok"}` with HTTP 200.  If this fails,
+check your port-forward, TLS configuration, and that `ledger serve` is
+running.
+
+---
+
+## 11. Scheduled sync fallback
+
+The scheduled sync fallback is an optional background loop (M10) that
+automatically triggers a sync for any configured item that has not been
+synced within a configurable window (default 24 hours).  It is the
+safety net for missed or delayed webhooks.
+
+Enable it by setting `CLAW_SCHEDULED_SYNC_ENABLED=true` in your `.env`
+before starting `ledger serve`.  The fallback window is controlled by
+`CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` (default `24`; minimum `1`).
+
+Run `ledger doctor` to confirm the current state:
+
+```
+scheduled-sync: ENABLED — fallback window 24h, check interval 60min
+```
+
+The loop is cancelled cleanly on server shutdown; no data is lost if
+the server restarts mid-check.
