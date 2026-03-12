@@ -1,4 +1,4 @@
-# Production Operations Runbook — M8
+# Production Operations Runbook — M9
 
 ## 1. Purpose and scope
 
@@ -6,20 +6,22 @@ This runbook covers the steps an operator needs to move
 `claw-plaid-ledger` from Plaid sandbox to a live production environment
 and to validate the setup before the first real sync.
 
-**In scope (M7 + M8):**
+**In scope (M7 + M9):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
+- Household source precedence setup (`suppressed_accounts`,
+  `ledger apply-precedence`, `ledger overlaps`) (M9)
 - Configuring and isolating the production environment
 - Running `ledger doctor --production-preflight` before first live sync
 - Daily item health checks via `ledger items` and `ledger sync --all` (M8)
+- Canonical-vs-raw transaction view behavior for agent/API consumers (M9)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
 
 **Explicitly out of scope (deferred):**
 
-- Canonical overlap suppression across institutions (M9)
 - Multi-item webhook automation / routing changes (M10)
 - Automated background re-link / re-auth detection
 
@@ -64,6 +66,56 @@ stop the other items from syncing.
 
 Single-item mode (`ledger sync` with `PLAID_ACCESS_TOKEN`) remains valid
 for simple single-institution setups.
+
+
+
+### Household source precedence setup (M9)
+
+Use this flow after all household items are linked and synced at least once.
+
+1. Sync all configured items so every account exists in SQLite:
+
+```bash
+ledger sync --all
+```
+
+2. Add suppression mappings to `~/.config/claw-plaid-ledger/items.toml`:
+
+```toml
+[[items]]
+id = "bank-alice"
+access_token_env = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+owner = "alice"
+
+  [[items.suppressed_accounts]]
+  plaid_account_id = "plaid_acct_shared_alice_view"
+  canonical_account_id = "plaid_acct_shared_bob_view"
+  canonical_from_item = "card-bob"
+  note = "Shared card: bob's institution is canonical"
+```
+
+3. Apply mappings to the DB:
+
+```bash
+ledger apply-precedence
+```
+
+4. Verify status and look for missing overlap mappings:
+
+```bash
+ledger overlaps
+```
+
+Expected operator outcome:
+- configured suppressions show `IN DB` once synced and applied
+- not-yet-synced mappings show `NOT YET SYNCED`
+- stale DB mappings show `MISMATCH` until `apply-precedence` is re-run
+
+Canonical behavior reminder:
+- `GET /transactions` defaults to canonical household view
+- `GET /transactions?view=raw` returns all rows, including suppressed accounts
+- `GET /transactions/{id}` includes `suppressed_by` provenance for suppressed
+  raw transactions
 
 ---
 
@@ -443,9 +495,22 @@ ledger doctor --production-preflight
 
 ---
 
-## 8. Incident appendix
+## 8. Command reference (operations)
 
-### 8.1 Invalid or expired access token
+| Command | When to use it |
+|---|---|
+| `ledger items` | Quick daily health check (token presence, account counts, last sync) |
+| `ledger sync --all` | Standard household ingestion run across all configured items |
+| `ledger apply-precedence` | Persist `suppressed_accounts` source-precedence mappings into SQLite |
+| `ledger overlaps` | Verify suppression status and discover potential unconfirmed overlaps |
+| `ledger doctor --production-preflight` | Validate production-readiness config without external calls |
+| `ledger doctor` | Validate local DB/config health after syncs and changes |
+
+---
+
+## 9. Incident appendix
+
+### 9.1 Invalid or expired access token
 
 **Symptoms:** Sync fails with a Plaid error referencing
 `ITEM_LOGIN_REQUIRED` or `INVALID_ACCESS_TOKEN`.
@@ -463,7 +528,7 @@ ledger doctor --production-preflight
 4. Update the env var with the new token value.
 5. Re-run `ledger doctor --production-preflight`, then `ledger sync`.
 
-### 8.2 Webhook signature mismatch
+### 9.2 Webhook signature mismatch
 
 **Symptoms:** `POST /webhooks/plaid` returns HTTP 400; logs show
 "invalid Plaid webhook signature".
@@ -477,7 +542,7 @@ ledger doctor --production-preflight
 3. Verify the server is receiving the full raw request body unmodified
    (no middleware should alter the body before signature verification).
 
-### 8.3 Stale cursor concerns
+### 9.3 Stale cursor concerns
 
 **Symptoms:** `doctor` shows a very old `last_synced_at`; transactions
 from recent weeks are missing.
@@ -504,7 +569,7 @@ from recent weeks are missing.
    This will re-download all available transactions from Plaid's history
    window (typically 24 months).
 
-### 8.4 Accidental wrong-environment configuration
+### 9.4 Accidental wrong-environment configuration
 
 **Symptoms:** `ledger doctor --production-preflight` shows
 `[WARN] PLAID_ENV=sandbox`; live sync returns fake Plaid data.

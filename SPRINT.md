@@ -339,7 +339,7 @@ overlaps: 1 configured suppression active, 1 pending sync, 1 potential overlap f
 
 ---
 
-### Task 5: Sprint closeout, docs, and acceptance validation
+### Task 5: Sprint closeout, docs, and acceptance validation ✅ DONE
 
 **Scope**
 
@@ -404,3 +404,31 @@ acceptance criteria.
 - Transfer detection and internal movement suppression (post-M9 backlog).
 - Parallel multi-institution sync.
 - Operator review queue UI beyond the `ledger overlaps` display command.
+
+
+## Sprint 10 closeout ✅ DONE
+
+Shipped in Sprint 10 (M9):
+
+- `items.toml` now supports per-item `[[items.suppressed_accounts]]` mappings
+  with required `plaid_account_id` + `canonical_account_id` and optional
+  `canonical_from_item`/`note`.
+- DB schema now persists source precedence via
+  `accounts.canonical_account_id`, with idempotent migration behavior.
+- New `ledger apply-precedence` command writes configured suppressions into
+  the DB, reports updated/skipped aliases, and clears stale mappings removed
+  from config.
+- Canonical query/view layer is live: `GET /transactions` defaults to
+  canonical view; `?view=raw` returns full raw records;
+  `GET /transactions/{id}` exposes `suppressed_by` provenance.
+- New `ledger overlaps` command reports configured suppression status and
+  potential unconfirmed overlaps for operator review.
+- Documentation set updated (`ARCHITECTURE.md`, `README.md`, `RUNBOOK.md`,
+  `ROADMAP.md`) to reflect source precedence terminology and workflows.
+
+Deferred follow-ups (unchanged from sprint scope):
+
+- Multi-item webhook routing automation (M10).
+- Automatic `apply-precedence` execution on every sync.
+- Transfer detection/internal movement suppression.
+- Parallel multi-institution sync and richer operator review UX.

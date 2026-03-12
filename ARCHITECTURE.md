@@ -2,6 +2,26 @@
 
 ## Current milestone focus
 
+M9 (canonical household views / source precedence) is complete. Sprint 10
+adds config-driven suppression metadata (`suppressed_accounts`),
+`ledger apply-precedence`, `ledger overlaps`, and a canonical transaction view
+that the API now uses by default.
+
+Sprint 10 added:
+
+- `accounts.canonical_account_id` — persisted source-precedence mapping for
+  suppressed account rows
+- `ledger apply-precedence` — writes configured source-precedence mappings
+  into the DB and clears stale suppressions removed from config
+- `ledger overlaps` — reports configured suppression status and highlights
+  likely unconfigured overlaps
+- Canonical query layer in `query_transactions` — default view excludes
+  transactions from suppressed accounts while preserving raw records
+- `GET /transactions?view=canonical|raw` — canonical-by-default API with
+  explicit raw opt-out
+- `GET /transactions/{id}` `suppressed_by` field — provenance for source-
+  precedence decisions
+
 M8 (multi-item management) is complete. Sprint 9 adds `ledger link` for
 browser-based Plaid Link token exchange and `ledger items` for at-a-glance
 item health checks across all configured household items.
@@ -92,9 +112,10 @@ Sprint 5 added:
 ## Data flow
 
 ```
-Plaid API -> sync engine -> SQLite -> Agent API -> OpenClaw agent
-                  |
+Plaid API -> sync engine -> SQLite raw records -> canonical view layer -> Agent API -> OpenClaw agent
+                  |                                        |
                   +--[non-empty sync]--> OpenClaw /hooks/agent (Hestia wake)
+items.toml -------------------------------> source precedence mappings (suppressed_accounts)
 
 items.toml ─┐
             ├─ ledger sync --all ─> [bank-alice] run_sync -> SQLite
@@ -104,7 +125,9 @@ PLAID_ENV  ─┘
 ```
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
-never touches `annotations`. Agents read transactions and write annotations
+never touches `annotations`. Source precedence is applied after sync writes via
+`ledger apply-precedence`; canonical filtering happens in query/view logic,
+never by deleting raw rows. Agents read transactions and write annotations
 exclusively through the HTTP API.
 
 After a webhook-triggered sync where `added + modified + removed > 0`, the
@@ -150,6 +173,25 @@ exposed exactly as stored — not inverted.
 ### `accounts`
 
 Plaid account metadata. Written by the sync engine on each sync run.
+`canonical_account_id` is nullable: `NULL` means the account is canonical;
+non-null means the account is suppressed in canonical views and points to the
+winning canonical Plaid account.
+
+
+
+```sql
+CREATE TABLE IF NOT EXISTS accounts (
+    id                   INTEGER PRIMARY KEY,
+    plaid_account_id     TEXT NOT NULL UNIQUE,
+    name                 TEXT NOT NULL,
+    mask                 TEXT,
+    type                 TEXT NOT NULL,
+    subtype              TEXT,
+    owner                TEXT,
+    item_id              TEXT,
+    canonical_account_id TEXT
+);
+```
 
 ### `sync_state`
 
@@ -193,6 +235,9 @@ Current operator-facing CLI commands:
 
 - `doctor` — validates config, DB connectivity, schema, and reports row counts;
   with `--verbose` shows redacted config values
+- `apply-precedence` — reads `suppressed_accounts` from `items.toml` and
+  writes source-precedence mappings to `accounts.canonical_account_id`;
+  clears stale mappings no longer present in config
 - `doctor --production-preflight` — validates live-readiness configuration
   without contacting external services; exits non-zero if any required check
   fails; see `RUNBOOK.md` for usage in the production onboarding checklist
@@ -203,6 +248,8 @@ Current operator-facing CLI commands:
   daily health-check command before running `sync --all`
 - `link` — guides the operator through the Plaid Link browser flow and prints
   the resulting `access_token` and `items.toml` snippet
+- `overlaps` — displays configured suppression rules, DB status
+  (`IN DB`/`MISMATCH`/`NOT YET SYNCED`), and potential unconfirmed overlaps
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
   `sync --all` is the standard household ingestion path; `sync --item <id>`
   syncs a single item from `items.toml`
@@ -218,7 +265,7 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/health` | None | Service liveness check; returns `{"status": "ok"}` |
 | `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list |
-| `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation |
+| `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
 | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
@@ -252,6 +299,7 @@ Returns a paginated, filtered list of transactions.
 | `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name` |
 | `limit` | int | `100` | Maximum rows to return; max `500`; `limit > 500` returns HTTP 422 |
 | `offset` | int | `0` | Number of matching rows to skip (for pagination) |
+| `view` | `canonical` \\| `raw` | `canonical` | `canonical` excludes suppressed-account rows via source precedence; `raw` returns all rows |
 
 **Response** (HTTP 200):
 

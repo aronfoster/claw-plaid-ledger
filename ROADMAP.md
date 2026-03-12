@@ -76,44 +76,21 @@ household structure. `ledger sync --all` established in docs as the standard
 household ingestion path. `RUNBOOK.md` updated with daily operations and
 `ledger link` walkthrough.
 
+
+
+### M9 — Canonical household views (source precedence)
+Configuration now supports per-item `suppressed_accounts` mappings in
+`items.toml`. `ledger apply-precedence` writes canonical source precedence to
+`accounts.canonical_account_id` and clears stale mappings. `ledger overlaps`
+reports suppression status (`IN DB`, `MISMATCH`, `NOT YET SYNCED`) and flags
+potential unconfirmed overlaps by shared account metadata. The API now defaults
+to canonical household transactions (`GET /transactions` with `view=canonical`)
+while preserving full raw access via `?view=raw`. Transaction detail responses
+include `suppressed_by` provenance when a row comes from a suppressed account.
+
 ---
 
 ## Upcoming Milestones
-
-### M9 — Canonical household views (source precedence)
-
-**Focus:** Solve joint-account overlap deterministically.
-
-**Goal:** Preserve all raw Plaid records while exposing one canonical
-household view that suppresses redundant overlap by configuration-driven,
-explainable rules.
-
-**Design principles**
-
-- Deterministic account-level mapping (no fuzzy-first dedupe engine)
-- Source precedence and account aliasing live in configuration (`items.toml`)
-- Raw ingestion remains complete; suppression happens only in canonical
-  query/view layers
-- Prefer primary-cardholder visibility for shared credit-card institutions
-  to avoid authorized-user blind spots
-- Every suppression remains auditable via provenance metadata
-
-**Scope**
-
-- Rename prior “deduplication” effort to **Household identity and Source
-  Precedence**
-- Define canonical account aliasing and precedence rules in config
-- Update API defaults to canonical household transactions, with explicit access
-  to raw/source records when needed
-- Persist duplicate-suppression provenance (winner source + suppressed sources)
-- Add operator-review path for ambiguous or orphaned overlaps
-
-**Not in scope**
-
-- Heuristic-heavy fuzzy matching as the primary strategy
-- Full bookkeeping transfer reconciliation
-
----
 
 ### M10 — Multi-item automation
 
@@ -141,7 +118,7 @@ all configured household items.
 ledger logic.
 
 **Goal:** Hestia validates and collaborates with the canonical ledger, with
-special emphasis on anomaly discovery rather than primary deduplication.
+special emphasis on anomaly discovery rather than primary source-precedence mapping.
 
 **Scope**
 
@@ -150,7 +127,7 @@ special emphasis on anomaly discovery rather than primary deduplication.
   summaries
 - Add an “orphaned transactions” review workflow where Hestia flags anomalies
   missed by deterministic source-precedence rules
-- Update architecture docs to reflect Hestia as safety net, not dedupe engine
+- Update architecture docs to reflect Hestia as safety net, not source-precedence engine
 - Ultimately will get ported into a new github project
 
 **Not in scope**
@@ -204,8 +181,8 @@ identity and duplicate handling are stable.
 
 ### Operator review queue for ambiguous identity matches
 
-If automatic account or transaction dedupe confidence is low, surface a small
-review queue rather than silently guessing. This can remain manual until the
+If automatic account or transaction source-precedence confidence is low,
+surface a small review queue rather than silently guessing. This can remain manual until the
 household has enough real production history to reveal the weird edge cases.
 
 ### Parallel multi-institution sync
