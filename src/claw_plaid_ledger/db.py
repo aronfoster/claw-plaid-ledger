@@ -455,6 +455,81 @@ def get_transaction(
     }
 
 
+@dataclass(frozen=True)
+class SpendQuery:
+    """Filters for the aggregate spend query."""
+
+    start_date: str
+    end_date: str
+    owner: str | None = None
+    tags: tuple[str, ...] = ()
+    include_pending: bool = False
+    canonical_only: bool = True
+
+
+def query_spend(
+    connection: sqlite3.Connection,
+    query: SpendQuery,
+) -> tuple[float, int]:
+    """Return (total_spend, transaction_count) for matching transactions."""
+    effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
+
+    need_accounts_join = query.canonical_only or query.owner is not None
+    accounts_join = (
+        "JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
+        if need_accounts_join
+        else ""
+    )
+    annotations_join = (
+        "LEFT JOIN annotations ann "
+        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
+    )
+
+    where_parts: list[str] = [
+        f"{effective_date_sql} >= ?",
+        f"{effective_date_sql} <= ?",
+    ]
+    params: list[object] = [query.start_date, query.end_date]
+
+    if query.canonical_only:
+        where_parts.append("a.canonical_account_id IS NULL")
+
+    if not query.include_pending:
+        where_parts.append("t.pending = 0")
+
+    if query.owner is not None:
+        where_parts.append("a.owner = ?")
+        params.append(query.owner)
+
+    for tag in query.tags:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+        )
+        params.append(tag)
+
+    where_sql = " AND ".join(where_parts)
+    # S608: accounts_join, annotations_join, and where_sql are built from
+    # hard-coded SQL strings only.  Every user-supplied value (dates, owner,
+    # tag strings) is bound via the params list as a `?` placeholder, so
+    # there is no injection risk.  Ruff cannot prove the fragments are safe
+    # from static analysis alone, making the noqa unavoidable here.
+    row = connection.execute(
+        (
+            "SELECT COALESCE(SUM(t.amount), 0.0), COUNT(*) "  # noqa: S608
+            "FROM transactions t "
+            f"{accounts_join}"
+            f"{annotations_join}"
+            f"WHERE {where_sql}"
+        ),
+        params,
+    ).fetchone()
+    if row is None:
+        return 0.0, 0
+    total_spend = float(row[0]) if row[0] is not None else 0.0
+    count = int(row[1]) if row[1] is not None else 0
+    return total_spend, count
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:
