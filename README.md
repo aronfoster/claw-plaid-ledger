@@ -124,6 +124,8 @@ Notes:
 | `ledger init-db` | Creates the SQLite database and initialises the schema (safe to re-run) |
 | `ledger items` | Shows per-item health (token presence, account count, last sync) for all entries in `items.toml`; exits 0 always |
 | `ledger link` | Connects a Plaid institution via browser and prints the resulting `access_token` and `items.toml` snippet |
+| `ledger apply-precedence` | Applies source-precedence mappings from `items.toml` (`suppressed_accounts`) into the DB and clears stale mappings |
+| `ledger overlaps` | Shows configured source-precedence status and potential unconfirmed overlaps across items |
 | `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
 
@@ -135,8 +137,8 @@ Notes:
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
-| `GET` | `/transactions` | Paginated, filterable transaction list |
-| `GET` | `/transactions/{id}` | Single transaction with merged annotation |
+| `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; use `?view=raw` for all rows) |
+| `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
 | `PUT` | `/annotations/{id}` | Upsert annotation for a transaction |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |
@@ -163,6 +165,22 @@ A `[WARN]` on `PLAID_ENV_SANDBOX` means `PLAID_ENV` is still set to
 `sandbox` — update it to `production` for live bank connections.
 
 See `RUNBOOK.md` for the full production onboarding checklist.
+
+## Household source precedence
+
+For shared-account households, keep raw ingestion complete and configure
+canonical suppression in `items.toml` using `[[items.suppressed_accounts]]`.
+Then run:
+
+```bash
+uv run ledger apply-precedence
+uv run ledger overlaps
+```
+
+`GET /transactions` defaults to `view=canonical` (suppressed-account
+transactions hidden). Use `GET /transactions?view=raw` when you need the
+full raw dataset for audits.
+
 
 ## Example
 
