@@ -1,22 +1,22 @@
-# Sprint 10 — M9: Canonical household views (source precedence)
+# Sprint 11 — M10: Automation & Connectivity
 
 ## Sprint goal
 
-Solve joint-account overlap deterministically. By the end of this sprint the
-operator can declare, in configuration, exactly which item is the canonical
-source for any shared account; `ledger apply-precedence` writes that
-decision to the DB; and `GET /transactions` defaults to a clean
-canonical household view while keeping raw records fully accessible.
-Sprint 10 is complete when suppression is config-driven, auditable, and the
-agent API exposes canonical transactions by default.
+Move from manually triggered sync patterns to webhook-first ingestion with
+deterministic item routing and explicit fallback behavior. By the end of this
+sprint Plaid webhooks route to the correct configured item in a multi-item
+household; a configurable scheduled-sync fallback fires for items that have
+gone silent; and the RUNBOOK covers DNS/DuckDNS setup so the operator can
+maintain a stable, public webhook URL.
 
 ## Working agreements
 
 - Keep each task reviewable in one PR where possible.
 - Preserve backward compatibility for all existing sync, doctor, serve, and
-  items workflows.
-- Raw ingestion must remain complete; suppression happens only in canonical
-  query/view layers — the sync engine never deletes records.
+  items workflows. In particular, users without `items.toml` must continue
+  to work via the legacy `PLAID_ACCESS_TOKEN` env-var path.
+- Raw ingestion must remain complete; no suppressions or deletions in the sync
+  engine.
 - Run the quality gate before every commit:
   - `uv run --locked ruff format . --check`
   - `uv run --locked ruff check .`
@@ -25,351 +25,284 @@ agent API exposes canonical transactions by default.
 - Add or update tests for every behavior change.
 - No new runtime dependencies without explicit justification.
 
+## Runtime behavior contract (codified in this sprint)
+
+| Trigger | Behavior |
+|---|---|
+| Plaid webhook (`SYNC_UPDATES_AVAILABLE`) | **Primary.** Route to the matching configured item and sync it immediately. |
+| Scheduled sync fallback | **Secondary.** Fires only when an item has not been synced in the configured fallback window (default 24 h). Opt-in via `CLAW_SCHEDULED_SYNC_ENABLED=true`. |
+| `ledger sync [--all / --item]` | Manual / operator-initiated. Unchanged from M9. |
+| OpenClaw poke | Fires after every sync that produces transaction changes (added + modified + removed > 0). One poke per sync run, regardless of which item triggered it. |
+
 ## Task breakdown
 
 ---
 
-### Task 1: Config extension — `suppressed_accounts` in `items.toml` ✅ DONE
+### Task 1: Multi-item webhook routing
 
 **Scope**
 
-Extend `items.toml` and `ItemConfig` so that each item can declare which of
-its own Plaid accounts are superseded by the canonical view from another item.
-This is the configuration foundation that all subsequent tasks depend on.
-
-**Config shape**
-
-Add an optional `[[items.suppressed_accounts]]` sub-table to each `[[items]]`
-block:
-
-```toml
-[[items]]
-id                = "bank-alice"
-access_token_env  = "PLAID_ACCESS_TOKEN_BANK_ALICE"
-owner             = "alice"
-
-  [[items.suppressed_accounts]]
-  plaid_account_id     = "plaid_acct_YYYY"   # account in THIS item to suppress
-  canonical_account_id = "plaid_acct_XXXX"   # canonical replacement (from card-bob)
-  canonical_from_item  = "card-bob"          # optional — for human auditability
-  note = "AmEx shared card — alice is authorized user; bob's view is canonical"
-```
+The current webhook handler ignores `item_id` in the Plaid payload and always
+syncs the `PLAID_ACCESS_TOKEN` singleton. Teach it to extract `item_id` from
+the payload, find the matching `ItemConfig` in `items.toml`, and pass the
+correct access token to `_background_sync()`. Fall back to the single-item
+env-var path when no items.toml exists or the payload item_id is not
+configured.
 
 **Implementation notes**
 
-1. **New dataclass** — add `SuppressedAccountConfig` to `items_config.py`:
+1. **Extract `item_id` from webhook payload** — Plaid includes `item_id` as a
+   top-level string field on every webhook. The handler already receives the
+   parsed body as a dict; read `body.get("item_id")`.
+
+2. **Refactor `_background_sync()`** — give it optional parameters so the
+   caller can inject item-specific context:
 
    ```python
-   @dataclass(frozen=True)
-   class SuppressedAccountConfig:
-       plaid_account_id: str        # account in this item being suppressed
-       canonical_account_id: str    # the winning canonical account ID
-       canonical_from_item: str | None = None  # documentation only
-       note: str | None = None                 # documentation only
+   async def _background_sync(
+       *,
+       access_token: str | None = None,
+       item_id: str | None = None,
+       owner: str | None = None,
+   ) -> None:
    ```
 
-2. **Extend `ItemConfig`** — add field:
+   When `access_token` is `None`, the function falls back to loading
+   `PLAID_ACCESS_TOKEN` from config (existing behavior).
 
-   ```python
-   suppressed_accounts: tuple[SuppressedAccountConfig, ...] = ()
+3. **Item lookup in the webhook handler** — after verifying the signature and
+   confirming `SYNC_UPDATES_AVAILABLE`:
+
+   ```
+   payload_item_id = body.get("item_id")
+
+   if payload_item_id and items.toml is loadable:
+       find ItemConfig where id == payload_item_id
+       if found:
+           resolve access_token from ItemConfig.access_token_env
+           enqueue _background_sync(access_token=token, item_id=cfg.id, owner=cfg.owner)
+       else:
+           log warning "item_id {x} not found in items.toml; falling back to PLAID_ACCESS_TOKEN"
+           enqueue _background_sync()   # legacy single-item fallback
+   else:
+       enqueue _background_sync()       # no item_id or no items.toml
    ```
 
-   Use a tuple (not list) to keep the frozen dataclass immutable.
+4. **Fallback priority rule** — the fallback must not silently swallow the case
+   where `items.toml` exists but the webhook item_id is missing from it. Log a
+   `WARNING` to make this visible to the operator.
 
-3. **Update `_parse_item`** — parse the optional `suppressed_accounts` list of
-   sub-tables. Both `plaid_account_id` and `canonical_account_id` are required
-   strings; `canonical_from_item` and `note` are optional strings. Raise
-   `ItemsConfigError` on type violations; silently skip if the key is absent
-   (backward compat).
-
-4. **Update `items.toml.example`** — add one example `suppressed_accounts`
-   block under the `bank-alice` item to show the alice/bob household
-   configuration. Keep the existing three-item structure intact.
+5. **Notification** — `notify_openclaw()` is already called inside
+   `_background_sync()` when changes are non-zero; no change needed. The log
+   message may optionally include the item id for traceability.
 
 **Done when**
 
-- `load_items_config` parses items that have no `suppressed_accounts` without
-  change (full backward compat).
-- Items with one or more `suppressed_accounts` entries return correctly typed
-  `SuppressedAccountConfig` tuples on `ItemConfig.suppressed_accounts`.
-- `ItemsConfigError` is raised for missing required fields
-  (`plaid_account_id`, `canonical_account_id`) and for wrong types on any
-  field.
-- `items.toml.example` has a concrete suppressed-accounts example.
-- Tests cover: no suppressed_accounts (backward compat), single entry, multiple
-  entries, missing required field error, wrong-type error.
+- A `SYNC_UPDATES_AVAILABLE` webhook whose `item_id` matches a configured item
+  triggers sync for that specific item's access token.
+- A webhook with an `item_id` absent from `items.toml` logs a warning and falls
+  back to the `PLAID_ACCESS_TOKEN` single-item sync.
+- A webhook with no `item_id` field falls back to the single-item sync (no
+  warning needed — Plaid always sends it, but defensive handling is required).
+- Users with no `items.toml` continue to work exactly as before.
+- `_background_sync()` signature is backward-compatible: calling it with no
+  arguments still works.
+- Tests cover: item found and routed correctly; item_id not in config (warning
+  + fallback); no items.toml (fallback); no item_id in payload (fallback);
+  env-var resolution failure raises and is caught; notification fires when
+  changes > 0.
 - All quality gates pass.
 
 ---
 
-### Task 2: DB schema and `ledger apply-precedence` command ✅ DONE
+### Task 2: Scheduled sync fallback
 
 **Scope**
 
-Add a `canonical_account_id` column to the `accounts` table to persist
-suppression provenance, and deliver a `ledger apply-precedence` CLI command
-that reads the config aliases and writes that decision to the DB. This is the
-layer that makes suppression durable and auditable.
+Add an opt-in background scheduler that fires a sync for any configured item
+that has not been synced within a configurable window (default 24 hours). This
+is the safety net for missed or failed webhooks. Implementation must use
+`asyncio` only — no new scheduler library dependency.
+
+**New configuration**
+
+Add to `config.py` and `.env` loading:
+
+| Env var | Type | Default | Description |
+|---|---|---|---|
+| `CLAW_SCHEDULED_SYNC_ENABLED` | bool | `false` | Enable the scheduled sync fallback loop. |
+| `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | int | `24` | Hours of sync silence before an item is considered overdue. |
+
+Parse `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` with a minimum value of 1; reject
+values ≤ 0 with a startup error.
 
 **Implementation notes**
 
-1. **Schema change** — add `canonical_account_id TEXT` to `accounts` in
-   `schema.sql`:
-
-   ```sql
-   CREATE TABLE IF NOT EXISTS accounts (
-       ...
-       canonical_account_id TEXT,   -- non-null = suppressed; points to canonical account
-       ...
-   );
-   ```
-
-   Also add the column via `ALTER TABLE` migration in `initialize_database`
-   (same suppression-safe pattern as the existing `owner` / `item_id`
-   migrations):
+1. **FastAPI lifespan context manager** — add a `lifespan` function to
+   `server.py` using `@asynccontextmanager`. On startup, if
+   `CLAW_SCHEDULED_SYNC_ENABLED=true`, create an asyncio background task
+   running `_scheduled_sync_loop()`. Cancel it cleanly on shutdown:
 
    ```python
-   "ALTER TABLE accounts ADD COLUMN canonical_account_id TEXT",
+   @asynccontextmanager
+   async def lifespan(app: fastapi.FastAPI):
+       task = None
+       if config.scheduled_sync_enabled:
+           task = asyncio.create_task(_scheduled_sync_loop(config))
+       yield
+       if task:
+           task.cancel()
+           with contextlib.suppress(asyncio.CancelledError):
+               await task
+
+   app = fastapi.FastAPI(title="claw-plaid-ledger", lifespan=lifespan)
    ```
 
-2. **Update `NormalizedAccountRow`** — add `canonical_account_id: str | None = None`
-   field to the dataclass.
-
-3. **Update `upsert_account`** — include `canonical_account_id` in the INSERT
-   and the `ON CONFLICT DO UPDATE SET` clause.
-
-4. **New `db.py` helper** — add `apply_account_precedence`:
+2. **`_scheduled_sync_loop()`** — runs forever, waking every 60 minutes to
+   check for overdue items:
 
    ```python
-   def apply_account_precedence(
-       connection: sqlite3.Connection,
-       items: list[ItemConfig],
-   ) -> int:
-       """
-       Write canonical_account_id to suppressed accounts.
-
-       For each SuppressedAccountConfig across all items, sets
-       accounts.canonical_account_id = canonical_account_id WHERE
-       plaid_account_id = suppressed plaid_account_id.
-
-       Returns the count of rows updated.
-       """
+   async def _scheduled_sync_loop(config) -> None:
+       while True:
+           await asyncio.sleep(3600)   # check once per hour
+           await _check_and_sync_overdue_items(config)
    ```
 
-   Updates only rows that exist in the DB; silently skips config entries whose
-   account has not yet been synced (the operator can re-run after syncing).
-   Also clears `canonical_account_id` to NULL for any account that is no
-   longer mentioned as suppressed in the current config (config is the single
-   source of truth).
+   The 60-minute poll interval is not configurable (it is not the fallback
+   window; it is just the check frequency). Document this in a comment.
 
-5. **New CLI command** — `ledger apply-precedence`:
+3. **`_check_and_sync_overdue_items()`** — for each item in `items.toml` (or
+   the single-item env-var fallback if no `items.toml`):
+
+   - Read `sync_state.last_synced` from the DB for that item's `item_id`.
+   - If `last_synced` is `None` or older than `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS`
+     hours ago → call `_background_sync()` with the item's credentials.
+   - Log an INFO message: `"scheduled-sync: item {id} overdue ({n}h since last
+     sync); triggering fallback sync"`.
+   - Skip items where `last_synced` is recent; log DEBUG for each skipped item.
+   - Catch all exceptions per item so one failure does not prevent others from
+     being checked.
+
+4. **`doctor` check** — add a new entry to the `doctor` output that reports
+   scheduled sync configuration:
 
    ```
-   $ ledger apply-precedence
-   apply-precedence: loaded 2 alias(es) from items.toml
-   apply-precedence: updated 1 account(s)
-   apply-precedence: 1 alias(es) skipped — account not yet in DB (sync first)
-   apply-precedence: done
+   scheduled-sync: DISABLED (set CLAW_SCHEDULED_SYNC_ENABLED=true to enable)
+   ```
+   or
+   ```
+   scheduled-sync: ENABLED — fallback window 24h, check interval 60min
    ```
 
-   - Loads `items.toml` (exits 0 with a message if absent or empty).
-   - Opens the DB connection.
-   - Calls `apply_account_precedence` and prints the summary.
-   - Also clears `canonical_account_id` on all accounts NOT listed as
-     suppressed in the current config (handles alias removal).
-   - Exits 0 on success, 1 on DB or config error.
+   This check is informational only; it does not cause `doctor` to exit
+   non-zero.
 
 **Done when**
 
-- `initialize_database` adds `canonical_account_id` to `accounts` without
-  breaking an existing database (idempotent migration).
-- `upsert_account` persists `canonical_account_id` correctly.
-- `apply_account_precedence` sets the column for known accounts, skips unknown
-  ones, clears stale suppressions.
-- `ledger apply-precedence` runs end-to-end and prints accurate counts.
-- Tests cover: no aliases in config (no-op), alias for account in DB, alias
-  for account not yet in DB (skip + count), stale alias clearing (alias
-  removed from config clears DB column), idempotent re-run.
+- `CLAW_SCHEDULED_SYNC_ENABLED=false` (default): no background task is started;
+  no behavior change from M9.
+- `CLAW_SCHEDULED_SYNC_ENABLED=true`: a background loop starts at server
+  startup and is cancelled cleanly on shutdown.
+- Items overdue by more than `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` hours trigger
+  a sync call; recently synced items are skipped.
+- A single item's sync failure does not prevent others from being checked in
+  the same pass.
+- `doctor` reports scheduled sync state correctly.
+- `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS=0` or negative is rejected with a clear
+  startup error.
+- Tests cover: disabled (no task created), enabled with overdue item (sync
+  triggered), enabled with recent item (sync skipped), item with no sync state
+  (treated as overdue), one item fails (others still checked), `doctor` output
+  for enabled and disabled states, invalid fallback hours rejected.
 - All quality gates pass.
 
 ---
 
-### Task 3: Canonical query layer and API defaults ✅ DONE
+### Task 3: DuckDNS webhook URL setup guidance
 
 **Scope**
 
-Update `query_transactions` to support a canonical-only view that excludes
-transactions from suppressed accounts, make `GET /transactions` default to this
-canonical view (with a `?view=raw` opt-out), and expose suppression provenance
-on `GET /transactions/{id}`.
+Operators running `ledger serve` on a home server need a stable, public-facing
+URL for Plaid to deliver webhooks. Add practical DuckDNS setup instructions to
+`RUNBOOK.md` and commit a reusable IP-update shell script to the repo.
 
-**Implementation notes**
+**Deliverables**
 
-1. **Update `TransactionQuery`** — add `canonical_only: bool = True`:
+1. **New RUNBOOK.md section: "Stable webhook URL with DuckDNS"** — add after
+   the existing "Plaid webhook setup" content. Cover:
 
-   ```python
-   @dataclass(frozen=True)
-   class TransactionQuery:
-       ...
-       canonical_only: bool = True
+   - Why a stable public URL is needed (Plaid requires a pre-registered
+     webhook URL; home IPs change).
+   - Account and subdomain registration at duckdns.org.
+   - How to find your DuckDNS token.
+   - Pointing Plaid to `https://<subdomain>.duckdns.org/webhooks/plaid`.
+   - Router/firewall port-forward requirements (external 443 → internal
+     `CLAW_SERVER_PORT`).
+   - TLS termination note: recommend a reverse proxy (nginx, Caddy) to handle
+     TLS; `ledger serve` listens on plain HTTP internally.
+   - Testing the webhook URL with `curl` before registering with Plaid.
+
+2. **`scripts/duckdns-update.sh`** — a minimal POSIX shell script that updates
+   the DuckDNS IP record:
+
+   ```sh
+   #!/bin/sh
+   # Usage: DUCKDNS_TOKEN=<token> DUCKDNS_DOMAIN=<subdomain> ./duckdns-update.sh
+   # Suitable for cron or a systemd timer. Logs result to stdout.
+   set -eu
+   DUCKDNS_TOKEN="${DUCKDNS_TOKEN:?DUCKDNS_TOKEN is required}"
+   DUCKDNS_DOMAIN="${DUCKDNS_DOMAIN:?DUCKDNS_DOMAIN is required}"
+   RESULT=$(curl -fsSL \
+     "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=")
+   echo "duckdns-update: ${DUCKDNS_DOMAIN} → ${RESULT}"
    ```
 
-2. **Update `query_transactions`** — when `canonical_only=True`, add a JOIN
-   and filter:
+   The script must use env vars only; no hardcoded credentials. Add a cron
+   example comment: `*/5 * * * * DUCKDNS_TOKEN=... DUCKDNS_DOMAIN=... /path/to/duckdns-update.sh`.
 
-   ```sql
-   JOIN accounts a ON a.plaid_account_id = t.plaid_account_id
-   WHERE a.canonical_account_id IS NULL
-   ...
-   ```
-
-   When `canonical_only=False`, omit the JOIN and filter (returns all
-   transactions regardless of suppression status). The total count must
-   reflect the same filter as the rows query.
-
-3. **Update `GET /transactions` in `server.py`** — add `view` query parameter:
-
-   | Parameter | Type | Default | Description |
-   |---|---|---|---|
-   | `view` | `"canonical"` \| `"raw"` | `"canonical"` | `canonical` hides suppressed-account transactions; `raw` returns all records |
-
-   Map `view="raw"` to `canonical_only=False` in the `TransactionQuery`.
-   Reject invalid values with HTTP 422.
-
-4. **Update `GET /transactions/{id}` response** — when the requested
-   transaction belongs to an account with `canonical_account_id` set, include
-   a `suppressed_by` field in the response:
-
-   ```json
-   {
-     "id": "...",
-     ...
-     "suppressed_by": "plaid_acct_XXXX"
-   }
-   ```
-
-   `suppressed_by` is `null` (not present in the canonical view but
-   accessible via raw queries) when the account is not suppressed. This gives
-   agents auditable provenance when they fetch a raw transaction.
-
-   Implementation: `get_transaction` in `db.py` should JOIN `accounts` and
-   return `canonical_account_id` alongside the existing fields.
+3. **RUNBOOK.md section: "Scheduled sync fallback"** — a short operational
+   note explaining when and why to enable `CLAW_SCHEDULED_SYNC_ENABLED`,
+   cross-referencing Task 2. This is a pure docs addition; keep it brief
+   (≤ 10 lines).
 
 **Done when**
 
-- `query_transactions` with default `canonical_only=True` excludes
-  transactions whose account has a non-null `canonical_account_id`.
-- `query_transactions` with `canonical_only=False` returns all transactions.
-- `GET /transactions` defaults to `?view=canonical` and correctly excludes
-  suppressed-account transactions.
-- `GET /transactions?view=raw` returns the full unfiltered set.
-- `GET /transactions?view=invalid` returns HTTP 422.
-- `GET /transactions/{id}` for a suppressed-account transaction includes
-  `"suppressed_by": "<canonical_account_id>"`.
-- `GET /transactions/{id}` for a canonical-account transaction returns
-  `"suppressed_by": null`.
-- All existing `GET /transactions` tests pass without modification (default
-  canonical view is backward compatible because no accounts are suppressed in
-  existing test fixtures unless explicitly set).
-- New tests cover: canonical filter in query layer, `?view=raw` opt-out,
-  `?view=invalid` 422, `suppressed_by` in detail response.
-- All quality gates pass.
+- `RUNBOOK.md` has a clear DuckDNS setup walkthrough that a new operator can
+  follow end-to-end.
+- `scripts/duckdns-update.sh` is committed, executable (`chmod +x`), and
+  validated with `shellcheck` (if available in the environment).
+- `RUNBOOK.md` has a scheduled sync fallback operations note.
+- No new Python code or dependencies introduced.
+- All quality gates pass (docs only; ruff/mypy/pytest are unaffected).
 
 ---
 
-### Task 4: `ledger overlaps` command ✅ DONE
+### Task 4: Sprint closeout, docs, and acceptance validation
 
 **Scope**
 
-Deliver a `ledger overlaps` CLI command that gives the operator a clear view of
-configured suppression rules, their current DB state, and any accounts that
-*might* be unconfigured overlaps — so the operator can decide whether to add
-config entries for them.
-
-**User-facing output**
-
-```
-$ ledger overlaps
-
-Configured suppressions (from items.toml):
-  bank-alice / plaid_acct_YYYY  →  suppressed by plaid_acct_XXXX (card-bob)  [IN DB]
-  bank-alice / plaid_acct_ZZZZ  →  suppressed by plaid_acct_WWWW (card-bob)  [NOT YET SYNCED — run sync first]
-
-Potential unconfirmed overlaps (same name + mask from different items):
-  "Premium Rewards"  mask=4321  type=credit  items: bank-alice, card-bob  — consider adding suppressed_accounts config
-
-overlaps: 1 configured suppression active, 1 pending sync, 1 potential overlap flagged.
-```
-
-**Implementation notes**
-
-1. **Configured suppressions section** — for every `SuppressedAccountConfig`
-   across all items:
-   - Look up the suppressed `plaid_account_id` in the `accounts` table.
-   - Show `IN DB` if found (and `canonical_account_id` is correctly set),
-     `MISMATCH` if found but `canonical_account_id` differs from config
-     (stale — operator should re-run `apply-precedence`), or
-     `NOT YET SYNCED` if the account is not in the DB at all.
-
-2. **Potential unconfirmed overlaps section** — query the DB for groups of
-   accounts with identical `name`, `mask`, and `type` but different `item_id`
-   values. These are candidate shared accounts that the operator might not
-   have configured yet. Show them as informational suggestions only — no
-   automated action.
-
-3. **Behavior**:
-   - If `items.toml` is absent or has no `suppressed_accounts` entries,
-     print `overlaps: no suppressions configured` and exit 0.
-   - If the DB is not reachable, print the error and exit 1.
-   - Always exits 0 if the command ran (regardless of MISMATCH/NOT_YET_SYNCED
-     status — this is a display command).
-
-**Done when**
-
-- `ledger overlaps` renders configured suppression entries with correct status
-  (`IN DB`, `MISMATCH`, `NOT YET SYNCED`).
-- Potential unconfirmed overlaps are detected and displayed when accounts with
-  the same name/mask/type exist across multiple items.
-- No-config path exits cleanly with a message.
-- Tests cover: no items.toml, configured suppression IN DB, configured
-  suppression NOT YET SYNCED, configured suppression MISMATCH (stale),
-  potential unconfirmed overlaps detected, no unconfirmed overlaps (clean
-  household).
-- All quality gates pass.
-
----
-
-### Task 5: Sprint closeout, docs, and acceptance validation ✅ DONE
-
-**Scope**
-
-Update all project documentation to reflect the M9 implementation, rename any
-stale "deduplication" terminology to "source precedence", and validate
+Update project documentation to reflect the M10 implementation and validate all
 acceptance criteria.
 
 **Checklist**
 
 - `ARCHITECTURE.md`:
-  - Add `canonical_account_id` to the `accounts` schema table.
-  - Add `apply-precedence` and `overlaps` to the CLI interfaces table.
-  - Update the data-flow diagram to show the canonical view layer between
-    raw DB records and the Agent API.
-  - Rename any mention of "deduplication" to "source precedence /
-    household identity".
-  - Update the repository layout section with any new modules.
+  - Update webhook flow description to reflect item-routing logic.
+  - Add scheduled sync fallback to the runtime behavior section.
+  - Add `CLAW_SCHEDULED_SYNC_ENABLED` and `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS`
+    to the configuration reference table.
+  - Update CLI/server module descriptions if new helpers were added.
 - `RUNBOOK.md`:
-  - Add a "Household source precedence setup" section that walks the operator
-    through: sync all items → configure `suppressed_accounts` in
-    `items.toml` → run `ledger apply-precedence` → verify with
-    `ledger overlaps`.
-  - Add `ledger apply-precedence` and `ledger overlaps` to the command
-    reference.
+  - Add `ledger serve` startup checklist entry: confirm
+    `CLAW_SCHEDULED_SYNC_ENABLED` intent before launch.
+  - Update webhook setup section to cross-reference the DuckDNS guidance from
+    Task 3.
 - `ROADMAP.md`:
-  - Move M9 from "Upcoming Milestones" to "Completed Milestones".
+  - Move M10 from "Upcoming Milestones" to "Completed Milestones".
 - `SPRINT.md`:
   - Append `✅ DONE` to each completed task heading.
-  - Add "Sprint 10 closeout ✅ DONE" section summarising what shipped and
-    any explicitly deferred follow-ups.
+  - Add "Sprint 11 closeout ✅ DONE" section summarising what shipped and any
+    explicitly deferred follow-ups.
 - Quality gate must pass at closeout:
   - `uv run --locked ruff format . --check` ✅
   - `uv run --locked ruff check .` ✅
@@ -378,57 +311,29 @@ acceptance criteria.
 
 ---
 
-## Acceptance criteria for Sprint 10
+## Acceptance criteria for Sprint 11
 
-- `items.toml` supports `[[items.suppressed_accounts]]` sub-tables with
-  `plaid_account_id`, `canonical_account_id`, and optional
-  `canonical_from_item` / `note` fields.
-- `ledger apply-precedence` reads the config and writes `canonical_account_id`
-  to suppressed account rows, clears stale suppressions, and reports counts.
-- `GET /transactions` defaults to the canonical view (suppressed-account
-  transactions hidden); `?view=raw` restores the unfiltered set.
-- `GET /transactions/{id}` for a suppressed-account transaction includes
-  `suppressed_by` provenance.
-- `ledger overlaps` shows configured suppression status and surfaces potential
-  unconfirmed overlaps.
-- Raw ingestion is untouched: the sync engine never deletes or alters
-  transactions based on suppression config.
+- A `SYNC_UPDATES_AVAILABLE` webhook whose `item_id` matches a configured item
+  syncs that item's access token, not the `PLAID_ACCESS_TOKEN` singleton.
+- An unrecognised `item_id` in a webhook falls back to the single-item env-var
+  path with a logged warning; no crash, no silent drop.
+- Users with no `items.toml` see identical behavior to M9 (full backward
+  compat).
+- `CLAW_SCHEDULED_SYNC_ENABLED=false` (default): server starts with no
+  background loop and no behavior change.
+- `CLAW_SCHEDULED_SYNC_ENABLED=true`: overdue items are synced automatically;
+  recently-synced items are skipped; the loop shuts down cleanly.
+- `doctor` reports scheduled sync configuration state.
+- `RUNBOOK.md` has actionable DuckDNS setup instructions and a
+  `scripts/duckdns-update.sh` script.
 - All existing workflows (`doctor`, `sync`, `serve`, `items`, `link`,
-  `preflight`) are unbroken.
+  `preflight`, `apply-precedence`, `overlaps`) are unbroken.
 - Quality gate passes.
 
-## Explicitly deferred (remain out of scope in Sprint 10)
+## Explicitly deferred (remain out of scope in Sprint 11)
 
-- Multi-item webhook routing (M10).
-- Automated `apply-precedence` on every sync (can be added in M10 or later).
-- Transfer detection and internal movement suppression (post-M9 backlog).
-- Parallel multi-institution sync.
-- Operator review queue UI beyond the `ledger overlaps` display command.
-
-
-## Sprint 10 closeout ✅ DONE
-
-Shipped in Sprint 10 (M9):
-
-- `items.toml` now supports per-item `[[items.suppressed_accounts]]` mappings
-  with required `plaid_account_id` + `canonical_account_id` and optional
-  `canonical_from_item`/`note`.
-- DB schema now persists source precedence via
-  `accounts.canonical_account_id`, with idempotent migration behavior.
-- New `ledger apply-precedence` command writes configured suppressions into
-  the DB, reports updated/skipped aliases, and clears stale mappings removed
-  from config.
-- Canonical query/view layer is live: `GET /transactions` defaults to
-  canonical view; `?view=raw` returns full raw records;
-  `GET /transactions/{id}` exposes `suppressed_by` provenance.
-- New `ledger overlaps` command reports configured suppression status and
-  potential unconfirmed overlaps for operator review.
-- Documentation set updated (`ARCHITECTURE.md`, `README.md`, `RUNBOOK.md`,
-  `ROADMAP.md`) to reflect source precedence terminology and workflows.
-
-Deferred follow-ups (unchanged from sprint scope):
-
-- Multi-item webhook routing automation (M10).
-- Automatic `apply-precedence` execution on every sync.
-- Transfer detection/internal movement suppression.
-- Parallel multi-institution sync and richer operator review UX.
+- Parallel multi-institution sync (sequential is sufficient for household scale).
+- Automatic `apply-precedence` on every sync.
+- Transfer detection and internal movement suppression (M12).
+- Per-agent token scoping.
+- Richer operator review queue UX.
