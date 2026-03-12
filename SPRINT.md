@@ -253,6 +253,46 @@ a unit test.
 - The `lifespan` startup/shutdown log lines should emit a context-free marker
   (e.g. `[startup]` or `correlation_id=-`).
 
+### Logging coverage audit
+
+As a housekeeping pass, read through all modules (`server.py`, `sync_engine.py`,
+`cli.py`, `db.py`, `config.py`, `preflight.py`, `notifications.py`, and any
+others) and identify code paths that are currently silent but would be useful
+for operators during normal use or when diagnosing problems.
+
+**Guiding questions when reviewing a code path:**
+- If this fails or behaves unexpectedly, would a log make the root cause
+  immediately obvious?
+- Are there non-trivial decisions or branch points that an operator might want
+  to trace?
+- Is there a success path that currently gives no feedback at all?
+
+**Examples of gaps likely to be found** (verify against the actual code; do not
+assume these exist):
+- `db.py` database migration or schema bootstrap — does it log which migration
+  was applied or if the schema was already current?
+- `config.py` — does it log which `.env` file was loaded (path, not contents)?
+- `preflight.py` — does each check log its own pass/fail at DEBUG so a full
+  preflight trace is readable without looking at source?
+- `notifications.py` — does a successful OpenClaw notification log the
+  response status? Does a failed one log the error clearly enough to diagnose
+  without a stack trace?
+- `cli.py` `items` command — does it log anything useful when `items.toml` is
+  absent vs. present?
+- Annotation writes (`PUT /annotations`) — is there a DEBUG log of what was
+  written and for which transaction?
+
+For each gap found, add a log call at the appropriate level:
+- `DEBUG` for high-frequency events or detailed state that is only useful when
+  actively debugging.
+- `INFO` for significant lifecycle events (server start, sync complete,
+  migration applied, notification sent).
+- `WARNING` for recoverable anomalies an operator should know about.
+
+Do not add log calls that just echo what is already obvious from the surrounding
+context, and do not add log calls inside tight loops that would flood output at
+INFO level. Quality over quantity.
+
 ### Done when
 
 - Every HTTP request log line includes `request_id`.
@@ -268,6 +308,8 @@ a unit test.
   DEBUG log of a webhook payload.
 - Log lines emitted outside any request/sync context render `correlation_id`
   as `-` (not a crash, not blank).
+- Logging coverage audit is complete; gaps found are filled with appropriately
+  levelled log calls.
 - Tests cover: middleware generates unique IDs per request; response includes
   `X-Request-Id`; `redact_webhook_body` removes all sensitive keys and
   preserves financial data; sync run ID is present in mock-logged sync output.
