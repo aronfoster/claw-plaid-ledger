@@ -1,4 +1,4 @@
-# Production Operations Runbook — M10
+# Production Operations Runbook — M11
 
 ## 1. Purpose and scope
 
@@ -6,7 +6,7 @@ This runbook covers the steps an operator needs to move
 `claw-plaid-ledger` from Plaid sandbox to a live production environment
 and to validate the setup before the first real sync.
 
-**In scope (M7 + M9 + M10):**
+**In scope (M7 + M9 + M10 + M11):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -18,6 +18,7 @@ and to validate the setup before the first real sync.
 - Canonical-vs-raw transaction view behavior for agent/API consumers (M9)
 - Multi-item webhook routing and scheduled sync fallback (M10)
 - Stable public webhook URL setup with DuckDNS (M10)
+- Request/sync correlation-ID tracing in logs (M11)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -605,6 +606,36 @@ from recent weeks are missing.
 5. If sandbox data was written to your production DB, the safest
    recovery is to restore from a backup taken before the contamination,
    then re-sync with correct production credentials.
+
+
+### 9.5 Tracing a request end-to-end with `request_id` and `sync_run_id`
+
+**Use case:** You need to follow one API request through webhook handling and
+background sync logs.
+
+1. Capture the request ID from the API response header:
+
+```bash
+curl -i -H "Authorization: Bearer $CLAW_API_SECRET" \
+  http://127.0.0.1:8000/transactions?limit=1 | rg -i "x-request-id"
+```
+
+2. Trace that request through server logs:
+
+```bash
+rg "req-[a-f0-9]{8}" ~/.local/state/claw-plaid-ledger/server.log
+```
+
+3. If the request triggered a sync (for example from `POST /webhooks/plaid`),
+   follow the corresponding sync correlation lines:
+
+```bash
+rg "sync-[a-f0-9]{8}" ~/.local/state/claw-plaid-ledger/server.log
+```
+
+Tip: webhook-triggered sync logs include linkage information between the
+request correlation and sync correlation so operators can jump from `req-*` to
+`sync-*` quickly during incident triage.
 
 ---
 

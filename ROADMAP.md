@@ -92,27 +92,20 @@ reports the scheduled sync state.  `scripts/duckdns-update.sh` and
 `RUNBOOK.md` sections 10–11 provide a complete DuckDNS setup walkthrough and
 scheduled sync operations note.
 
+### M11 — Advanced agent API & logging
+
+Advanced agent-query and observability features are now complete. The API now
+includes `GET /spend` (date-window totals with owner/tag filters and pending
+controls) and enhanced `GET /transactions` filtering (`tags` + optional
+annotation-note keyword search via `search_notes=true`).
+
+Structured correlation logging is implemented across API, CLI, and sync layers:
+request-scoped `request_id`, sync-scoped `sync_run_id`, `X-Request-Id` response
+headers, and webhook payload redaction policies that prevent logging secrets.
+
 ---
 
 ## Upcoming Milestones
-
-### M11 — Advanced agent API & logging
-
-**Focus:** Richer machine-usable analytics plus operational observability.
-
-**Goal:** Let Hestia answer common finance questions through first-class
-endpoints and make runtime troubleshooting possible from logs alone.
-
-**Scope**
-
-- Add agent-focused API capabilities:
-  - Total spend endpoints (date-window and tag-aware)
-  - Include/exclude pending controls
-  - Server-side filtering by tags and dates
-  - Search substring over notes/memo fields
-- Introduce structured INFO/DEBUG logging conventions across CLI, sync, and API
-  layers with correlation IDs for request/sync tracing.
-  - DEBUG logs should not include secrets (e.g. bearer tokens). If it is possible to redact secrets, include webhook payloads. Logs can contain financial and account data.
 
 ### M12 — Hestia skill definition
 

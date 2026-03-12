@@ -168,7 +168,8 @@ Notes:
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
-| `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; use `?view=raw` for all rows) |
+| `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; supports `tags` and optional `search_notes=true`) |
+| `GET` | `/spend` | Aggregate spend total/count for a required date window with optional `owner`, `tags`, `include_pending`, and `view` filters |
 | `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
 | `PUT` | `/annotations/{id}` | Upsert annotation for a transaction |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
@@ -181,6 +182,15 @@ After a webhook-triggered sync that adds, modifies, or removes at least one
 transaction, the server sends a `POST` to the OpenClaw `/hooks/agent` endpoint
 to wake the configured agent (Hestia by default). Set `OPENCLAW_HOOKS_TOKEN`
 to enable this; leave it unset to disable silently.
+
+## Observability and tracing
+
+- Every API response includes `X-Request-Id`.
+- Request log lines use `request_id` values (`req-xxxxxxxx`).
+- Sync log lines use `sync_run_id` values (`sync-xxxxxxxx`) for CLI, scheduled,
+  and webhook-triggered sync runs.
+- DEBUG webhook payload logs are redacted; bearer tokens, Plaid secrets, and
+  access tokens are never logged.
 
 ## Production preflight
 
