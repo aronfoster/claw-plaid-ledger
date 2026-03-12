@@ -6,6 +6,49 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ---
 
+## BUG-003: `ledger serve` auth reads `CLAW_API_SECRET` from `os.environ` instead of `load_config()`
+
+`ledger serve` currently behaves inconsistently with the rest of the app’s
+configuration model.
+
+The project supports reading configuration from both:
+
+- process environment variables
+- `~/.config/claw-plaid-ledger/.env`
+
+`load_config()` merges `.env` values with runtime environment variables and
+exposes `config.api_secret` as the resolved value. :contentReference[oaicite:0]{index=0}
+
+However, bearer auth in `src/claw_plaid_ledger/server.py` reads
+`CLAW_API_SECRET` directly from `os.environ` inside `require_bearer_token()`
+instead of using `load_config()`. :contentReference[oaicite:1]{index=1}
+
+As a result:
+
+- `ledger serve` may refuse auth even when `CLAW_API_SECRET` is correctly set
+  in `~/.config/claw-plaid-ledger/.env`
+- startup/auth behavior is inconsistent with docs and operator expectations
+- `curl` requests can return `401 Unauthorized` unless the secret is also
+  exported into the shell environment
+
+### Expected behavior
+
+If `CLAW_API_SECRET` is present in the configured `.env` file, the server
+should accept it the same way other config-backed values are accepted.
+
+### Actual behavior
+
+Auth only works when `CLAW_API_SECRET` is present in the live process
+environment, because `require_bearer_token()` uses:
+
+```python
+api_secret = os.environ.get("CLAW_API_SECRET")
+```
+
+instead of the config loader path.
+
+---
+
 ## BUG-001 — `account_count` inflated on multi-page syncs
 
 **Status:** Resolved (Sprint 3, Task 1)
