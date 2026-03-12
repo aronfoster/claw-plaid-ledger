@@ -1,22 +1,19 @@
-# Sprint 11 — M10: Automation & Connectivity
+# Sprint 12 — M11: Advanced Agent API & Logging
 
 ## Sprint goal
 
-Move from manually triggered sync patterns to webhook-first ingestion with
-deterministic item routing and explicit fallback behavior. By the end of this
-sprint Plaid webhooks route to the correct configured item in a multi-item
-household; a configurable scheduled-sync fallback fires for items that have
-gone silent; and the RUNBOOK covers DNS/DuckDNS setup so the operator can
-maintain a stable, public webhook URL.
+Equip Hestia with richer query capabilities and make the system observable
+from logs alone. By the end of this sprint the agent API surfaces a total-spend
+endpoint, allows tag-based and annotation-notes filtering, and every request and
+sync run carries a correlation ID that appears consistently across all log lines.
+Debug logs are audited to ensure no secrets are emitted.
 
 ## Working agreements
 
 - Keep each task reviewable in one PR where possible.
-- Preserve backward compatibility for all existing sync, doctor, serve, and
-  items workflows. In particular, users without `items.toml` must continue
-  to work via the legacy `PLAID_ACCESS_TOKEN` env-var path.
-- Raw ingestion must remain complete; no suppressions or deletions in the sync
-  engine.
+- All existing endpoints, CLI commands, and workflows must remain backward-
+  compatible. New query parameters must be optional with sensible defaults.
+- Raw ingestion and sync engine behavior are untouched in this sprint.
 - Run the quality gate before every commit:
   - `uv run --locked ruff format . --check`
   - `uv run --locked ruff check .`
@@ -25,284 +22,324 @@ maintain a stable, public webhook URL.
 - Add or update tests for every behavior change.
 - No new runtime dependencies without explicit justification.
 
-## Runtime behavior contract (codified in this sprint)
-
-| Trigger | Behavior |
-|---|---|
-| Plaid webhook (`SYNC_UPDATES_AVAILABLE`) | **Primary.** Route to the matching configured item and sync it immediately. |
-| Scheduled sync fallback | **Secondary.** Fires only when an item has not been synced in the configured fallback window (default 24 h). Opt-in via `CLAW_SCHEDULED_SYNC_ENABLED=true`. |
-| `ledger sync [--all / --item]` | Manual / operator-initiated. Unchanged from M9. |
-| OpenClaw poke | Fires after every sync that produces transaction changes (added + modified + removed > 0). One poke per sync run, regardless of which item triggered it. |
-
-## Task breakdown
-
 ---
 
-### Task 1: Multi-item webhook routing ✅ DONE
+## Task 1: Total spend summary endpoint
 
-**Scope**
+### Scope
 
-The current webhook handler ignores `item_id` in the Plaid payload and always
-syncs the `PLAID_ACCESS_TOKEN` singleton. Teach it to extract `item_id` from
-the payload, find the matching `ItemConfig` in `items.toml`, and pass the
-correct access token to `_background_sync()`. Fall back to the single-item
-env-var path when no items.toml exists or the payload item_id is not
-configured.
+Add `GET /spend` — a purpose-built analytics endpoint that returns aggregate
+spend totals for a configurable date window and optional tag filter. This lets
+Hestia answer questions like "how much did Alice spend on groceries last month?"
+with a single API call instead of paginating through all transactions and
+aggregating client-side.
 
-**Implementation notes**
+### New endpoint
 
-1. **Extract `item_id` from webhook payload** — Plaid includes `item_id` as a
-   top-level string field on every webhook. The handler already receives the
-   parsed body as a dict; read `body.get("item_id")`.
+```
+GET /spend
+```
 
-2. **Refactor `_background_sync()`** — give it optional parameters so the
-   caller can inject item-specific context:
+**Query parameters:**
 
-   ```python
-   async def _background_sync(
-       *,
-       access_token: str | None = None,
-       item_id: str | None = None,
-       owner: str | None = None,
-   ) -> None:
-   ```
-
-   When `access_token` is `None`, the function falls back to loading
-   `PLAID_ACCESS_TOKEN` from config (existing behavior).
-
-3. **Item lookup in the webhook handler** — after verifying the signature and
-   confirming `SYNC_UPDATES_AVAILABLE`:
-
-   ```
-   payload_item_id = body.get("item_id")
-
-   if payload_item_id and items.toml is loadable:
-       find ItemConfig where id == payload_item_id
-       if found:
-           resolve access_token from ItemConfig.access_token_env
-           enqueue _background_sync(access_token=token, item_id=cfg.id, owner=cfg.owner)
-       else:
-           log warning "item_id {x} not found in items.toml; falling back to PLAID_ACCESS_TOKEN"
-           enqueue _background_sync()   # legacy single-item fallback
-   else:
-       enqueue _background_sync()       # no item_id or no items.toml
-   ```
-
-4. **Fallback priority rule** — the fallback must not silently swallow the case
-   where `items.toml` exists but the webhook item_id is missing from it. Log a
-   `WARNING` to make this visible to the operator.
-
-5. **Notification** — `notify_openclaw()` is already called inside
-   `_background_sync()` when changes are non-zero; no change needed. The log
-   message may optionally include the item id for traceability.
-
-**Done when**
-
-- A `SYNC_UPDATES_AVAILABLE` webhook whose `item_id` matches a configured item
-  triggers sync for that specific item's access token.
-- A webhook with an `item_id` absent from `items.toml` logs a warning and falls
-  back to the `PLAID_ACCESS_TOKEN` single-item sync.
-- A webhook with no `item_id` field falls back to the single-item sync (no
-  warning needed — Plaid always sends it, but defensive handling is required).
-- Users with no `items.toml` continue to work exactly as before.
-- `_background_sync()` signature is backward-compatible: calling it with no
-  arguments still works.
-- Tests cover: item found and routed correctly; item_id not in config (warning
-  + fallback); no items.toml (fallback); no item_id in payload (fallback);
-  env-var resolution failure raises and is caught; notification fires when
-  changes > 0.
-- All quality gates pass.
-
----
-
-### Task 2: Scheduled sync fallback ✅ DONE
-
-**Scope**
-
-Add an opt-in background scheduler that fires a sync for any configured item
-that has not been synced within a configurable window (default 24 hours). This
-is the safety net for missed or failed webhooks. Implementation must use
-`asyncio` only — no new scheduler library dependency.
-
-**New configuration**
-
-Add to `config.py` and `.env` loading:
-
-| Env var | Type | Default | Description |
+| Parameter | Type | Default | Description |
 |---|---|---|---|
-| `CLAW_SCHEDULED_SYNC_ENABLED` | bool | `false` | Enable the scheduled sync fallback loop. |
-| `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | int | `24` | Hours of sync silence before an item is considered overdue. |
+| `start_date` | str (ISO date) | required | Window start, inclusive. |
+| `end_date` | str (ISO date) | required | Window end, inclusive. |
+| `owner` | str | `None` | Restrict to accounts belonging to this owner tag. |
+| `tags` | list[str] | `[]` | Restrict to transactions whose annotation contains **all** of the listed tags (AND semantics). Pass the parameter multiple times for multiple tags: `?tags=groceries&tags=recurring`. |
+| `include_pending` | bool | `false` | When `false` (default), exclude pending transactions. When `true`, include them. Pending amounts are unconfirmed so the default is conservative. |
+| `view` | `"canonical"` \| `"raw"` | `"canonical"` | Same semantics as `GET /transactions`. |
 
-Parse `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` with a minimum value of 1; reject
-values ≤ 0 with a startup error.
+**Response body:**
 
-**Implementation notes**
+```json
+{
+  "start_date": "2025-01-01",
+  "end_date": "2025-01-31",
+  "total_spend": 1234.56,
+  "transaction_count": 42,
+  "includes_pending": false,
+  "filters": {
+    "owner": "alice",
+    "tags": ["groceries"]
+  }
+}
+```
 
-1. **FastAPI lifespan context manager** — add a `lifespan` function to
-   `server.py` using `@asynccontextmanager`. On startup, if
-   `CLAW_SCHEDULED_SYNC_ENABLED=true`, create an asyncio background task
-   running `_scheduled_sync_loop()`. Cancel it cleanly on shutdown:
+- `total_spend` is the **sum of `amount` values** for matching transactions.
+  Plaid uses positive amounts for debits (money leaving the account) and
+  negative for credits. Sum as-is; do not negate.
+- `transaction_count` is the count of rows matched (before any aggregation).
+- Both fields are `0` / `0` when no transactions match — never `null`.
+- `start_date` and `end_date` are echoed back in the response for
+  unambiguous client-side logging.
+- Require `start_date` and `end_date`; return HTTP 422 if either is absent or
+  unparseable as an ISO date.
 
-   ```python
-   @asynccontextmanager
-   async def lifespan(app: fastapi.FastAPI):
-       task = None
-       if config.scheduled_sync_enabled:
-           task = asyncio.create_task(_scheduled_sync_loop(config))
-       yield
-       if task:
-           task.cancel()
-           with contextlib.suppress(asyncio.CancelledError):
-               await task
+### Implementation notes
 
-   app = fastapi.FastAPI(title="claw-plaid-ledger", lifespan=lifespan)
-   ```
+1. **Database query** — join `transactions` with `annotations` (LEFT JOIN) to
+   access tags. Tags are stored as a JSON string; use SQLite's `json_each()` to
+   filter by tag values. Filter by `posted_date` (non-pending) or
+   `authorized_date` (pending) as appropriate when `include_pending=false`.
+   The simplest correct approach: when `include_pending=false`, add
+   `AND pending = 0`; when `true`, no pending filter.
+2. **Tag filtering** — for each tag in the `tags` list, add a subquery or
+   EXISTS clause that checks `json_each(annotations.tags)`. All tags must match
+   (AND). An unannotated transaction never matches a tag filter.
+3. **`owner` filter** — join to `accounts` on `plaid_account_id` and filter
+   by `accounts.owner`. Reuse the same logic as the `view=canonical` filter
+   in `GET /transactions`.
+4. **Auth** — Bearer token required (same as all other endpoints).
+5. **OpenAPI** — the endpoint must appear in `/docs` with clear parameter and
+   response descriptions.
 
-2. **`_scheduled_sync_loop()`** — runs forever, waking every 60 minutes to
-   check for overdue items:
+### Done when
 
-   ```python
-   async def _scheduled_sync_loop(config) -> None:
-       while True:
-           await asyncio.sleep(3600)   # check once per hour
-           await _check_and_sync_overdue_items(config)
-   ```
-
-   The 60-minute poll interval is not configurable (it is not the fallback
-   window; it is just the check frequency). Document this in a comment.
-
-3. **`_check_and_sync_overdue_items()`** — for each item in `items.toml` (or
-   the single-item env-var fallback if no `items.toml`):
-
-   - Read `sync_state.last_synced` from the DB for that item's `item_id`.
-   - If `last_synced` is `None` or older than `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS`
-     hours ago → call `_background_sync()` with the item's credentials.
-   - Log an INFO message: `"scheduled-sync: item {id} overdue ({n}h since last
-     sync); triggering fallback sync"`.
-   - Skip items where `last_synced` is recent; log DEBUG for each skipped item.
-   - Catch all exceptions per item so one failure does not prevent others from
-     being checked.
-
-4. **`doctor` check** — add a new entry to the `doctor` output that reports
-   scheduled sync configuration:
-
-   ```
-   scheduled-sync: DISABLED (set CLAW_SCHEDULED_SYNC_ENABLED=true to enable)
-   ```
-   or
-   ```
-   scheduled-sync: ENABLED — fallback window 24h, check interval 60min
-   ```
-
-   This check is informational only; it does not cause `doctor` to exit
-   non-zero.
-
-**Done when**
-
-- `CLAW_SCHEDULED_SYNC_ENABLED=false` (default): no background task is started;
-  no behavior change from M9.
-- `CLAW_SCHEDULED_SYNC_ENABLED=true`: a background loop starts at server
-  startup and is cancelled cleanly on shutdown.
-- Items overdue by more than `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` hours trigger
-  a sync call; recently synced items are skipped.
-- A single item's sync failure does not prevent others from being checked in
-  the same pass.
-- `doctor` reports scheduled sync state correctly.
-- `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS=0` or negative is rejected with a clear
-  startup error.
-- Tests cover: disabled (no task created), enabled with overdue item (sync
-  triggered), enabled with recent item (sync skipped), item with no sync state
-  (treated as overdue), one item fails (others still checked), `doctor` output
-  for enabled and disabled states, invalid fallback hours rejected.
+- `GET /spend?start_date=X&end_date=Y` returns `total_spend` and
+  `transaction_count` for all canonical non-pending transactions in the window.
+- `?tags=groceries` restricts to transactions annotated with that tag.
+- `?tags=groceries&tags=recurring` restricts to transactions with both tags.
+- `?include_pending=true` includes pending transactions in the total.
+- `?owner=alice` restricts to Alice's accounts.
+- Missing `start_date` or `end_date` returns HTTP 422.
+- An empty date window (no matching transactions) returns
+  `{"total_spend": 0, "transaction_count": 0, ...}` not an error.
+- Tests cover: basic spend in window; tag filter (single tag); tag filter (AND
+  — two tags); `include_pending` true vs false; `owner` filter;
+  `view=raw`; missing required params → 422; empty result window → zeros;
+  unauthenticated request → 401.
 - All quality gates pass.
 
 ---
 
-### Task 3: DuckDNS webhook URL setup guidance ✅ DONE
+## Task 2: Enhanced transaction filtering — tags and annotation notes
 
-**Scope**
+### Scope
 
-Operators running `ledger serve` on a home server need a stable, public-facing
-URL for Plaid to deliver webhooks. Add practical DuckDNS setup instructions to
-`RUNBOOK.md` and commit a reusable IP-update shell script to the repo.
+Extend `GET /transactions` with two new optional filter parameters:
+tag-based filtering and annotation-note search. The existing `keyword`
+parameter searches `name` and `merchant_name`; extend it to also match the
+annotation `note` field. Add a separate `tags` parameter (same semantics as
+the spend endpoint).
 
-**Deliverables**
+These are purely additive changes — all existing parameters and their behavior
+are unchanged.
 
-1. **New RUNBOOK.md section: "Stable webhook URL with DuckDNS"** — add after
-   the existing "Plaid webhook setup" content. Cover:
+### New parameters on `GET /transactions`
 
-   - Why a stable public URL is needed (Plaid requires a pre-registered
-     webhook URL; home IPs change).
-   - Account and subdomain registration at duckdns.org.
-   - How to find your DuckDNS token.
-   - Pointing Plaid to `https://<subdomain>.duckdns.org/webhooks/plaid`.
-   - Router/firewall port-forward requirements (external 443 → internal
-     `CLAW_SERVER_PORT`).
-   - TLS termination note: recommend a reverse proxy (nginx, Caddy) to handle
-     TLS; `ledger serve` listens on plain HTTP internally.
-   - Testing the webhook URL with `curl` before registering with Plaid.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `tags` | list[str] | `[]` | Return only transactions whose annotation contains **all** listed tags (AND semantics). Same multi-value query string convention as `/spend`. Transactions without an annotation never match a tag filter. |
+| `search_notes` | bool | `false` | When `true`, include the annotation `note` field in `keyword` searches in addition to `name` and `merchant_name`. Has no effect if `keyword` is absent. |
 
-2. **`scripts/duckdns-update.sh`** — a minimal POSIX shell script that updates
-   the DuckDNS IP record:
+### Implementation notes
 
-   ```sh
-   #!/bin/sh
-   # Usage: DUCKDNS_TOKEN=<token> DUCKDNS_DOMAIN=<subdomain> ./duckdns-update.sh
-   # Suitable for cron or a systemd timer. Logs result to stdout.
-   set -eu
-   DUCKDNS_TOKEN="${DUCKDNS_TOKEN:?DUCKDNS_TOKEN is required}"
-   DUCKDNS_DOMAIN="${DUCKDNS_DOMAIN:?DUCKDNS_DOMAIN is required}"
-   RESULT=$(curl -fsSL \
-     "https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=")
-   echo "duckdns-update: ${DUCKDNS_DOMAIN} → ${RESULT}"
-   ```
+1. **`tags` filter** — add a LEFT JOIN to `annotations` in the existing
+   transactions list query (or extend the join if one already exists). Apply
+   the same `json_each(annotations.tags)` existence check used in Task 1.
+   Reuse the helper logic from Task 1 to avoid duplication.
+2. **`search_notes`** — when `search_notes=true` and `keyword` is set, add an
+   additional OR clause: `OR annotations.note LIKE '%<keyword>%'`. The join to
+   annotations must remain a LEFT JOIN so transactions without annotations still
+   appear when `tags` is empty and `search_notes` is false.
+3. **`total` count** — the `total` field in the response must reflect the
+   count of matching rows after the new filters are applied, for correct
+   pagination.
+4. **No breaking changes** — existing callers sending none of the new params
+   must receive identical results to today. Add regression tests that confirm
+   this.
 
-   The script must use env vars only; no hardcoded credentials. Add a cron
-   example comment: `*/5 * * * * DUCKDNS_TOKEN=... DUCKDNS_DOMAIN=... /path/to/duckdns-update.sh`.
+### Done when
 
-3. **RUNBOOK.md section: "Scheduled sync fallback"** — a short operational
-   note explaining when and why to enable `CLAW_SCHEDULED_SYNC_ENABLED`,
-   cross-referencing Task 2. This is a pure docs addition; keep it brief
-   (≤ 10 lines).
-
-**Done when**
-
-- `RUNBOOK.md` has a clear DuckDNS setup walkthrough that a new operator can
-  follow end-to-end.
-- `scripts/duckdns-update.sh` is committed, executable (`chmod +x`), and
-  validated with `shellcheck` (if available in the environment).
-- `RUNBOOK.md` has a scheduled sync fallback operations note.
-- No new Python code or dependencies introduced.
-- All quality gates pass (docs only; ruff/mypy/pytest are unaffected).
+- `GET /transactions?tags=groceries` returns only transactions annotated with
+  `"groceries"`.
+- `GET /transactions?tags=a&tags=b` returns only transactions annotated with
+  both tags.
+- `GET /transactions?keyword=coffee` still searches only `name` and
+  `merchant_name` (unchanged baseline).
+- `GET /transactions?keyword=coffee&search_notes=true` also matches
+  transactions whose annotation `note` contains "coffee".
+- `GET /transactions` with no new params returns results identical to pre-sprint
+  behavior (regression test).
+- `total` in the response correctly reflects the filtered count for pagination.
+- Tests cover: tag filter (match, no-match, AND-two-tags); `search_notes=true`
+  matches note; `search_notes=false` does not match note; combined `tags` +
+  `keyword` + `search_notes`; no-new-params regression.
+- All quality gates pass.
 
 ---
 
-### Task 4: Sprint closeout, docs, and acceptance validation ✅ DONE
+## Task 3: Structured logging with correlation IDs
 
-**Scope**
+### Scope
 
-Update project documentation to reflect the M10 implementation and validate all
-acceptance criteria.
+Introduce consistent structured logging across the API, CLI, and sync layers.
+Every HTTP request gets a unique `request_id`; every sync run gets a unique
+`sync_run_id`. Both IDs propagate through all log lines emitted during their
+lifetime. Audit all existing log sites to ensure DEBUG logs never emit secrets.
+Where possible, include redacted webhook payloads at DEBUG level.
 
-**Checklist**
+### Logging conventions
+
+**Format change** — update `logging.basicConfig` format string to include
+correlation fields. Proposed format:
+
+```
+%(asctime)s %(levelname)s %(name)s [%(correlation_id)s]: %(message)s
+```
+
+Use Python's `logging.LoggerAdapter` or a custom `logging.Filter` to inject
+`correlation_id` into every log record from within a request or sync context.
+When no context is active, `correlation_id` should render as `-`.
+
+**ID generation** — use `uuid.uuid4()` short hex (first 8 characters is
+sufficient for home-server scale): e.g. `req-a1b2c3d4`, `sync-e5f6a7b8`.
+
+### Request correlation IDs (API layer)
+
+1. Add a FastAPI middleware (not a dependency) that:
+   - Generates a `request_id = "req-" + uuid4().hex[:8]` per request.
+   - Stores it in a `contextvars.ContextVar` so all code in the request
+     call stack can read it without passing it explicitly.
+   - Emits an INFO log at request start:
+     `"request_start method={METHOD} path={PATH} request_id={ID}"`
+   - Emits an INFO log at request end:
+     `"request_end method={METHOD} path={PATH} status={STATUS} request_id={ID}"`
+   - Adds `X-Request-Id: {ID}` to the response headers.
+2. All existing log calls inside request handlers automatically pick up the
+   `request_id` via the context var — no manual threading needed.
+3. When a webhook triggers `_background_sync()`, pass the `request_id` as the
+   `sync_run_id` seed or prefix (e.g. `"sync-{request_id_suffix}"`). This
+   links the webhook log entry to the subsequent sync log entries.
+
+### Sync correlation IDs (sync layer)
+
+1. `_background_sync()` and `run_sync()` generate (or accept) a
+   `sync_run_id = "sync-" + uuid4().hex[:8]`.
+2. All log lines emitted inside a sync run — including those in
+   `sync_engine.py` — include `sync_run_id` in the message or via the log
+   adapter. Passing the ID explicitly as a parameter to `run_sync()` is
+   acceptable and preferred over a global context var for the sync layer, to
+   keep the sync engine testable without FastAPI machinery.
+3. The scheduled sync loop logs its own `sync_run_id` per item per check pass.
+
+### Secret audit and redaction rules
+
+Review every `logger.debug(...)` call in the codebase. Apply these rules:
+
+| Data type | Rule |
+|---|---|
+| Bearer tokens (`CLAW_API_SECRET`, `Authorization` header value) | **Never log**, not even at DEBUG. |
+| Plaid secrets (`PLAID_SECRET`, `PLAID_WEBHOOK_SECRET`) | **Never log**, not even at DEBUG. |
+| Plaid access tokens | **Never log**. |
+| Webhook request body | **OK to log at DEBUG** after redacting the `Authorization` header. Strip any field named `secret`, `token`, or `password` from the logged dict. Financial data and account IDs are fine. |
+| Transaction data, account IDs, amounts | OK at DEBUG and INFO. |
+| Sync cursors | OK at DEBUG. |
+
+Add a small `redact_webhook_body(body: dict) -> dict` helper (in a suitable
+module) that removes the above sensitive keys before logging. Cover it with
+a unit test.
+
+### Implementation notes
+
+- `contextvars.ContextVar` is the right primitive for the request-scoped ID
+  in an async FastAPI context; it is safe under `asyncio` concurrency.
+- Do not introduce a new library dependency (e.g. `structlog`). Standard
+  `logging` with a `LoggerAdapter` or `Filter` is sufficient.
+- The CLI `sync` command (not the server) should emit a `sync_run_id` in its
+  log output so that manual syncs are also traceable.
+- The `lifespan` startup/shutdown log lines should emit a context-free marker
+  (e.g. `[startup]` or `correlation_id=-`).
+
+### Logging coverage audit
+
+As a housekeeping pass, read through all modules (`server.py`, `sync_engine.py`,
+`cli.py`, `db.py`, `config.py`, `preflight.py`, `notifications.py`, and any
+others) and identify code paths that are currently silent but would be useful
+for operators during normal use or when diagnosing problems.
+
+**Guiding questions when reviewing a code path:**
+- If this fails or behaves unexpectedly, would a log make the root cause
+  immediately obvious?
+- Are there non-trivial decisions or branch points that an operator might want
+  to trace?
+- Is there a success path that currently gives no feedback at all?
+
+**Examples of gaps likely to be found** (verify against the actual code; do not
+assume these exist):
+- `db.py` database migration or schema bootstrap — does it log which migration
+  was applied or if the schema was already current?
+- `config.py` — does it log which `.env` file was loaded (path, not contents)?
+- `preflight.py` — does each check log its own pass/fail at DEBUG so a full
+  preflight trace is readable without looking at source?
+- `notifications.py` — does a successful OpenClaw notification log the
+  response status? Does a failed one log the error clearly enough to diagnose
+  without a stack trace?
+- `cli.py` `items` command — does it log anything useful when `items.toml` is
+  absent vs. present?
+- Annotation writes (`PUT /annotations`) — is there a DEBUG log of what was
+  written and for which transaction?
+
+For each gap found, add a log call at the appropriate level:
+- `DEBUG` for high-frequency events or detailed state that is only useful when
+  actively debugging.
+- `INFO` for significant lifecycle events (server start, sync complete,
+  migration applied, notification sent).
+- `WARNING` for recoverable anomalies an operator should know about.
+
+Do not add log calls that just echo what is already obvious from the surrounding
+context, and do not add log calls inside tight loops that would flood output at
+INFO level. Quality over quantity.
+
+### Done when
+
+- Every HTTP request log line includes `request_id`.
+- `X-Request-Id` header is present in all API responses.
+- Every sync run log line (including those inside `sync_engine.py`) includes
+  `sync_run_id`.
+- A webhook-triggered sync links its `sync_run_id` back to the triggering
+  `request_id` in at least one log line.
+- `ledger sync` CLI command logs a `sync_run_id`.
+- No bearer token, Plaid secret, or access token appears in any log at any
+  level.
+- `redact_webhook_body()` exists, is unit-tested, and is used before any
+  DEBUG log of a webhook payload.
+- Log lines emitted outside any request/sync context render `correlation_id`
+  as `-` (not a crash, not blank).
+- Logging coverage audit is complete; gaps found are filled with appropriately
+  levelled log calls.
+- Tests cover: middleware generates unique IDs per request; response includes
+  `X-Request-Id`; `redact_webhook_body` removes all sensitive keys and
+  preserves financial data; sync run ID is present in mock-logged sync output.
+- All quality gates pass.
+
+---
+
+## Task 4: Sprint closeout, docs, and acceptance validation
+
+### Scope
+
+Update project documentation to reflect the M11 implementation and validate
+all acceptance criteria.
+
+### Checklist
 
 - `ARCHITECTURE.md`:
-  - Update webhook flow description to reflect item-routing logic.
-  - Add scheduled sync fallback to the runtime behavior section.
-  - Add `CLAW_SCHEDULED_SYNC_ENABLED` and `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS`
-    to the configuration reference table.
-  - Update CLI/server module descriptions if new helpers were added.
+  - Add `GET /spend` to the API endpoint reference.
+  - Document the new `tags` and `search_notes` parameters on `GET /transactions`.
+  - Add a "Logging conventions" section describing the correlation ID scheme,
+    log format, and secret-redaction policy.
 - `RUNBOOK.md`:
-  - Add `ledger serve` startup checklist entry: confirm
-    `CLAW_SCHEDULED_SYNC_ENABLED` intent before launch.
-  - Update webhook setup section to cross-reference the DuckDNS guidance from
-    Task 3.
+  - Add a short troubleshooting tip: "Tracing a request end-to-end using
+    `request_id` and `sync_run_id`" — one or two grep examples.
 - `ROADMAP.md`:
-  - Move M10 from "Upcoming Milestones" to "Completed Milestones".
+  - Move M11 from "Upcoming Milestones" to "Completed Milestones".
 - `SPRINT.md`:
   - Append `✅ DONE` to each completed task heading.
-  - Add "Sprint 11 closeout ✅ DONE" section summarising what shipped and any
-    explicitly deferred follow-ups.
+  - Add "Sprint 12 closeout ✅ DONE" section summarising what shipped and
+    any explicitly deferred follow-ups.
 - Quality gate must pass at closeout:
   - `uv run --locked ruff format . --check` ✅
   - `uv run --locked ruff check .` ✅
@@ -311,64 +348,29 @@ acceptance criteria.
 
 ---
 
-## Acceptance criteria for Sprint 11
+## Acceptance criteria for Sprint 12
 
-- A `SYNC_UPDATES_AVAILABLE` webhook whose `item_id` matches a configured item
-  syncs that item's access token, not the `PLAID_ACCESS_TOKEN` singleton.
-- An unrecognised `item_id` in a webhook falls back to the single-item env-var
-  path with a logged warning; no crash, no silent drop.
-- Users with no `items.toml` see identical behavior to M9 (full backward
-  compat).
-- `CLAW_SCHEDULED_SYNC_ENABLED=false` (default): server starts with no
-  background loop and no behavior change.
-- `CLAW_SCHEDULED_SYNC_ENABLED=true`: overdue items are synced automatically;
-  recently-synced items are skipped; the loop shuts down cleanly.
-- `doctor` reports scheduled sync configuration state.
-- `RUNBOOK.md` has actionable DuckDNS setup instructions and a
-  `scripts/duckdns-update.sh` script.
+- `GET /spend` returns accurate aggregate totals for date-window and tag queries.
+- `GET /spend` excludes pending transactions by default; includes them with
+  `?include_pending=true`.
+- `GET /transactions?tags=...` filters correctly; `?search_notes=true` extends
+  keyword search to annotation notes.
+- All pre-existing `GET /transactions` call patterns return identical results
+  to Sprint 11 (no regressions).
+- Every API response includes `X-Request-Id`.
+- Every log line emitted during a request includes the request correlation ID.
+- Every log line emitted during a sync run includes the sync run ID.
+- No secrets (bearer tokens, Plaid secrets, access tokens) appear in logs at
+  any level.
+- Webhook payloads can appear at DEBUG level after redaction.
 - All existing workflows (`doctor`, `sync`, `serve`, `items`, `link`,
   `preflight`, `apply-precedence`, `overlaps`) are unbroken.
 - Quality gate passes.
 
-## Explicitly deferred (remain out of scope in Sprint 11)
+## Explicitly deferred (remain out of scope in Sprint 12)
 
-- Parallel multi-institution sync (sequential is sufficient for household scale).
+- Parallel multi-institution sync.
 - Automatic `apply-precedence` on every sync.
-- Transfer detection and internal movement suppression (M12).
 - Per-agent token scoping.
-- Richer operator review queue UX.
-
----
-
-## Sprint 11 closeout ✅ DONE
-
-### What shipped
-
-- **Task 1 — Multi-item webhook routing:** `POST /webhooks/plaid` now extracts
-  `item_id` from the Plaid payload, resolves the matching `ItemConfig` from
-  `items.toml`, and passes the correct access token to `_background_sync()`.
-  Unknown item IDs log a WARNING and fall back to the `PLAID_ACCESS_TOKEN`
-  single-item path; callers with no `items.toml` are fully backward-compatible.
-
-- **Task 2 — Scheduled sync fallback:** Opt-in background loop controlled by
-  `CLAW_SCHEDULED_SYNC_ENABLED` (default `false`) and
-  `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` (default `24`, minimum `1`).  The loop
-  wakes every 60 minutes, checks `sync_state.last_synced_at` per item, and
-  calls `_background_sync()` for overdue items.  One item failing does not
-  block others.  FastAPI `lifespan` context manager starts and stops the task
-  cleanly.  `doctor` reports enabled/disabled state.
-
-- **Task 3 — DuckDNS webhook URL setup:** `scripts/duckdns-update.sh` POSIX
-  shell script committed and made executable.  `RUNBOOK.md` sections 10 and 11
-  cover DuckDNS setup end-to-end and the scheduled sync fallback operations
-  note.
-
-- **Task 4 — Sprint closeout, docs, and acceptance validation:**
-  `ARCHITECTURE.md`, `RUNBOOK.md`, `ROADMAP.md`, and `README.md` updated to
-  reflect M10 implementation.  M10 moved from Upcoming to Completed in
-  `ROADMAP.md`.  Quality gate passed.
-
-### Explicitly deferred follow-ups
-
-The items listed in "Explicitly deferred (remain out of scope in Sprint 11)"
-above carry forward unchanged into the Sprint 12 / M11 backlog.
+- Markdown export.
+- M12 Hestia skill definition (next milestone).
