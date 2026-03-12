@@ -79,6 +79,35 @@ Never store Plaid secrets:
 - in markdown files
 - in the OpenClaw workspace
 
+## Getting an Access Token for Plaid Sandbox
+
+**Step 1 — Create a fake public token:**
+```bash
+curl -X POST https://sandbox.plaid.com/sandbox/public_token/create \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "client_id": "YOUR_CLIENT_ID",
+    "secret": "YOUR_SECRET",
+    "institution_id": "ins_109508",
+    "initial_products": ["transactions"]
+  }'
+```
+
+This returns something like `{"public_token": "public-sandbox-abc123..."}`.
+
+**Step 2 — Exchange it for an access token:**
+```bash
+curl -X POST https://sandbox.plaid.com/item/public_token/exchange \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "client_id": "YOUR_CLIENT_ID",
+    "secret": "YOUR_SECRET",
+    "public_token": "public-sandbox-abc123..."
+  }'
+```
+
+This returns `{"access_token": "access-sandbox-xyz..."}` — that's what goes in `.env` as `PLAID_ACCESS_TOKEN`.
+
 ## Configuration reference
 
 The template file `.env.example` includes all supported keys. Key variables:
