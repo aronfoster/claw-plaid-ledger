@@ -6,13 +6,19 @@
 The order of the RUNBOOK is not from zero to setup, and it should be. It starts assuming items.toml is already populated. I don't even see a cp command I can use to copy the example to the real file. This shouldn't need such manual intervention.
 
 ### Heartbeat Confusion
-We should be waking OpenClaw agent with a poke, not using heartbeat. Why are we talking about heartbeats?
+We should be waking OpenClaw agent with a poke, not using heartbeat. We should be getting all transactions via webhook. Why are we talking about heartbeats and scheduled sync? Let's make the distinction clear.
 
 ### Ledger Link Improvements
 Does this really require the user to copy/paste tokens from the CLI? Explore automatic account entry creation.
 
 ### Better Logging
 I haven't been cracking the whip on creating INFO and DEBUG level logs to assist with runtime troubleshooting. Review the entire codebase and add appropriate logging statements.
+
+### More OpenClaw Endpoints
+There are a lot of useful endpoints we should add so OpenClaw agent Hestia can answer a lot of questions without having to do math and filtering herself. I especially want to enable filtering by tags and dates. Maybe include/exclude pending. And functions that get total spend. Maybe something to search the notes field?
+
+### DNS Configuration
+Include steps and as much automated setup for duckdns or another DNS so that we can successfully subscribe to transactions.
 
 ## Completed Milestones
 
