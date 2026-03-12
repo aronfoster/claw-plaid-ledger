@@ -109,6 +109,27 @@ class TestRequireBearerToken:
             require_bearer_token(creds)
         assert exc_info.value.status_code == http.HTTPStatus.UNAUTHORIZED
 
+    def test_secret_from_env_file_authenticates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        require_bearer_token accepts secret resolved from .env file.
+
+        Regression test for BUG-003: auth must use load_api_secret() (which
+        merges the .env file with process env) rather than reading
+        os.environ directly.
+        """
+        monkeypatch.delenv("CLAW_API_SECRET", raising=False)
+        # Simulate load_api_secret() returning the secret from the .env file
+        # (i.e. not present in the process environment).
+        with patch(
+            "claw_plaid_ledger.server.load_api_secret", return_value=_TOKEN
+        ):
+            creds = HTTPAuthorizationCredentials(
+                scheme="Bearer", credentials=_TOKEN
+            )
+            require_bearer_token(creds)  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # Integration tests via a protected test endpoint
