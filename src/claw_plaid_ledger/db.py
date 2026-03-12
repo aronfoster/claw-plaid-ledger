@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+logger = logging.getLogger(__name__)
+
 
 def load_schema_sql() -> str:
     """Load the checked-in SQL schema text."""
@@ -25,16 +27,22 @@ def initialize_database(db_path: Path) -> None:
     """Initialize the SQLite database and create schema objects."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    logger.debug("initialize_database db_path=%s", db_path)
     with sqlite3.connect(db_path) as connection:
         connection.executescript(load_schema_sql())
-        for stmt in (
+        migration_stmts = (
             "ALTER TABLE accounts ADD COLUMN owner TEXT",
             "ALTER TABLE sync_state ADD COLUMN owner TEXT",
             "ALTER TABLE accounts ADD COLUMN item_id TEXT",
             "ALTER TABLE accounts ADD COLUMN canonical_account_id TEXT",
-        ):
-            with contextlib.suppress(sqlite3.OperationalError):
+        )
+        for stmt in migration_stmts:
+            try:
                 connection.execute(stmt)
+                logger.info("db migration applied: %s", stmt)
+            except sqlite3.OperationalError:
+                # Column already exists — schema is current.
+                logger.debug("db migration already applied: %s", stmt)
         connection.commit()
 
 
