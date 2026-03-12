@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 import sqlite3
 from datetime import UTC, datetime
@@ -15,7 +14,11 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
-from claw_plaid_ledger.config import OpenClawConfig, load_config
+from claw_plaid_ledger.config import (
+    OpenClawConfig,
+    load_api_secret,
+    load_config,
+)
 from claw_plaid_ledger.db import (
     AnnotationRow,
     TransactionQuery,
@@ -44,7 +47,7 @@ def require_bearer_token(
     ],
 ) -> None:
     """Enforce Authorization: Bearer <token> using CLAW_API_SECRET."""
-    api_secret = os.environ.get("CLAW_API_SECRET")
+    api_secret = load_api_secret()
     if not api_secret:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if credentials is None:

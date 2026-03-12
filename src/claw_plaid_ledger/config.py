@@ -105,6 +105,19 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return parsed
 
 
+def load_api_secret(
+    environ: dict[str, str] | None = None,
+    *,
+    env_file: Path | None = None,
+) -> str | None:
+    """Return CLAW_API_SECRET merged from .env file and environment."""
+    candidate_env_file = _default_env_file() if env_file is None else env_file
+    file_values = _load_env_file(candidate_env_file)
+    runtime_values = dict(os_environ if environ is None else environ)
+    values = {**file_values, **runtime_values}
+    return values.get("CLAW_API_SECRET") or None
+
+
 def load_config(
     environ: dict[str, str] | None = None,
     *,
