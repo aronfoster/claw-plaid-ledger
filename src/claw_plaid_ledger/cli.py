@@ -633,6 +633,114 @@ def apply_precedence() -> None:
     typer.echo("apply-precedence: done")
 
 
+def _find_potential_overlaps(
+    connection: sqlite3.Connection,
+) -> list[tuple[str, str, str, str]]:
+    """Return possible overlap groups keyed by name/mask/type."""
+    rows = connection.execute(
+        "SELECT name, mask, type, "
+        "group_concat(DISTINCT item_id) AS items "
+        "FROM accounts "
+        "WHERE item_id IS NOT NULL AND mask IS NOT NULL "
+        "GROUP BY name, mask, type "
+        "HAVING COUNT(DISTINCT item_id) > 1 "
+        "ORDER BY name, mask, type"
+    ).fetchall()
+    return [
+        (str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in rows
+    ]
+
+
+@app.command()
+def overlaps() -> None:
+    """Show suppression config status and potential account overlaps."""
+    try:
+        items_config = load_items_config()
+    except ItemsConfigError as error:
+        typer.echo(f"overlaps: config error: {error}")
+        raise SystemExit(1) from error
+
+    configured = [
+        (item.id, suppression)
+        for item in items_config
+        for suppression in item.suppressed_accounts
+    ]
+    if not configured:
+        typer.echo("overlaps: no suppressions configured")
+        raise SystemExit(0)
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        typer.echo(f"overlaps: {error}")
+        raise SystemExit(1) from error
+
+    try:
+        with sqlite3.connect(config.db_path) as connection:
+            account_rows = connection.execute(
+                "SELECT plaid_account_id, canonical_account_id FROM accounts"
+            ).fetchall()
+            overlap_rows = _find_potential_overlaps(connection)
+    except sqlite3.Error as error:
+        typer.echo(f"overlaps: DB error: {error}")
+        raise SystemExit(1) from error
+
+    account_status_by_id = {str(row[0]): row[1] for row in account_rows}
+    active_count = 0
+    pending_count = 0
+
+    typer.echo("Configured suppressions (from items.toml):")
+    for item_id, suppression in configured:
+        current_canonical = account_status_by_id.get(
+            suppression.plaid_account_id
+        )
+        if current_canonical is None:
+            status = "NOT YET SYNCED — run sync first"
+            pending_count += 1
+        elif current_canonical == suppression.canonical_account_id:
+            status = "IN DB"
+            active_count += 1
+        else:
+            status = "MISMATCH"
+
+        canonical_from = (
+            f" ({suppression.canonical_from_item})"
+            if suppression.canonical_from_item is not None
+            else ""
+        )
+        typer.echo(
+            "  "
+            f"{item_id} / {suppression.plaid_account_id}  →  "
+            f"suppressed by {suppression.canonical_account_id}"
+            f"{canonical_from}"
+            f"  [{status}]"
+        )
+
+    typer.echo("")
+    typer.echo(
+        "Potential unconfirmed overlaps "
+        "(same name + mask from different items):"
+    )
+    if not overlap_rows:
+        typer.echo("  none detected")
+    else:
+        for name, mask, account_type, items_csv in overlap_rows:
+            items_list = ", ".join(sorted(items_csv.split(",")))
+            typer.echo(
+                f'  "{name}"  mask={mask}  type={account_type}  '
+                f"items: {items_list}  — consider adding "
+                "suppressed_accounts config"
+            )
+
+    typer.echo("")
+    typer.echo(
+        "overlaps: "
+        f"{active_count} configured suppression active, "
+        f"{pending_count} pending sync, "
+        f"{len(overlap_rows)} potential overlap flagged."
+    )
+
+
 @app.command()
 def serve() -> None:
     """Start the HTTP server on CLAW_SERVER_HOST:CLAW_SERVER_PORT."""
