@@ -2274,3 +2274,338 @@ class TestGetSpendEndpoint:
         assert response.json()["total_spend"] == pytest.approx(
             _SPEND_JAN_CANONICAL_TOTAL
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /transactions — tags and search_notes filters (Task 2)
+# ---------------------------------------------------------------------------
+
+
+def _seed_tag_notes_data(db_path: pathlib.Path) -> None:
+    """
+    Seed fixture data for tags and search_notes filter tests.
+
+    Accounts:
+      acct_1  (canonical — not suppressed)
+
+    Transactions:
+      tx_t1  name="Tea House"   note="morning coffee habit"  tags=["coffee"]
+      tx_t2  name="Coffee Shop" note="nothing special"       tags=["groceries"]
+      tx_t3  name="Bookstore"   no annotation
+
+    Note: tx_t1 also has tag "recurring" (stored as ["coffee","recurring"]).
+    """
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "INSERT INTO accounts "
+            "(plaid_account_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "acct_1",
+                "Checking",
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.executemany(
+            (
+                "INSERT INTO transactions (plaid_transaction_id, "
+                "plaid_account_id, amount, iso_currency_code, name, "
+                "merchant_name, pending, authorized_date, posted_date, "
+                "raw_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_t1",
+                    "acct_1",
+                    5.0,
+                    "USD",
+                    "Tea House",
+                    None,
+                    0,
+                    None,
+                    "2025-01-10",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t2",
+                    "acct_1",
+                    12.0,
+                    "USD",
+                    "Coffee Shop",
+                    None,
+                    0,
+                    None,
+                    "2025-01-11",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t3",
+                    "acct_1",
+                    20.0,
+                    "USD",
+                    "Bookstore",
+                    None,
+                    0,
+                    None,
+                    "2025-01-12",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+        # Annotate tx_t1: tags=["coffee","recurring"], note matching "coffee"
+        connection.execute(
+            (
+                "INSERT INTO annotations (plaid_transaction_id, category, "
+                "note, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                "tx_t1",
+                None,
+                "morning coffee habit",
+                '["coffee", "recurring"]',
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        # Annotate tx_t2: tags=["groceries"], note="nothing special"
+        connection.execute(
+            (
+                "INSERT INTO annotations (plaid_transaction_id, category, "
+                "note, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                "tx_t2",
+                None,
+                "nothing special",
+                '["groceries"]',
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        # tx_t3 has no annotation
+
+
+class TestListTransactionsTagsAndSearchNotes:
+    """Tests for ?tags and ?search_notes filters on GET /transactions."""
+
+    def test_single_tag_filter_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=coffee returns only transactions annotated with 'coffee'."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"tags": "coffee"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert body["transactions"][0]["id"] == "tx_t1"
+
+    def test_single_tag_filter_no_match(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=nonexistent returns an empty list, not an error."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"tags": "nonexistent"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json()["total"] == 0
+        assert response.json()["transactions"] == []
+
+    def test_and_two_tags_matches_intersection(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=coffee&tags=recurring returns only transactions with both."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_t1 has ["coffee","recurring"]; tx_t2 has ["groceries"] only
+        response = client.get(
+            "/transactions",
+            params=[("tags", "coffee"), ("tags", "recurring")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert body["transactions"][0]["id"] == "tx_t1"
+
+    def test_and_two_tags_no_common_match_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tags=coffee&tags=groceries returns empty — no tx has both."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params=[("tags", "coffee"), ("tags", "groceries")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        assert response.json()["total"] == 0
+
+    def test_unannotated_transaction_never_matches_tag_filter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """tx_t3 (no annotation) never appears when a tag filter is active."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"tags": "coffee"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        ids = [t["id"] for t in response.json()["transactions"]]
+        assert "tx_t3" not in ids
+
+    def test_keyword_without_search_notes_does_not_match_note(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Keyword with search_notes=false does not match the note field."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_t1 name="Tea House" (note has "coffee" but name does NOT match)
+        # tx_t2 name="Coffee Shop" → name matches
+        response = client.get(
+            "/transactions",
+            params={"keyword": "coffee", "search_notes": "false"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        ids = [t["id"] for t in body["transactions"]]
+        assert "tx_t2" in ids
+        assert "tx_t1" not in ids
+
+    def test_search_notes_true_also_matches_note_field(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Search_notes=true extends keyword search to the annotation note."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_t1 note="morning coffee habit" → note matches
+        # tx_t2 name="Coffee Shop" → name matches
+        _two_matches = 2
+        response = client.get(
+            "/transactions",
+            params={"keyword": "coffee", "search_notes": "true"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == _two_matches
+        ids = {t["id"] for t in body["transactions"]}
+        assert ids == {"tx_t1", "tx_t2"}
+
+    def test_combined_tags_keyword_search_notes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Combining tags + keyword + search_notes all apply together (AND)."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tags=coffee → only tx_t1
+        # keyword=coffee + search_notes=true → tx_t1 (note) and tx_t2 (name)
+        # combined (AND): must satisfy both → only tx_t1
+        response = client.get(
+            "/transactions",
+            params={
+                "tags": "coffee",
+                "keyword": "coffee",
+                "search_notes": "true",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert body["transactions"][0]["id"] == "tx_t1"
+
+    def test_no_new_params_regression(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """No new params returns all canonical transactions unchanged."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        _three_txns = 3
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        # All three transactions are in the same canonical account
+        assert body["total"] == _three_txns
+        ids = {t["id"] for t in body["transactions"]}
+        assert ids == {"tx_t1", "tx_t2", "tx_t3"}
+
+    def test_total_reflects_filtered_count_for_pagination(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Total reflects tag-filtered count, enabling correct pagination."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_tag_notes_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tags=coffee → 1 match; limit=10 returns it, total must be 1
+        response = client.get(
+            "/transactions",
+            params={"tags": "coffee", "limit": "10", "offset": "0"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert len(body["transactions"]) == 1

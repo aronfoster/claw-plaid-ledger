@@ -332,6 +332,26 @@ class TransactionQuery:
     canonical_only: bool = True
     limit: int = 100
     offset: int = 0
+    tags: tuple[str, ...] = ()
+    search_notes: bool = False
+
+
+def _apply_tag_filters(
+    tags: tuple[str, ...],
+    where_parts: list[str],
+    params: list[object],
+) -> None:
+    """
+    Append an EXISTS clause and param for each required tag (AND semantics).
+
+    An unannotated transaction (ann.tags IS NULL) never matches because
+    json_each(NULL) returns zero rows.
+    """
+    for tag in tags:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+        )
+        params.append(tag)
 
 
 def query_transactions(
@@ -339,48 +359,68 @@ def query_transactions(
     query: TransactionQuery,
 ) -> tuple[list[dict[str, object]], int]:
     """Return filtered transaction rows and the full matching count."""
-    pending_value = int(query.pending) if query.pending is not None else None
-    keyword_like = f"%{query.keyword}%" if query.keyword is not None else None
+    effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
 
-    params: tuple[object, ...] = (
-        query.start_date,
-        query.start_date,
-        query.end_date,
-        query.end_date,
-        query.account_id,
-        query.account_id,
-        pending_value,
-        pending_value,
-        query.min_amount,
-        query.min_amount,
-        query.max_amount,
-        query.max_amount,
-        keyword_like,
-        keyword_like,
-        keyword_like,
+    accounts_join = (
+        "JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
+        if query.canonical_only
+        else ""
+    )
+    # Always LEFT JOIN annotations so transactions without annotations are
+    # still returned when no tag filter or search_notes is active.
+    annotations_join = (
+        "LEFT JOIN annotations ann "
+        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
     )
 
-    from_clause = "FROM transactions t "
-    canonical_filter = ""
-    effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
+    where_parts: list[str] = []
+    params: list[object] = []
+
+    if query.start_date is not None:
+        where_parts.append(f"{effective_date_sql} >= ?")
+        params.append(query.start_date)
+
+    if query.end_date is not None:
+        where_parts.append(f"{effective_date_sql} <= ?")
+        params.append(query.end_date)
+
+    if query.account_id is not None:
+        where_parts.append("t.plaid_account_id = ?")
+        params.append(query.account_id)
+
+    if query.pending is not None:
+        where_parts.append("t.pending = ?")
+        params.append(int(query.pending))
+
+    if query.min_amount is not None:
+        where_parts.append("t.amount >= ?")
+        params.append(query.min_amount)
+
+    if query.max_amount is not None:
+        where_parts.append("t.amount <= ?")
+        params.append(query.max_amount)
+
+    if query.keyword is not None:
+        keyword_like = f"%{query.keyword}%"
+        if query.search_notes:
+            where_parts.append(
+                "(t.name LIKE ? OR t.merchant_name LIKE ? OR ann.note LIKE ?)"
+            )
+            params.extend([keyword_like, keyword_like, keyword_like])
+        else:
+            where_parts.append("(t.name LIKE ? OR t.merchant_name LIKE ?)")
+            params.extend([keyword_like, keyword_like])
+
     if query.canonical_only:
-        from_clause += (
-            "JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
-        )
-        canonical_filter = "AND a.canonical_account_id IS NULL "
+        where_parts.append("a.canonical_account_id IS NULL")
+
+    _apply_tag_filters(query.tags, where_parts, params)
+
+    where_sql = " AND ".join(where_parts) if where_parts else "1=1"
+    from_clause = f"FROM transactions t {accounts_join}{annotations_join}"
 
     total_row = connection.execute(
-        (
-            f"SELECT COUNT(*) {from_clause}"
-            f"WHERE (? IS NULL OR {effective_date_sql} >= ?) "
-            f"AND (? IS NULL OR {effective_date_sql} <= ?) "
-            "AND (? IS NULL OR t.plaid_account_id = ?) "
-            "AND (? IS NULL OR t.pending = ?) "
-            "AND (? IS NULL OR t.amount >= ?) "
-            "AND (? IS NULL OR t.amount <= ?) "
-            "AND (? IS NULL OR (t.name LIKE ? OR t.merchant_name LIKE ?)) "
-            f"{canonical_filter}"
-        ),
+        f"SELECT COUNT(*) {from_clause}WHERE {where_sql}",
         params,
     ).fetchone()
     total = int(total_row[0]) if total_row is not None else 0
@@ -391,15 +431,8 @@ def query_transactions(
             "t.iso_currency_code, t.name, t.merchant_name, t.pending, "
             f"{effective_date_sql} AS effective_date "
             f"{from_clause}"
-            f"WHERE (? IS NULL OR {effective_date_sql} >= ?) "
-            f"AND (? IS NULL OR {effective_date_sql} <= ?) "
-            "AND (? IS NULL OR t.plaid_account_id = ?) "
-            "AND (? IS NULL OR t.pending = ?) "
-            "AND (? IS NULL OR t.amount >= ?) "
-            "AND (? IS NULL OR t.amount <= ?) "
-            "AND (? IS NULL OR (t.name LIKE ? OR t.merchant_name LIKE ?)) "
-            f"{canonical_filter}"
-            "ORDER BY effective_date DESC, plaid_transaction_id ASC "
+            f"WHERE {where_sql} "
+            "ORDER BY effective_date DESC, t.plaid_transaction_id ASC "
             "LIMIT ? OFFSET ?"
         ),
         (*params, query.limit, query.offset),
