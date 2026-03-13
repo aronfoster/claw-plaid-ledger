@@ -120,9 +120,11 @@ Sprint 7 added:
 
 M5 (OpenClaw notification) is complete. After a webhook-triggered sync that
 adds, modifies, or removes at least one transaction, the server sends a `POST`
-to OpenClaw's `/hooks/agent` endpoint to wake the configured agent (Hestia by
-default). Zero-change syncs remain silent. Operators can opt out by leaving
-`OPENCLAW_HOOKS_TOKEN` unset — a warning is logged but nothing crashes.
+to OpenClaw's `/hooks/agent` endpoint to wake Hestia as the ingestion worker
+by default. Zero-change syncs remain silent. Athena analysis is intentionally
+decoupled (scheduled cadence or anomaly-driven). Operators can opt out by
+leaving `OPENCLAW_HOOKS_TOKEN` unset — a warning is logged but nothing
+crashes.
 
 Sprint 6 added:
 
@@ -161,6 +163,15 @@ Sprint 5 added:
 - OpenClaw notifier (`notifier.py`) — sends `POST /hooks/agent` to wake Hestia after a non-empty sync
 
 ## Data flow
+
+### Two-agent routing sequence (Sprint 14)
+
+1. **Plaid sync event**: `SYNC_UPDATES_AVAILABLE` arrives and starts a
+   background sync for the mapped item.
+2. **Hestia annotation pass**: when the sync has non-zero changes, notifier
+   wakes Hestia via `/hooks/agent` for ingestion-time annotation updates.
+3. **Athena analysis**: Athena runs on its own cadence or when anomalies are
+   flagged; it is not woken for every sync event.
 
 ```
 Plaid API -> sync engine -> SQLite raw records -> canonical view layer -> Agent API -> OpenClaw agent
@@ -550,7 +561,7 @@ normally regardless of notification outcome.
 
 ```json
 {
-  "message": "Plaid sync complete: 3 added, 1 modified. Review new transactions and annotate as appropriate.",
+  "message": "Plaid sync complete: 3 added, 1 modified. Hestia should run ingestion annotations; Athena reviews later on schedule or anomaly flags.",
   "name": "Hestia",
   "wakeMode": "now"
 }
@@ -558,13 +569,14 @@ normally regardless of notification outcome.
 
 | Field | Description |
 |---|---|
-| `message` | Human-readable summary of non-zero change counts plus a review prompt |
+| `message` | Human-readable summary of non-zero change counts plus explicit Hestia-first / Athena-later routing guidance |
 | `name` | Name of the OpenClaw agent to wake; controlled by `OPENCLAW_HOOKS_AGENT` |
 | `wakeMode` | Wake mode for OpenClaw; controlled by `OPENCLAW_HOOKS_WAKE_MODE` (`now` is the only supported value) |
 
 The message is built by joining the non-zero count fragments
 (`"N added"`, `"N modified"`, `"N removed"`) with `", "` and appending
-`". Review new transactions and annotate as appropriate."`.
+`". Hestia should run ingestion annotations; Athena reviews later on
+schedule or anomaly flags."`.
 
 ### HTTP request
 
@@ -683,7 +695,7 @@ Key variables:
 | `CLAW_LOG_LEVEL` | no | `INFO` | Log level for the HTTP server; must be one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; invalid value raises `ConfigError` at startup |
 | `OPENCLAW_HOOKS_URL` | no | `http://127.0.0.1:18789/hooks/agent` | OpenClaw `/hooks/agent` endpoint URL |
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
-| `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake |
+| `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw ingestion agent to wake (Hestia in the two-agent flow) |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
 | `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
 | `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1; values ≤ 0 cause a startup error |

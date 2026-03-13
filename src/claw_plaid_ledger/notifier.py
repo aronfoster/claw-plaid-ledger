@@ -49,7 +49,8 @@ def notify_openclaw(summary: SyncSummary, config: OpenClawConfig) -> None:
     message = (
         "Plaid sync complete: "
         + ", ".join(parts)
-        + ". Review new transactions and annotate as appropriate."
+        + ". Hestia should run ingestion annotations; Athena reviews later"
+        " on schedule or anomaly flags."
     )
 
     payload = {

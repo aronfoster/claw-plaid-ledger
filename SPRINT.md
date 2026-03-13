@@ -135,7 +135,7 @@ skills/sprint14_task1_migration_matrix.md
 
 ---
 
-## Task 4: Notification + architecture alignment for two-agent routing
+## Task 4: Notification + architecture alignment for two-agent routing ✅ DONE
 
 ### Scope
 
