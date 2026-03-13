@@ -122,27 +122,27 @@ skill bundles with clear runtime boundaries:
 - Notification and architecture docs codify Hestia-first wake behavior with
   Athena-later cadence.
 
+### M13 — Hardened deployment & local security (Sprint 15)
+
+Sprint 15 is complete. Production-grade deployment primitives are now available
+for home-server operators:
+
+- `deploy/systemd/` — systemd service, sync timer, and DuckDNS timer unit
+  files; RUNBOOK.md Section 12 covers installation, `journalctl` usage, and
+  drop-in overrides.
+- `deploy/docker/` — multi-stage Dockerfile, `docker-compose.yml`, and
+  `.dockerignore`; RUNBOOK.md Section 13 covers Docker and LXC paths.
+- `CLAW_WEBHOOK_ALLOWED_IPS` / `CLAW_TRUSTED_PROXIES` — server-side webhook
+  IP allowlisting with `X-Forwarded-For` resolution; `doctor` reports
+  allowlist status; RUNBOOK.md Section 9.6 documents three-layer enforcement.
+- `deploy/proxy/` — Caddy mTLS, nginx mTLS, and Authelia OIDC configuration
+  examples; RUNBOOK.md Section 14 provides the mTLS walkthrough.
+- RUNBOOK.md Section 15 — deployment selection guide with decision tables for
+  deployment method and auth hardening pattern.
+
 ---
 
 ## Upcoming Milestones
-
-### M13 — Hardened deployment & local security
-
-**Focus:** Durable home-server operations with explicit local trust boundaries.
-
-**Goal:** Transition from ad-hoc `ledger serve` sessions to repeatable,
-production-like local deployment patterns.
-
-**Scope**
-
-- Provide official `systemd` service and timer templates for Linux/Proxmox. This will be the primary deployment method.
-- Offer container deployment examples (Docker/LXC) for self-hosted setups.
-- Add local-network auth hardening options (mTLS or OIDC-style front-proxy
-  integration).
-- **Webhook ingress hardening:**
-  - Document router-level IP allowlisting for Plaid's published webhook source
-    ranges so the `/webhooks/plaid` endpoint is not reachable from arbitrary
-    internet hosts.
 
 ### M14 — `doctor` auto-remediation
 
