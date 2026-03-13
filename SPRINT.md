@@ -41,7 +41,7 @@ Sprint 14 reuses that work rather than replacing it:
 
 ---
 
-## Task 1: Capability inventory and content split map
+## Task 1: Capability inventory and content split map ✅ DONE
 
 ### Scope
 
@@ -74,6 +74,10 @@ and what should be shared.
 Narrow `skills/hestia-ledger/` to a strict bookkeeper loop and remove analyst
 responsibilities.
 
+### Reference
+
+skills/sprint14_task1_migration_matrix.md
+
 ### Required deliverables
 
 - Updated Hestia `SKILL.md` boundaries:
@@ -102,6 +106,10 @@ responsibilities.
 
 Create `skills/athena-ledger/` by reusing and adapting existing Sprint 13
 analysis-focused guidance.
+
+### Reference
+
+skills/sprint14_task1_migration_matrix.md
 
 ### Required deliverables
 
