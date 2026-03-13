@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 
 import pytest
@@ -348,3 +349,111 @@ def test_scheduled_sync_fallback_hours_minimum_one_accepted() -> None:
     )
 
     assert cfg.scheduled_sync_fallback_hours == _MINIMUM_FALLBACK_HOURS
+
+
+# ---------------------------------------------------------------------------
+# Webhook IP allowlist configuration
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_allowed_ips_unset_defaults_to_empty() -> None:
+    """CLAW_WEBHOOK_ALLOWED_IPS absent → empty list (no filtering)."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.webhook_allowed_ips == []
+
+
+def test_webhook_allowed_ips_empty_string_defaults_to_empty() -> None:
+    """CLAW_WEBHOOK_ALLOWED_IPS set to empty string → empty list."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_WEBHOOK_ALLOWED_IPS": "",
+        }
+    )
+
+    assert cfg.webhook_allowed_ips == []
+
+
+def test_webhook_allowed_ips_single_cidr_parsed() -> None:
+    """A single valid CIDR is parsed into a network object."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_WEBHOOK_ALLOWED_IPS": "52.21.0.0/16",
+        }
+    )
+
+    assert len(cfg.webhook_allowed_ips) == 1
+    assert cfg.webhook_allowed_ips[0] == ipaddress.ip_network("52.21.0.0/16")
+
+
+_TWO_CIDRS = 2
+
+
+def test_webhook_allowed_ips_multiple_cidrs_parsed() -> None:
+    """Multiple comma-separated CIDRs are all parsed."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_WEBHOOK_ALLOWED_IPS": "52.21.0.0/16,3.211.0.0/16",
+        }
+    )
+
+    assert len(cfg.webhook_allowed_ips) == _TWO_CIDRS
+    assert ipaddress.ip_network("52.21.0.0/16") in cfg.webhook_allowed_ips
+    assert ipaddress.ip_network("3.211.0.0/16") in cfg.webhook_allowed_ips
+
+
+def test_webhook_allowed_ips_invalid_cidr_raises_config_error() -> None:
+    """Invalid CIDR in CLAW_WEBHOOK_ALLOWED_IPS raises ConfigError."""
+    with pytest.raises(ConfigError, match="Invalid CIDR"):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_WEBHOOK_ALLOWED_IPS": "not-a-cidr",
+            }
+        )
+
+
+def test_webhook_allowed_ips_ipv6_cidr_parsed() -> None:
+    """An IPv6 CIDR is parsed correctly."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_WEBHOOK_ALLOWED_IPS": "2001:db8::/32",
+        }
+    )
+
+    assert len(cfg.webhook_allowed_ips) == 1
+    assert cfg.webhook_allowed_ips[0] == ipaddress.ip_network("2001:db8::/32")
+
+
+def test_trusted_proxies_defaults_to_loopback() -> None:
+    """CLAW_TRUSTED_PROXIES absent → [IPv4Address('127.0.0.1')]."""
+    cfg = load_config({"CLAW_PLAID_LEDGER_DB_PATH": "ledger.db"})
+
+    assert cfg.trusted_proxies == [ipaddress.IPv4Address("127.0.0.1")]
+
+
+def test_trusted_proxies_custom_ip_parsed() -> None:
+    """A custom proxy IP is parsed into an address object."""
+    cfg = load_config(
+        {
+            "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+            "CLAW_TRUSTED_PROXIES": "10.0.0.1",
+        }
+    )
+
+    assert cfg.trusted_proxies == [ipaddress.IPv4Address("10.0.0.1")]
+
+
+def test_trusted_proxies_invalid_ip_raises_config_error() -> None:
+    """Invalid IP in CLAW_TRUSTED_PROXIES raises ConfigError."""
+    with pytest.raises(ConfigError, match="Invalid IP address"):
+        load_config(
+            {
+                "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",
+                "CLAW_TRUSTED_PROXIES": "not-an-ip",
+            }
+        )

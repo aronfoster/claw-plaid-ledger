@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from os import environ as os_environ
 from pathlib import Path
 
+from claw_plaid_ledger.config import ConfigError, _parse_cidr_list
 from claw_plaid_ledger.items_config import ItemsConfigError, load_items_config
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,43 @@ def _check_items_config(
     return results
 
 
+def _check_webhook_allowlist(environ: dict[str, str]) -> CheckResult:
+    """
+    Report allowlist status for POST /webhooks/plaid.
+
+    - If ``CLAW_WEBHOOK_ALLOWED_IPS`` is set and valid, returns OKAY.
+    - If the var is absent or empty, returns WARN (not a hard failure).
+    - If the var is set but contains invalid CIDRs, returns FAIL.
+    """
+    raw = environ.get("CLAW_WEBHOOK_ALLOWED_IPS", "")
+    if not raw or not raw.strip():
+        return CheckResult(
+            name="webhook-allowlist",
+            status=CheckStatus.WARN,
+            message=(
+                "webhook-allowlist: no IP allowlist — "
+                "POST /webhooks/plaid is reachable from any source IP"
+            ),
+            severity=CheckSeverity.WARNING,
+        )
+    try:
+        networks = _parse_cidr_list(raw, "CLAW_WEBHOOK_ALLOWED_IPS")
+    except ConfigError as exc:
+        return CheckResult(
+            name="webhook-allowlist",
+            status=CheckStatus.FAIL,
+            message=f"webhook-allowlist: invalid CIDR — {exc}",
+            severity=CheckSeverity.REQUIRED,
+        )
+    count = len(networks)
+    return CheckResult(
+        name="webhook-allowlist",
+        status=CheckStatus.OKAY,
+        message=f"webhook-allowlist: {count} CIDR(s) configured",
+        severity=CheckSeverity.WARNING,
+    )
+
+
 def run_production_preflight(
     environ: dict[str, str] | None = None,
     *,
@@ -220,6 +258,7 @@ def run_production_preflight(
     results.append(_check_db_path(env))
     results.extend(_check_items_config(items_config_path, env))
     results.append(_check_sandbox_warning(env))
+    results.append(_check_webhook_allowlist(env))
     for result in results:
         logger.debug(
             "preflight check %s [%s]: %s",

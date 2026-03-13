@@ -122,7 +122,7 @@ Proxmox users who prefer OS-level containers.
 
 ---
 
-## Task 3: Webhook ingress hardening — server-side IP allowlisting
+## Task 3: Webhook ingress hardening — server-side IP allowlisting ✅ DONE
 
 ### Scope
 
