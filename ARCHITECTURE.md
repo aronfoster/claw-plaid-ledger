@@ -2,6 +2,20 @@
 
 ## Current milestone focus
 
+M13 (hardened deployment & local security) is complete. Sprint 15 shipped
+production-grade deployment primitives for home-server operators:
+
+- `deploy/systemd/` — systemd unit files for `ledger serve`, scheduled sync,
+  and DuckDNS update timers (Task 1)
+- `deploy/docker/` — multi-stage Dockerfile, `docker-compose.yml`, and
+  quickstart README for containerised deployments (Task 2)
+- `CLAW_WEBHOOK_ALLOWED_IPS` / `CLAW_TRUSTED_PROXIES` — server-side webhook
+  IP allowlisting with `X-Forwarded-For` resolution and `doctor` reporting
+  (Task 3)
+- `deploy/proxy/` — Caddy mTLS, nginx mTLS, and Authelia OIDC/SSO
+  configuration examples; RUNBOOK.md Section 14 auth-hardening walkthrough
+  (Task 4)
+
 M11 (advanced agent API & logging) is complete. Sprint 12 adds a spend
 summary endpoint, richer transaction filtering, and correlation-ID logging
 with secret-safe redaction.
@@ -146,6 +160,9 @@ Sprint 5 added:
 
 ## Components
 
+- **Reverse proxy (optional)** — network-layer auth boundary in front of
+  `ledger serve`; examples in `deploy/proxy/` (Caddy mTLS,
+  nginx mTLS, Authelia OIDC); see Auth boundary section below
 - CLI boundary (`typer` library) for operator workflows
 - Config/secrets layer (`config.py`)
 - SQLite bootstrap and persistence layer (`db.py` + `schema.sql`)
@@ -161,6 +178,64 @@ Sprint 5 added:
   background loop (`_scheduled_sync_loop`, `_check_and_sync_overdue_items`,
   `_sync_item_if_overdue`)
 - OpenClaw notifier (`notifier.py`) — sends `POST /hooks/agent` to wake Hestia after a non-empty sync
+
+## Auth boundary
+
+`ledger serve` enforces a **two-layer auth model**:
+
+### Layer 1 — Network layer: reverse proxy (optional, operator-configured)
+
+A reverse proxy in front of `ledger serve` provides the first auth boundary.
+Operators choose the pattern that matches their access model:
+
+| Pattern | Mechanism | Best for |
+|---|---|---|
+| **Caddy mTLS** | Client certificate signed by a trusted CA | Automated agents, home-LAN access, no external IdP |
+| **nginx mTLS** | Same as Caddy, nginx variant | Operators already running nginx |
+| **Authelia OIDC** | OIDC/SSO front-proxy with optional MFA | Browser access, shared household, per-user audit logs |
+
+Configuration examples live in `deploy/proxy/`:
+
+```
+deploy/proxy/
+  Caddyfile.example         Caddy v2 mTLS — TLS termination + client cert enforcement
+  nginx-mtls.conf.example   nginx equivalent using ssl_verify_client
+  authelia-notes.md         Authelia OIDC/SSO integration guide
+```
+
+When a reverse proxy is present it sets `X-Forwarded-For` to the real client
+IP. `CLAW_TRUSTED_PROXIES` must list the proxy host IP so the application
+resolves the original source correctly (used by the webhook IP allowlist).
+
+**Routes that bypass client-cert enforcement** (open to monitoring tools):
+- `GET /health`
+- `GET /docs`
+- `GET /openapi.json`
+
+All other routes (`/transactions`, `/annotations`, `/spend`,
+`/webhooks/plaid`) require a valid client certificate when mTLS is active.
+
+### Layer 2 — Application layer: CLAW_API_SECRET bearer token (always required)
+
+Every protected HTTP endpoint verifies `Authorization: Bearer <CLAW_API_SECRET>`
+regardless of which network-layer pattern is in use.  This ensures that a
+misconfigured proxy or network rule cannot expose financial data.
+
+```
+Internet / LAN
+      │
+      ▼
+[Reverse proxy — mTLS or OIDC]   ← Layer 1 (optional, operator-configured)
+      │
+      ▼
+[ledger serve — FastAPI/uvicorn] ← Layer 2: CLAW_API_SECRET bearer token
+      │
+      ▼
+[SQLite — financial data]
+```
+
+See RUNBOOK.md Section 14 for the full auth-hardening walkthrough including
+certificate generation, Caddy/nginx configuration, and cert rotation.
 
 ## Data flow
 

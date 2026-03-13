@@ -1333,3 +1333,215 @@ above) and following Section 12 inside the container.
   host.
 - The `ProtectSystem=strict` and `PrivateTmp=true` systemd directives work
   in both modes on Proxmox PVE 7+.
+
+---
+
+## 14. Auth hardening — reverse-proxy patterns
+
+This section explains how to add a network-layer authentication boundary in
+front of `ledger serve` using a reverse proxy.  The two primary patterns are:
+
+| Pattern | Description |
+|---|---|
+| **mTLS (client certificates)** | Agents and operators must present a certificate signed by a trusted CA to access protected routes |
+| **OIDC / SSO (Authelia)** | Browser and interactive access is gated behind a login page with optional MFA |
+
+Both patterns are **additive** — the `CLAW_API_SECRET` bearer token is always
+required for API calls.  The reverse proxy guards the network boundary; the
+application guards the API boundary.
+
+See `deploy/proxy/` for ready-to-use configuration examples:
+
+```
+deploy/proxy/
+  Caddyfile.example         Caddy v2 mTLS configuration
+  nginx-mtls.conf.example   nginx equivalent
+  authelia-notes.md         Authelia OIDC/SSO integration guide
+```
+
+---
+
+### 14.1 Decision guide
+
+**Use mTLS when:**
+- API callers are scripts, OpenClaw agents, or automation tools — not humans
+  using a browser.
+- You want cert-per-agent identity that works with any HTTP client.
+- You have a home LAN or VPN where you control all clients.
+- You want zero external IdP dependency (self-signed CA).
+
+**Use Authelia (OIDC) when:**
+- Humans need browser-based access (Swagger UI, ad-hoc `curl`).
+- A household shares the service and you want per-user accounts and audit logs.
+- You want MFA (TOTP / WebAuthn) for interactive logins.
+
+**Use both when:**
+- Agents use mTLS for programmatic access; operators use Authelia for browser
+  sessions.  The two patterns do not conflict.
+
+---
+
+### 14.2 mTLS walkthrough — generating a self-signed CA and client cert
+
+This walkthrough uses `openssl`.  Run these commands on a trusted workstation,
+not on the server.
+
+#### Step 1 — Generate a CA key and self-signed certificate
+
+```bash
+# CA private key (keep this secret — anyone with it can issue trusted certs)
+openssl genrsa -out ca.key 4096
+
+# Self-signed CA certificate, valid for 10 years
+openssl req -new -x509 -days 3650 -key ca.key -out ca.crt \
+  -subj "/CN=claw-plaid-ledger-CA/O=home"
+```
+
+#### Step 2 — Generate a client certificate (one per agent or operator)
+
+```bash
+# Client private key
+openssl genrsa -out client.key 2048
+
+# Certificate signing request
+openssl req -new -key client.key -out client.csr \
+  -subj "/CN=ledger-agent/O=home"
+
+# Sign the CSR with your CA — valid for 1 year
+openssl x509 -req -days 365 -in client.csr \
+  -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out client.crt
+```
+
+#### Step 3 — Distribute files
+
+| File | Where it goes |
+|---|---|
+| `ca.crt` | Server — Caddy or nginx trust root (`/etc/caddy/certs/ca.crt` or `/etc/nginx/certs/ca.crt`) |
+| `server.crt` + `server.key` | Server — the TLS certificate nginx/Caddy presents to clients |
+| `client.crt` + `client.key` | Agent workstation or agent runtime — presented during TLS handshake |
+
+Set restrictive permissions on key files:
+
+```bash
+chmod 600 ca.key client.key server.key
+```
+
+#### Step 4 — Configure Caddy or nginx
+
+Follow `deploy/proxy/Caddyfile.example` or `deploy/proxy/nginx-mtls.conf.example`.
+Both files contain inline comments that map directly to the files generated above.
+
+#### Step 5 — Set CLAW_TRUSTED_PROXIES
+
+Add the proxy host IP to your `.env` so webhook IP allowlisting (Section 9.6)
+resolves the real Plaid source IP:
+
+```
+# When Caddy/nginx runs on the same host as ledger serve:
+CLAW_TRUSTED_PROXIES=127.0.0.1
+
+# When Caddy/nginx runs on a different host (replace with actual IP):
+CLAW_TRUSTED_PROXIES=10.0.0.1
+```
+
+#### Step 6 — Test
+
+```bash
+# Health check — no client cert needed:
+curl https://ledger.home.example/health
+
+# Protected route without cert — should return 403 or TLS handshake error:
+curl https://ledger.home.example/transactions \
+  -H "Authorization: Bearer <CLAW_API_SECRET>"
+
+# Protected route with cert — should return 200:
+curl https://ledger.home.example/transactions \
+  --cert client.crt --key client.key \
+  -H "Authorization: Bearer <CLAW_API_SECRET>"
+```
+
+---
+
+### 14.3 Configuring Caddy mTLS
+
+Copy `deploy/proxy/Caddyfile.example` to your Caddy configuration directory
+and adjust the following values:
+
+| Placeholder | Replace with |
+|---|---|
+| `ledger.home.example` | Your server hostname or DuckDNS FQDN |
+| `/etc/caddy/certs/server.crt` | Path to your server TLS certificate |
+| `/etc/caddy/certs/server.key` | Path to your server TLS private key |
+| `/etc/caddy/certs/ca.crt` | Path to your CA certificate (clients must be signed by this) |
+| `127.0.0.1:8000` | Upstream `ledger serve` address (default is correct for same-host) |
+
+After editing:
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload caddy
+```
+
+For **Let's Encrypt** (public FQDN), uncomment Option B in the example file.
+Caddy manages the server cert automatically; you still supply the CA cert for
+client verification.
+
+---
+
+### 14.4 Cert rotation
+
+Client certificates should be rotated periodically (annually is common for
+home setups).  The rotation procedure avoids downtime:
+
+1. Generate a new client cert using the same CA (`Step 2` above — no CA
+   change needed).
+2. Distribute the new `client.crt` + `client.key` to the agent or operator.
+3. The old cert continues to work until you revoke it.
+4. Test the new cert against the protected endpoints.
+5. Remove or archive the old cert from agent runtimes.
+
+**CA rotation** (less frequent, e.g. when the CA key is compromised):
+
+1. Generate a new CA key and certificate.
+2. Issue new client certs signed by the new CA.
+3. On the server, replace the `trusted_ca_certs_pem_files` / `ssl_client_certificate`
+   path with a combined PEM that includes **both** the old and new CA certs.
+   This allows old and new client certs to work simultaneously during the
+   transition window.
+4. Distribute new client certs.
+5. After all agents are updated, remove the old CA from the combined PEM and
+   reload Caddy/nginx.
+
+Combined CA PEM:
+
+```bash
+cat old-ca.crt new-ca.crt > combined-ca.crt
+# Point Caddyfile / nginx config at combined-ca.crt during transition.
+```
+
+---
+
+### 14.5 Authelia OIDC front-proxy
+
+See `deploy/proxy/authelia-notes.md` for a complete integration guide covering:
+
+- When to choose Authelia vs mTLS.
+- Minimal `configuration.yml` stubs for access control rules.
+- Caddy `forward_auth` and nginx `auth_request` integration snippets.
+- How `CLAW_API_SECRET` and Authelia layers stack.
+
+---
+
+### 14.6 Security reminder
+
+The reverse-proxy layer and `CLAW_API_SECRET` are independent and complementary:
+
+| Layer | Enforces | Where configured |
+|---|---|---|
+| Network — reverse proxy | Who can reach the service | Caddy / nginx / Authelia |
+| Application — bearer token | Who can call the API | `CLAW_API_SECRET` in `.env` |
+
+**Never remove `CLAW_API_SECRET`** even when running behind mTLS or Authelia.
+The bearer token ensures that an attacker who bypasses the proxy layer (e.g.
+via a misconfigured firewall rule) cannot read financial data without the token.

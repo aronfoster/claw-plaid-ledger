@@ -201,7 +201,7 @@ the gap between "Plaid HMAC signature verification" (cryptographic) and
 
 ---
 
-## Task 4: Local-network auth hardening — reverse-proxy examples
+## Task 4: Local-network auth hardening — reverse-proxy examples ✅ DONE
 
 ### Scope
 
