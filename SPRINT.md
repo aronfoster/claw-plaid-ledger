@@ -41,7 +41,7 @@ Sprint 14 reuses that work rather than replacing it:
 
 ---
 
-## Task 1: Capability inventory and content split map
+## Task 1: Capability inventory and content split map ✅ DONE
 
 ### Scope
 
