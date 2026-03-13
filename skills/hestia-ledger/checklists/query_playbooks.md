@@ -44,6 +44,14 @@ Use this sheet to keep endpoint usage deterministic and safe.
 2. Repeat exactly with raw view.
 3. Report differences as operator follow-up, not override guidance.
 
+### 6) Orphaned-transaction triage
+
+1. `GET /transactions` over a fixed window in canonical view; detect records with missing owner context, missing expected annotation context, or inconsistent reappearance.
+2. `GET /transactions/{id}` for each candidate to verify current record details.
+3. If mismatch persists, rerun the same list query in raw view and compare presence/fields.
+4. If evidence is specific, annotate with `review-needed` plus one of: `orphan-transaction`, `cross-source-discrepancy`, `sync-lag-suspected`, `annotation-drift`.
+5. Escalate to operators for sync/linkage/precedence-input verification; never suggest precedence overrides directly.
+
 ## Failure handling
 
 - Failed endpoint call: report error and reduce confidence.
