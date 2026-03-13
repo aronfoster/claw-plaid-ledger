@@ -62,7 +62,7 @@ so operators can copy it as-is into a new Hestia/OpenClaw skill project.
 
 ---
 
-## Task 2: Define API guardrails and deterministic query playbooks
+## Task 2: Define API guardrails and deterministic query playbooks ✅ DONE
 
 ### Scope
 
