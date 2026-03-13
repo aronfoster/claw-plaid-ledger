@@ -53,6 +53,6 @@ Use this structure for anomaly-focused responses.
 ## Optional annotation plan
 
 - Eligible transactions for annotation:
-  - `<tx_id> -> tags:[review-needed, <anomaly-tag>]`
+  - `<tx_id> -> tags:[needs-athena-review, <anomaly-tag>]`
 - Note format:
   - `Window <start..end>: <observed signal>. Needs human review: <next step>.`

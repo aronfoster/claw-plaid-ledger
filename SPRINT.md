@@ -67,7 +67,7 @@ and what should be shared.
 
 ---
 
-## Task 2: Refactor Hestia skill bundle to ingestion-only contract
+## Task 2: Refactor Hestia skill bundle to ingestion-only contract ✅ DONE
 
 ### Scope
 
@@ -100,7 +100,7 @@ skills/sprint14_task1_migration_matrix.md
 
 ---
 
-## Task 3: Create Athena skill bundle by salvaging Sprint 13 analysis work
+## Task 3: Create Athena skill bundle by salvaging Sprint 13 analysis work ✅ DONE
 
 ### Scope
 
