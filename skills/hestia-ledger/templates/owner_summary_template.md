@@ -4,35 +4,40 @@ Use this structure for deterministic household summaries.
 
 ## Query frame
 
-- Window: `<YYYY-MM-DD>` to `<YYYY-MM-DD>`
+- Timeframe queried: `<YYYY-MM-DD>` to `<YYYY-MM-DD>`
 - View: `canonical` (or `raw`, if explicitly requested)
 - Filters: `<owner/tags/include_pending>`
+- Coverage note: `<full pagination | partial + reason>`
 
 ## Household rollup
 
-- Total spend: `<amount>`
-- Transaction count: `<count>`
-- Pending items: `<count + note>`
+- Posted spend total: `<amount>`
+- Pending spend total: `<amount>`
+- Combined transaction count: `<count>`
+- Pending-vs-posted clarification: `<how pending affected interpretation>`
 
 ## Per-owner sections
 
 ### owner:alice
 
-- Spend total: `<amount>`
+- Posted spend total: `<amount>`
+- Pending spend total: `<amount>`
 - Notable transactions:
-  - `<date> | <merchant> | <amount> | <status>`
+  - `<date> | <merchant> | <amount> | <posted|pending>`
 - Signals requiring review: `<none or list>`
 
 ### owner:bob
 
-- Spend total: `<amount>`
+- Posted spend total: `<amount>`
+- Pending spend total: `<amount>`
 - Notable transactions:
-  - `<date> | <merchant> | <amount> | <status>`
+  - `<date> | <merchant> | <amount> | <posted|pending>`
 - Signals requiring review: `<none or list>`
 
 ## Confidence and follow-up
 
 - Confidence: `<high|medium|low>`
+- Needs human review: `<yes/no + trigger>`
 - Limits:
   - `<missing data / pending-only evidence / API errors>`
 - Suggested next checks:

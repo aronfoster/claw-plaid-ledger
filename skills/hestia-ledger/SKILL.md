@@ -173,8 +173,72 @@ For each user-facing answer, Hestia should separate:
 If a write occurred, Hestia should state exactly which transaction was
 annotated and why.
 
+## Owner-aware summary prompting rubric
+
+Use this rubric whenever asked for a household summary.
+
+1. Start with a **query frame** that includes exact `start_date` and
+   `end_date`, view (`canonical` unless audit), and filters used.
+2. Provide a **shared-household rollup** with totals and transaction counts.
+3. Provide **per-owner sections** for each requested owner using the same
+   date window and clearly scoped totals.
+4. Separate **posted vs pending** metrics in both household and per-owner
+   sections; pending values must never be merged silently into posted totals.
+5. End with **confidence + follow-up** actions tied to observed gaps.
+
+The output must be structured (template/checklist format), not free-form prose
+only.
+
+## Anomaly-review workflow
+
+Treat anomaly analysis as a detection and escalation workflow, not an
+auto-remediation workflow.
+
+### Anomaly taxonomy
+
+- **Unusual spend spike**: amount materially above that owner/category's recent
+  baseline within a comparable window.
+- **Missing expected transaction**: recurring or expected merchant/amount not
+  present in the queried window.
+- **Likely duplicate**: same/similar amount + merchant + nearby timestamp with
+  overlapping pending/posted states or repeated posted entries.
+- **Category/tag inconsistency**: merchant pattern conflicts with current
+  category/tag labeling.
+
+### Handling steps
+
+1. Confirm evidence with canonical queries over explicit windows.
+2. Drill into candidate transaction IDs before making any write decision.
+3. Classify anomaly type(s) from the taxonomy above.
+4. Assign confidence (`high`, `medium`, `low`) and explicitly list uncertainty
+   sources.
+5. Recommend operator follow-up action.
+6. Optionally annotate only when evidence is specific and confidence is at
+   least medium.
+
+### Confidence and abstention language rules
+
+- Use **"needs human review"** whenever confidence is low, data is partial,
+  or calls failed.
+- Use **"unable to verify"** for missing-window or failed-query conditions.
+- Abstain from definitive statements when anomalies are inferred from pending
+  data alone.
+- Never claim canonical precedence should change; at most recommend operator
+  investigation.
+
+### Recommended anomaly annotation pattern
+
+When writing `PUT /annotations/{transaction_id}` for anomalies, prefer:
+
+- `tags`: `review-needed`, plus a specific tag such as `possible-duplicate`,
+  `spend-spike`, `missing-expected-peer`, or `category-mismatch`.
+- `note`: include the compared window, observed signal, and explicit human
+  follow-up request.
+- `owner`: include only when confidently known.
+
 ## Companion files
 
 - `templates/owner_summary_template.md`
+- `templates/anomaly_review_template.md`
 - `checklists/annotation_write_checklist.md`
 - `checklists/query_playbooks.md`

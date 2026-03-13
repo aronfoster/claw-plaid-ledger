@@ -94,7 +94,7 @@ consistent results and avoid over-fetching or nondeterministic summaries.
 
 ---
 
-## Task 3: Add owner-aware summary and anomaly-review prompting guidance
+## Task 3: Add owner-aware summary and anomaly-review prompting guidance ✅ DONE
 
 ### Scope
 

@@ -50,3 +50,14 @@ Use this sheet to keep endpoint usage deterministic and safe.
 - Empty window across relevant calls: return explicit "no matching data in
   queried window".
 - Pagination interrupted: label findings as partial and avoid definitive totals.
+
+## Anomaly-review quick flow
+
+1. Run canonical queries over a fixed window and complete pagination.
+2. Classify findings as one or more of: `spend-spike`, `missing-expected`,
+   `possible-duplicate`, `category-mismatch`.
+3. Re-fetch each candidate with `GET /transactions/{id}` before any annotation.
+4. If confidence is low or evidence is partial, respond with
+   "needs human review" and abstain from definitive conclusions.
+5. If annotating, use `review-needed` plus a specific anomaly tag and include
+   timeframe + follow-up action in the note.
