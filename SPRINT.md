@@ -127,7 +127,7 @@ Include anomaly workflows that treat Hestia as a safety net.
 
 ---
 
-## Task 4: Document orphaned-transaction and discrepancy workflows
+## Task 4: Document orphaned-transaction and discrepancy workflows ✅ DONE
 
 ### Scope
 

@@ -258,6 +258,69 @@ When writing `PUT /annotations/{transaction_id}` for anomalies, prefer:
   follow-up request.
 - `owner`: include only when confidently known.
 
+## Orphaned-transaction and discrepancy workflows
+
+Use this workflow when records appear disconnected from expected account-owner
+context or when canonical/raw outputs conflict.
+
+### Project definition: orphaned transaction
+
+In this repository, an **orphaned transaction** is a transaction record that is
+present in API results but lacks enough linked context to place it safely into
+normal household reporting without human review. Typical orphan signals:
+
+- owner is missing/unknown while the workflow requires owner rollups,
+- expected annotation context is missing after sync (`tags` and `note` absent),
+- the transaction appears in one view/window but cannot be re-fetched
+  consistently with the same filters.
+
+An orphaned transaction is a **triage condition**, not proof of bad data.
+
+### Mechanical triage flow (detect → validate → annotate → escalate)
+
+1. **Detect**
+   - Run `GET /transactions` with fixed `start_date`, `end_date`,
+     `view=canonical`, and deterministic pagination.
+   - Flag candidates that meet orphan signals (missing owner for owner-scoped
+     tasks, missing expected annotation fields, or inconsistent appearance).
+2. **Validate with API data**
+   - Re-fetch each candidate with `GET /transactions/{id}`.
+   - If discrepancy is suspected, run the same list query with `view=raw` using
+     identical filters and compare presence + key fields (amount/date/category).
+   - Mark confidence low if either canonical or raw query coverage is partial.
+3. **Annotate (only if evidence is specific)**
+   - Write `PUT /annotations/{transaction_id}` only after successful drill-down.
+   - Use privacy-safe standardized tags:
+     - `review-needed` (required for triage writes),
+     - one specific tag: `orphan-transaction`, `cross-source-discrepancy`,
+       `sync-lag-suspected`, or `annotation-drift`.
+   - Use note pattern:
+     - `Window <start_date>..<end_date>; observed <signal>; please verify source linkage and precedence inputs.`
+4. **Recommend operator follow-up**
+   - Ask operators to verify source sync status, account-owner mapping, and any
+     precedence configuration inputs.
+   - Do not suggest direct precedence rewrites; frame output as investigation
+     requests.
+
+### Discrepancy decision table
+
+| Observed pattern | Likely class | Hestia action | Operator follow-up |
+| --- | --- | --- | --- |
+| Canonical missing recent records that appear in raw shortly after sync | Data freshness / sync timing | Mark `sync-lag-suspected`; report as provisional and recheck next cycle | Confirm connector sync completion and rerun import if needed |
+| Same transaction window shows conflicting amounts/categories across sources after freshness window | True cross-account conflict | Mark `cross-source-discrepancy`; provide transaction IDs and fields in conflict | Audit source records and precedence inputs; decide canonical correction path |
+| Canonical record stable but tags/notes are stale, inconsistent, or absent versus current evidence | Likely annotation drift | Mark `annotation-drift`; refresh note/tag only if evidence is clear | Review annotation policy adherence and update team guidance |
+
+### Privacy-safe annotation examples
+
+- `tags`: `["review-needed", "orphan-transaction"]`
+- `note`: `Window 2025-02-01..2025-02-28; observed missing owner context during owner rollup; please verify source linkage and account metadata.`
+
+- `tags`: `["review-needed", "cross-source-discrepancy"]`
+- `note`: `Window 2025-02-01..2025-02-28; canonical and raw views disagree on category for this transaction; please review source sync timing and precedence inputs.`
+
+These examples are templates; replace dates/signals with observed facts from
+the current run.
+
 ## Companion files
 
 - `templates/owner_summary_template.md`
