@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import ipaddress
+from dataclasses import dataclass, field
 from os import environ as os_environ
 from pathlib import Path
 
@@ -83,6 +84,62 @@ class Config:
     openclaw_hooks_wake_mode: str = "now"
     scheduled_sync_enabled: bool = False
     scheduled_sync_fallback_hours: int = 24
+    webhook_allowed_ips: list[
+        ipaddress.IPv4Network | ipaddress.IPv6Network
+    ] = field(default_factory=list)
+    trusted_proxies: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = (
+        field(default_factory=lambda: [ipaddress.IPv4Address("127.0.0.1")])
+    )
+
+
+def _parse_cidr_list(
+    raw: str | None,
+    var_name: str,
+) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """
+    Parse a comma-separated list of CIDRs into network objects.
+
+    Returns an empty list when *raw* is None or empty.  Raises
+    ``ConfigError`` for any entry that is not a valid IPv4 or IPv6 CIDR.
+    """
+    if not raw or not raw.strip():
+        return []
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for entry in raw.split(","):
+        cidr = entry.strip()
+        if not cidr:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError as exc:
+            msg = f"Invalid CIDR in {var_name}: {cidr!r} — {exc}"
+            raise ConfigError(msg) from exc
+    return networks
+
+
+def _parse_proxy_list(
+    raw: str | None,
+    var_name: str,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """
+    Parse a comma-separated list of IP addresses into address objects.
+
+    Returns ``[IPv4Address("127.0.0.1")]`` when *raw* is None or empty.
+    Raises ``ConfigError`` for any entry that is not a valid IP address.
+    """
+    if not raw or not raw.strip():
+        return [ipaddress.IPv4Address("127.0.0.1")]
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for entry in raw.split(","):
+        ip = entry.strip()
+        if not ip:
+            continue
+        try:
+            addresses.append(ipaddress.ip_address(ip))
+        except ValueError as exc:
+            msg = f"Invalid IP address in {var_name}: {ip!r} — {exc}"
+            raise ConfigError(msg) from exc
+    return addresses
 
 
 def _default_env_file() -> Path:
@@ -180,6 +237,15 @@ def load_config(
         )
         raise ConfigError(msg)
 
+    webhook_allowed_ips = _parse_cidr_list(
+        values.get("CLAW_WEBHOOK_ALLOWED_IPS"),
+        "CLAW_WEBHOOK_ALLOWED_IPS",
+    )
+    trusted_proxies = _parse_proxy_list(
+        values.get("CLAW_TRUSTED_PROXIES"),
+        "CLAW_TRUSTED_PROXIES",
+    )
+
     missing = _missing_required_vars(
         {
             "CLAW_PLAID_LEDGER_DB_PATH": db_path_raw,
@@ -216,4 +282,6 @@ def load_config(
         openclaw_hooks_wake_mode=openclaw_hooks_wake_mode,
         scheduled_sync_enabled=scheduled_sync_enabled,
         scheduled_sync_fallback_hours=scheduled_sync_fallback_hours,
+        webhook_allowed_ips=webhook_allowed_ips,
+        trusted_proxies=trusted_proxies,
     )

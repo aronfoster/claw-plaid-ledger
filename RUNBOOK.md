@@ -658,6 +658,91 @@ Tip: webhook-triggered sync logs include linkage information between the
 request correlation and sync correlation so operators can jump from `req-*` to
 `sync-*` quickly during incident triage.
 
+### 9.6 Webhook ingress security
+
+Plaid webhooks arrive at `POST /webhooks/plaid` from Plaid's published IP
+ranges.  Three complementary enforcement layers are available:
+
+#### Layer 1 — Application-layer IP allowlisting (`CLAW_WEBHOOK_ALLOWED_IPS`)
+
+`ledger serve` can enforce Plaid's published source IP ranges directly in the
+application, independent of your router or firewall.
+
+Set `CLAW_WEBHOOK_ALLOWED_IPS` to a comma-separated list of IPv4/IPv6 CIDRs:
+
+```bash
+# In ~/.config/claw-plaid-ledger/.env
+CLAW_WEBHOOK_ALLOWED_IPS="52.21.0.0/16,3.211.0.0/16"
+```
+
+When this variable is set, any `POST /webhooks/plaid` request whose resolved
+source IP is not within one of the listed CIDRs receives HTTP 403
+`{"detail": "forbidden"}` and a WARNING log line — before signature
+verification even runs.
+
+Plaid publishes its current webhook IP ranges in the Plaid developer
+documentation (search "Plaid webhook IP ranges").  Review and update this list
+when Plaid announces changes.
+
+**Unset or empty** — no IP filtering is applied; existing behaviour is
+preserved.  `ledger doctor --production-preflight` will report a `[WARN]` for
+this state to surface the choice explicitly (it is not a hard failure).
+
+#### Layer 2 — `CLAW_TRUSTED_PROXIES` (required when behind a reverse proxy)
+
+When `ledger serve` is behind Caddy, nginx, or another reverse proxy, the
+direct connection IP seen by the application is always the proxy's loopback or
+LAN address, not the real client IP.  Set `CLAW_TRUSTED_PROXIES` to the
+proxy's IP(s) so the middleware reads `X-Forwarded-For` instead:
+
+```bash
+# Default (loopback proxy, the most common home-server setup):
+CLAW_TRUSTED_PROXIES="127.0.0.1"
+
+# Multiple trusted proxies (comma-separated):
+CLAW_TRUSTED_PROXIES="127.0.0.1,10.0.0.1"
+```
+
+IP resolution order when the direct connection IP is in `CLAW_TRUSTED_PROXIES`:
+1. Take the **leftmost** address from the `X-Forwarded-For` header as the real
+   client IP.
+2. If `X-Forwarded-For` is absent, fall back to the direct connection IP.
+
+> **Security note:** Only list IPs you fully control as trusted proxies.
+> A malicious client could inject a fake `X-Forwarded-For` header if the
+> direct connection is not from a trusted proxy.
+
+#### Layer 3 — Router / firewall rules (network-layer enforcement)
+
+Complement the application-layer allowlist with router-level rules that drop
+traffic to your webhook port from IP ranges that are not Plaid's:
+
+```bash
+# Example: ufw rule — replace <PORT> with your public webhook port
+ufw allow from 52.21.0.0/16 to any port <PORT> proto tcp
+ufw allow from 3.211.0.0/16 to any port <PORT> proto tcp
+ufw deny to any port <PORT> proto tcp
+```
+
+Network-layer rules stop traffic before it reaches the application; they are
+independent of and complementary to `CLAW_WEBHOOK_ALLOWED_IPS`.
+
+#### Layer 4 — Plaid HMAC signature verification (cryptographic authenticity)
+
+Even if an IP passes all network and application-layer filters, `ledger serve`
+additionally verifies the Plaid-Verification HMAC-SHA256 signature on every
+webhook body using `PLAID_WEBHOOK_SECRET`.  A request with a valid IP but a
+tampered or missing signature receives HTTP 400.
+
+**Recommended posture for production deployments:**
+
+| Layer | Setting | Effect |
+|-------|---------|--------|
+| App IP allowlist | `CLAW_WEBHOOK_ALLOWED_IPS` set | Blocks non-Plaid IPs at app layer |
+| Trusted proxy | `CLAW_TRUSTED_PROXIES` set | Correct IP resolution behind proxy |
+| Firewall | Router rules | Blocks non-Plaid IPs at network layer |
+| HMAC | `PLAID_WEBHOOK_SECRET` set | Cryptographic payload authenticity |
+
 ---
 
 ## 10. Stable webhook URL with DuckDNS

@@ -370,6 +370,24 @@ Receives Plaid webhook events. Requires bearer token auth and Plaid
 HMAC-SHA256 signature verification (`Plaid-Verification` header). Returns 400
 on invalid signature.
 
+#### Webhook ingress IP allowlisting
+
+When `CLAW_WEBHOOK_ALLOWED_IPS` is configured, a middleware layer enforces
+source IP filtering before any route handler runs.  IP resolution order:
+
+1. If the direct connection IP is in `CLAW_TRUSTED_PROXIES` (default:
+   `127.0.0.1`), take the **leftmost** `X-Forwarded-For` address as the real
+   client IP.
+2. Otherwise, use the direct connection IP.
+
+If the resolved IP does not fall within any configured CIDR, the middleware
+returns HTTP 403 `{"detail": "forbidden"}` and logs a WARNING with the
+resolved IP and `request_id`.  The route handler and all other middleware
+downstream are bypassed.
+
+When `CLAW_WEBHOOK_ALLOWED_IPS` is unset or empty, the middleware is
+transparent and all other routes are unaffected in all configurations.
+
 On `SYNC_UPDATES_AVAILABLE`:
 
 1. Extracts `item_id` from the payload.
@@ -709,6 +727,8 @@ Key variables:
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
 | `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
 | `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1; values ≤ 0 cause a startup error |
+| `CLAW_WEBHOOK_ALLOWED_IPS` | no | — | Comma-separated IPv4/IPv6 CIDRs allowed to POST to `/webhooks/plaid`; unset = no IP filtering |
+| `CLAW_TRUSTED_PROXIES` | no | `127.0.0.1` | Comma-separated IPs of trusted reverse proxies for `X-Forwarded-For` resolution; used only when `CLAW_WEBHOOK_ALLOWED_IPS` is set |
 
 `items.toml` is a separate configuration file (not an environment variable)
 used by `sync --all` and `sync --item`. Default path:

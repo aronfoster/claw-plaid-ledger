@@ -266,3 +266,47 @@ def test_partial_items_token_missing_yields_fail(tmp_path: Path) -> None:
 
     assert _get_result(results, "PLAID_TOKEN_ALICE").status is CheckStatus.OKAY
     assert _get_result(results, "PLAID_TOKEN_BOB").status is CheckStatus.FAIL
+
+
+# ---------------------------------------------------------------------------
+# Webhook allowlist preflight checks
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_allowlist_absent_is_warning(tmp_path: Path) -> None:
+    """Missing CLAW_WEBHOOK_ALLOWED_IPS is a WARNING, not a hard failure."""
+    env = _make_base_env(tmp_path)
+    # CLAW_WEBHOOK_ALLOWED_IPS deliberately absent
+
+    results = run_production_preflight(env)
+
+    result = _get_result(results, "webhook-allowlist")
+    assert result.status is CheckStatus.WARN
+    assert result.severity is CheckSeverity.WARNING
+    assert "reachable from any source IP" in result.message
+
+
+def test_webhook_allowlist_configured_is_okay(tmp_path: Path) -> None:
+    """Valid CLAW_WEBHOOK_ALLOWED_IPS reports OKAY with CIDR count."""
+    env = _make_base_env(tmp_path)
+    env["CLAW_WEBHOOK_ALLOWED_IPS"] = "52.21.0.0/16,3.211.0.0/16"
+
+    results = run_production_preflight(env)
+
+    result = _get_result(results, "webhook-allowlist")
+    assert result.status is CheckStatus.OKAY
+    assert "2 CIDR" in result.message
+
+
+def test_webhook_allowlist_invalid_cidr_is_required_fail(
+    tmp_path: Path,
+) -> None:
+    """Invalid CIDR in CLAW_WEBHOOK_ALLOWED_IPS is a required hard failure."""
+    env = _make_base_env(tmp_path)
+    env["CLAW_WEBHOOK_ALLOWED_IPS"] = "not-a-cidr"
+
+    results = run_production_preflight(env)
+
+    result = _get_result(results, "webhook-allowlist")
+    assert result.status is CheckStatus.FAIL
+    assert result.severity is CheckSeverity.REQUIRED
