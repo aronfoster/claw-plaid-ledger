@@ -135,7 +135,7 @@ production-like local deployment patterns.
 
 **Scope**
 
-- Provide official `systemd` service and timer templates for Linux/Proxmox.
+- Provide official `systemd` service and timer templates for Linux/Proxmox. This will be the primary deployment method.
 - Offer container deployment examples (Docker/LXC) for self-hosted setups.
 - Add local-network auth hardening options (mTLS or OIDC-style front-proxy
   integration).
@@ -143,20 +143,6 @@ production-like local deployment patterns.
   - Document router-level IP allowlisting for Plaid's published webhook source
     ranges so the `/webhooks/plaid` endpoint is not reachable from arbitrary
     internet hosts.
-  - Evaluate and optionally implement Plaid's JWKS-based webhook verification
-    (rotating key JWT signatures) as an alternative or complement to the current
-    static HMAC-SHA256 signing-secret approach.  See
-    [Plaid webhook verification docs](https://plaid.com/docs/api/webhooks/webhook-verification/).
-    The static HMAC approach (M3) is sufficient for most operators; JWKS
-    verification removes the need to store a long-lived signing secret.
-
-**Design questions for PM/user**
-
-- Which deployment target is primary for support burden: `systemd` or container?
-- Is local single-user bearer auth still acceptable, or is multi-device auth now
-  a release requirement?
-- For webhook hardening: prefer IP allowlisting (network-layer, no code change),
-  JWKS verification (code change, eliminates stored secret), or both?
 
 ### M14 — `doctor` auto-remediation
 
