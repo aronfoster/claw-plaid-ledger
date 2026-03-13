@@ -12,6 +12,8 @@ This directory is a copy-ready OpenClaw skill bundle for Hestia's ledger work.
   sequences and failure-handling guardrails.
 - `templates/owner_summary_template.md` — structured output template for
   deterministic owner-aware household summaries.
+- `templates/anomaly_review_template.md` — structured anomaly-detection and
+  escalation template with confidence + follow-up fields.
 
 ## How to copy into a new OpenClaw workspace
 
