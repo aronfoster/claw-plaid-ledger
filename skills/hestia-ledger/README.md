@@ -1,19 +1,16 @@
 # Hestia Ledger Skill Bundle
 
-This directory is a copy-ready OpenClaw skill bundle for Hestia's ledger work.
+This directory is a copy-ready OpenClaw skill bundle for Hestia's ingestion
+loop.
 
 ## What is in this bundle
 
-- `SKILL.md` — operational contract for how Hestia queries the ledger API and
-  writes annotations safely.
-- `checklists/annotation_write_checklist.md` — fast checklist to run before any
-  `PUT /annotations/{transaction_id}` write.
-- `checklists/query_playbooks.md` — quick-reference intent-to-endpoint
-  sequences and failure-handling guardrails.
-- `templates/owner_summary_template.md` — structured output template for
-  deterministic owner-aware household summaries.
-- `templates/anomaly_review_template.md` — structured anomaly-detection and
-  escalation template with confidence + follow-up fields.
+- `SKILL.md` — ingestion-only contract for deterministic annotation and
+  escalation.
+- `checklists/annotation_write_checklist.md` — pre-write checklist for
+  `PUT /annotations/{transaction_id}`.
+- `checklists/query_playbooks.md` — ingestion query sequences, escalation
+  tagging rules, and failure handling.
 
 ## How to copy into a new OpenClaw workspace
 
@@ -24,16 +21,16 @@ for example:
 cp -R hestia-ledger "$OPENCLAW_SKILLS_DIR/hestia-ledger"
 ```
 
-No internal links need editing if the directory contents stay together.
+## Runtime profile
+
+- **Primary trigger:** event-driven (e.g., Plaid sync complete notification).
+- **Expected cadence:** frequent / low-latency.
+- **Output style:** operational status and escalation tags.
 
 ## Minimum environment assumptions
 
-The target OpenClaw runtime must provide:
-
-1. Access to this ledger API with bearer-token auth enabled.
-2. Endpoints: `GET /transactions`, `GET /transactions/{id}`, `GET /spend`, and
+1. Access to ledger API with bearer-token auth.
+2. Endpoints: `GET /transactions`, `GET /transactions/{id}`,
    `PUT /annotations/{transaction_id}`.
-3. Canonical-source precedence already configured by operators (Hestia must not
-   override it).
-4. A stable time basis (`today`/timezone) so repeated date-window queries are
-   reproducible.
+3. Canonical-source precedence configured by operators.
+4. Stable timezone/basis for repeatable date-window queries.
