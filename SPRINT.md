@@ -161,7 +161,7 @@ Athena-second analysis.
 
 ---
 
-## Task 5: Sprint closeout validation and operator handoff docs
+## Task 5: Sprint closeout validation and operator handoff docs ✅ DONE
 
 ### Scope
 
@@ -201,3 +201,54 @@ that sprint tracking reflects completion quality.
 - New ledger API endpoints dedicated to Athena unless blocked by a hard gap.
 - Full orchestration engine for guaranteed agent-to-agent execution.
 - M13 deployment hardening and M14 doctor auto-remediation roadmap items.
+
+---
+
+## Sprint 14 closeout (operator handoff)
+
+### Shipped artifacts
+
+- `skills/hestia-ledger/` is now ingestion-only with deterministic annotation
+  behavior and explicit `needs-athena-review` escalation tagging.
+- `skills/athena-ledger/` is now the analysis/reporting bundle with anomaly
+  review checklists and owner-summary templates.
+- Runtime wake behavior and architecture docs align on Hestia-first wake,
+  Athena-later analysis cadence.
+- Operator docs now include two-agent bootstrap snippets and suggested
+  schedules for event-driven Hestia and periodic Athena runs.
+
+### Quickstart snippets (copy-ready)
+
+#### Install/copy Hestia bundle
+
+```bash
+mkdir -p ~/.codex/skills/hestia-ledger
+cp -R skills/hestia-ledger/* ~/.codex/skills/hestia-ledger/
+```
+
+#### Install/copy Athena bundle
+
+```bash
+mkdir -p ~/.codex/skills/athena-ledger
+cp -R skills/athena-ledger/* ~/.codex/skills/athena-ledger/
+```
+
+#### Recommended schedule
+
+- Hestia: event-driven wake from non-empty webhook sync notifications.
+- Athena: periodic schedule (for example, daily or weekly) plus optional
+  follow-up on `needs-athena-review` tagged transactions.
+
+### Quality-gate evidence (final integration)
+
+- `uv run --locked ruff format . --check`
+- `uv run --locked ruff check .`
+- `uv run --locked mypy .`
+- `uv run --locked pytest -v`
+
+### Deferred follow-ups carried into next sprint planning
+
+- Guaranteed agent-to-agent orchestration remains deferred.
+- New Athena-specific API endpoints remain deferred unless a hard gap appears.
+- M13 deployment hardening and M14 doctor auto-remediation continue per
+  roadmap sequencing.

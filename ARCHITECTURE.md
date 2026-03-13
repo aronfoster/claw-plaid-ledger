@@ -197,11 +197,21 @@ Scheduled sync fallback (M10, opt-in):
 
 _scheduled_sync_loop (every 60 min)
   └─ _check_and_sync_overdue_items
+
+
        ├─ items.toml present ──> per-item last_synced_at check
        │                             overdue → _background_sync(token, item_id, owner)
        │                             recent  → skip (DEBUG log)
        └─ no items.toml ──────> single-item PLAID_ACCESS_TOKEN fallback
 ```
+
+### Operator handoff (Sprint 14 closeout)
+
+- **Skill install source**: `skills/hestia-ledger/` and `skills/athena-ledger/`
+  are copy-ready bundles for downstream agent runtimes.
+- **Default wake target**: non-empty sync notifications wake Hestia only.
+- **Analysis cadence**: Athena is intentionally decoupled and should run on a
+  periodic schedule, optionally prioritizing `needs-athena-review` tags.
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
 never touches `annotations`. Source precedence is applied after sync writes via

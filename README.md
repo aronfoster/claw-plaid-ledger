@@ -26,6 +26,22 @@ uv run --locked ruff check .
 uv run --locked mypy .
 ```
 
+## Two-agent skill bundle quickstart (Sprint 14)
+
+Install the split skill bundles into your Codex/OpenClaw skills directory:
+
+```bash
+mkdir -p ~/.codex/skills/hestia-ledger ~/.codex/skills/athena-ledger
+cp -R skills/hestia-ledger/* ~/.codex/skills/hestia-ledger/
+cp -R skills/athena-ledger/* ~/.codex/skills/athena-ledger/
+```
+
+Recommended operating cadence:
+
+- **Hestia (bookkeeper)**: event-driven; wake on non-empty Plaid webhook syncs.
+- **Athena (analyst)**: periodic (daily/weekly) plus targeted review of
+  `needs-athena-review` tagged transactions.
+
 ## Local configuration
 
 Claw Plaid Ledger expects secrets and machine-specific paths to live outside
@@ -234,6 +250,12 @@ uv run ledger doctor
 uv run ledger sync
 uv run ledger serve   # starts API server on http://127.0.0.1:8000
 ```
+
+## Sprint 14 closeout status
+
+Sprint 14 is complete: Hestia/Athena skill bundles are split, runtime wake flow
+is Hestia-first, and operator docs include two-agent bootstrap and scheduling
+guidance. See `SPRINT.md` closeout for shipped/deferred details.
 
 ## Quality defaults
 
