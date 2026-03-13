@@ -1019,3 +1019,232 @@ When running inside a Proxmox LXC container:
 - Bind-mounts for the config directory from host to container are
   supported; see the Proxmox documentation for `mp0` bind-mount
   configuration.
+
+---
+
+## 13. Container deployment
+
+This section covers two container approaches: Docker (the primary path) and
+Proxmox LXC (for operators who prefer OS-level containers).
+
+### 13.1 Docker — overview
+
+The `deploy/docker/` directory contains a production-appropriate Docker image
+definition and a Compose file.  Key design decisions:
+
+- **Multi-stage build**: a `builder` stage (based on
+  `ghcr.io/astral-sh/uv`) installs dependencies; the `runtime` stage is a
+  slim Python 3.12 image containing only the installed virtualenv — no build
+  tools, no source tree.
+- **Non-root user**: the container runs as `ledger` (UID 1000).
+- **No secrets in the image**: all configuration is supplied via environment
+  variables or an `env_file` at run-time.
+- **Loopback-only port binding**: port 8000 is bound to `127.0.0.1` by
+  default so the container is not reachable from the network without a
+  reverse proxy.
+
+### 13.2 Docker — prerequisites
+
+- Docker 24+ with the Compose plugin:
+
+  ```bash
+  docker compose version
+  ```
+
+- A valid `.env` file in `deploy/docker/` (never committed to version
+  control).
+- `items.toml` on the host at `~/.config/claw-plaid-ledger/items.toml`.
+
+### 13.3 Docker — first-time setup
+
+**Step 1 — Create the `.env` file.**
+
+```bash
+cat > deploy/docker/.env <<'EOF'
+PLAID_CLIENT_ID=your-client-id
+PLAID_SECRET=your-secret
+PLAID_ENV=production
+CLAW_API_SECRET=choose-a-strong-random-string
+CLAW_DB_PATH=/data/ledger.db
+# Optional: path to items.toml inside the container (default shown)
+CLAW_ITEMS_CONFIG=/home/ledger/.config/claw-plaid-ledger/items.toml
+EOF
+chmod 600 deploy/docker/.env
+```
+
+The `.env` file must have mode 600 so only the owning user can read it.
+
+**Step 2 — Prepare `items.toml`.**
+
+```bash
+mkdir -p ~/.config/claw-plaid-ledger
+cp items.toml.example ~/.config/claw-plaid-ledger/items.toml
+# Edit the file to add your Plaid items.
+```
+
+**Step 3 — Start the service.**
+
+```bash
+cd deploy/docker
+docker compose up -d
+```
+
+Verify the service is running:
+
+```bash
+curl http://127.0.0.1:8000/health
+# → {"status": "ok"}
+```
+
+### 13.4 Docker — build and update workflow
+
+**Build the image locally** (required before first run or after code changes):
+
+```bash
+cd deploy/docker
+docker compose build
+```
+
+Force a clean rebuild (useful after dependency updates):
+
+```bash
+docker compose build --no-cache
+```
+
+**Apply an update** (rebuild and restart with zero downtime of the volume):
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+**View logs:**
+
+```bash
+docker compose logs -f ledger
+```
+
+**Restart the container** (e.g. after editing `.env`):
+
+```bash
+docker compose restart ledger
+```
+
+### 13.5 Docker — secrets management
+
+- Store secrets in `deploy/docker/.env` with `chmod 600`.
+- Never add `.env` to version control — the `.dockerignore` file already
+  excludes it from the build context.
+- For more isolation, use Docker secrets (`docker secret create`) or a
+  secrets manager.  The application reads all config from environment
+  variables, so any injection mechanism is compatible.
+- Do not bake tokens into the image via `--build-arg`; build arguments are
+  visible in `docker history`.
+
+### 13.6 Docker — database backup and restore
+
+The SQLite database lives in the `ledger-data` named volume.  Docker manages
+the storage location; find it with:
+
+```bash
+docker volume inspect ledger-data
+```
+
+**Back up** the database to the current directory:
+
+```bash
+docker run --rm \
+  -v ledger-data:/data \
+  -v "$(pwd)":/backup \
+  python:3.12-slim \
+  cp /data/ledger.db /backup/ledger.db.bak
+```
+
+**Restore** from a backup:
+
+```bash
+# Stop the service first.
+docker compose down
+docker run --rm \
+  -v ledger-data:/data \
+  -v "$(pwd)":/backup \
+  python:3.12-slim \
+  cp /backup/ledger.db.bak /data/ledger.db
+docker compose up -d
+```
+
+**Remove the volume** (destructive — deletes all transaction data):
+
+```bash
+docker compose down -v
+```
+
+### 13.7 LXC (Proxmox) — overview
+
+Proxmox LXC provides OS-level container isolation without the overhead of a
+full VM.  For `claw-plaid-ledger`, LXC is most useful when the operator
+wants to run the service as a managed systemd unit inside its own container,
+using the host's Proxmox scheduler.
+
+Recommended approach: use the systemd unit files from `deploy/systemd/` inside
+the LXC container (see Section 12), rather than running Docker-inside-LXC.
+
+### 13.8 LXC — recommended setup
+
+**OS template**: Debian 12 (bookworm) — the same distribution targeted by
+the systemd unit files.
+
+```
+pct create 100 local:vztmpl/debian-12-standard_*.tar.zst \
+  --hostname claw-plaid-ledger \
+  --memory 512 \
+  --cores 1 \
+  --net0 name=eth0,bridge=vmbr0,ip=dhcp \
+  --unprivileged 1 \
+  --features nesting=1
+```
+
+**Bind-mount the config directory** from the Proxmox host into the container
+so secrets are stored on the host and not inside the container filesystem:
+
+```bash
+# In /etc/pve/lxc/100.conf on the Proxmox host:
+mp0: /host/path/claw-plaid-ledger-config,mp=/root/.config/claw-plaid-ledger
+```
+
+Replace `/host/path/claw-plaid-ledger-config` with the host path where you
+store `items.toml` and `.env`.  Set `chmod 700` on that directory.
+
+**Install `uv` and the service** inside the container:
+
+```bash
+pct enter 100
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Follow the steps in RUNBOOK.md Section 12 to install the unit files.
+```
+
+### 13.9 LXC — systemd vs host-level service management
+
+Two patterns are available:
+
+| Pattern | How it works | When to use |
+|---|---|---|
+| **systemd-inside-LXC** | The LXC container runs its own init (systemd); `ledger serve` is a unit inside the container | Preferred — clean isolation, standard `systemctl` and `journalctl` workflow |
+| **Host-level via pct exec** | Proxmox host manages the process via a `.service` unit that calls `pct exec` | Useful if the LXC container is a minimal image without systemd |
+
+For most Proxmox home-server setups the first pattern is simpler.  Enable
+it by creating the container with `--features nesting=1` (already shown
+above) and following Section 12 inside the container.
+
+### 13.10 LXC — privilege considerations
+
+- **Unprivileged containers** (recommended): UIDs inside the container are
+  mapped to high host UIDs.  File permissions on bind-mounted config
+  directories must account for this mapping (use `chown 100000:100000` on
+  the host path if the container user is UID 0, or match the mapped UID for
+  non-root users).
+- **Privileged containers**: UIDs are shared with the host.  Avoid unless
+  required; a privilege-escalation bug in the container could affect the
+  host.
+- The `ProtectSystem=strict` and `PrivateTmp=true` systemd directives work
+  in both modes on Proxmox PVE 7+.

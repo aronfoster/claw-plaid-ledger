@@ -1,0 +1,52 @@
+# docker-compose.yml — claw-plaid-ledger container deployment
+#
+# Quick start:
+#   1. Copy .env.example → .env and fill in your secrets (chmod 600 .env).
+#   2. Copy items.toml.example → ~/.config/claw-plaid-ledger/items.toml.
+#   3. docker compose up -d
+#   4. curl http://127.0.0.1:8000/health
+
+services:
+  ledger:
+    # Build from the Dockerfile in this directory.  Rebuild with:
+    #   docker compose build --no-cache
+    build:
+      context: ../..       # repo root (so COPY src/ works)
+      dockerfile: deploy/docker/Dockerfile
+
+    # Secrets and site-specific config are loaded from .env at runtime.
+    # Never commit .env to version control.
+    env_file: .env
+
+    ports:
+      # Bind to loopback only.  Put a reverse proxy (Caddy, nginx) in front
+      # for TLS termination and external access.  Change to "8000:8000" only
+      # if you are certain the host has no untrusted network access on :8000.
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      # Named volume for the SQLite database.  Persists across container
+      # restarts and rebuilds.  Back up with the pattern in README.md.
+      - ledger-data:/data
+
+      # Bind-mount for items.toml so operators can edit it on the host
+      # without rebuilding the image.  The path on the left is the host path;
+      # adjust if your config lives elsewhere.
+      - "${HOME}/.config/claw-plaid-ledger/items.toml:/home/ledger/.config/claw-plaid-ledger/items.toml:ro"
+
+    # Restart unless the operator explicitly stops the container.
+    restart: unless-stopped
+
+    # Basic health check using the /health endpoint.
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # Named volume for the SQLite database.  Docker manages the storage
+  # location; use `docker volume inspect ledger-data` to find it.
+  ledger-data:

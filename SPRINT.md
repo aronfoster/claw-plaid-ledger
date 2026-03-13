@@ -77,7 +77,7 @@ than cron.  This is the primary deployment method per the M13 roadmap.
 
 ---
 
-## Task 2: Container deployment examples (Docker / LXC)
+## Task 2: Container deployment examples (Docker / LXC) ✅ DONE
 
 ### Scope
 

@@ -1,0 +1,47 @@
+# .dockerignore — files excluded from the Docker build context
+#
+# Keeping the context small speeds up `docker build` and prevents secrets
+# or large files from being sent to the Docker daemon unnecessarily.
+
+# Version-control metadata
+.git
+.gitignore
+
+# Test suite and type-checking artefacts — not needed in the image
+tests/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# SQLite databases — never bake data into the image
+*.db
+*.db-shm
+*.db-wal
+
+# Secret / environment files — always injected at runtime, never baked in
+*.env
+.env
+.env.*
+
+# Deployment examples and scripts — not part of the application
+deploy/
+scripts/
+skills/
+
+# Documentation and project-management files
+*.md
+RUNBOOK.md
+ARCHITECTURE.md
+SPRINT.md
+AGENTS.md
+
+# Python virtual environment (if present locally)
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
