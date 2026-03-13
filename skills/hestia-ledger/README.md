@@ -8,6 +8,8 @@ This directory is a copy-ready OpenClaw skill bundle for Hestia's ledger work.
   writes annotations safely.
 - `checklists/annotation_write_checklist.md` — fast checklist to run before any
   `PUT /annotations/{transaction_id}` write.
+- `checklists/query_playbooks.md` — quick-reference intent-to-endpoint
+  sequences and failure-handling guardrails.
 - `templates/owner_summary_template.md` — structured output template for
   deterministic owner-aware household summaries.
 

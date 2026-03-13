@@ -37,6 +37,42 @@ Hestia may call only these endpoints for ledger operations:
 
 No other endpoint should be required for normal summary/annotation workflows.
 
+## API guardrails
+
+### Canonical-first and raw carve-outs
+
+- Use `view=canonical` by default for summaries, owner rollups, and annotation
+  decisions.
+- Use `view=raw` only when the task is explicitly an audit/discrepancy check
+  and always pair the raw query with a canonical query over the same filters.
+- Never recommend precedence rewrites based on a single raw query; report
+  findings as operator follow-up items.
+
+### Required filter hygiene
+
+- Always provide explicit `start_date` + `end_date` for summary/review intents.
+- Mirror date windows across every related endpoint call in a workflow.
+- Use explicit `owner`, `tags`, and `include_pending` filters whenever they are
+  part of the user intent.
+- Do not draw conclusions from keyword-only matches without confirming concrete
+  records through filtered endpoint responses.
+
+### Pagination and sampling rules
+
+- For `GET /transactions`, page deterministically: start at page 1 and continue
+  until an empty page or explicit terminal condition.
+- Keep page size stable within one workflow run.
+- If pagination stops early (timeout/failure), report partial coverage and avoid
+  definitive totals.
+
+### Failure and empty-result behavior
+
+- If one endpoint fails, report the failure and downgrade confidence.
+- If all relevant queries return empty sets, provide an "empty window" result
+  rather than inferred spend behavior.
+- If canonical and raw conflict, prefer canonical for conclusions and treat raw
+  as diagnostic context only.
+
 ## Determinism rules
 
 For any repeatable analysis task, Hestia should:
@@ -54,37 +90,51 @@ For any repeatable analysis task, Hestia should:
 If a required query fails, Hestia should abstain from definitive conclusions and
 report what could not be verified.
 
-## Common workflow call order
+## Intent → API call sequence playbooks
 
-### Workflow A: household period summary
+### Playbook 1: period spend summary
 
-1. Call `GET /spend` with explicit date window and `view=canonical`.
-2. Call `GET /transactions` for the same window (and any owner/tag filters)
-   to gather representative examples and pending/posting context.
-3. Produce final summary using the exact queried window.
+1. Call `GET /spend` with `start_date`, `end_date`, `view=canonical`.
+2. Call `GET /transactions` over the same window (`view=canonical`) using
+   deterministic pagination for representative examples.
+3. Separate posted vs pending observations when `include_pending=true`.
+4. Report summary totals with the exact queried window.
 
-### Workflow B: owner-specific review
+### Playbook 2: owner-aware rollup
 
-1. Call `GET /spend` with explicit date window, `owner=<owner-id>`,
+1. Call `GET /spend` with `owner=<owner-id>`, fixed date window,
    `view=canonical`.
-2. Call `GET /transactions` with the same window and owner filter.
-3. If records look inconsistent, call `GET /transactions/{id}` for the specific
-   transactions before any annotation write.
+2. Call `GET /transactions` with identical owner/date filters.
+3. If totals look anomalous, call `GET /transactions/{id}` for outliers.
+4. Report owner section + household context, clearly labeling filter scope.
 
-### Workflow C: pre-annotation verification
+### Playbook 3: tag-based review
+
+1. Call `GET /transactions` with `tags=<tag-list>`, explicit date window,
+   `view=canonical`.
+2. Page through all results before deciding trend or count statements.
+3. Optionally call `GET /spend` for the same window when spend framing is
+   required by the prompt.
+4. If results are sparse/empty, report "insufficient tagged evidence" instead
+   of extrapolating.
+
+### Playbook 4: transaction drill-down before annotation write
 
 1. Call `GET /transactions/{id}`.
-2. Confirm transaction identity, amount sign, date, pending/posting state, and
-   current annotation values.
-3. If and only if evidence is sufficient, call
-   `PUT /annotations/{transaction_id}`.
+2. Validate amount sign, date, pending/posting state, owner context, and
+   current annotation payload.
+3. If details conflict with summary-level assumptions, resolve via another
+   filtered `GET /transactions` query before writing.
+4. Only then call `PUT /annotations/{transaction_id}`.
 
-### Workflow D: discrepancy check (canonical vs raw)
+### Playbook 5: canonical vs raw discrepancy investigation
 
-1. Call `GET /transactions` with `view=canonical` for the fixed window.
-2. Call `GET /transactions` with `view=raw` for the same window.
-3. Report differences as detection output only; do not prescribe precedence
-   rewrites.
+1. Call `GET /transactions` with fixed filters and `view=canonical`.
+2. Repeat the same call with `view=raw`.
+3. Compare count/amount/category differences and classify as potential sync or
+   precedence artifacts.
+4. Summarize as detection output with operator follow-up, not as override
+   instructions.
 
 ## Annotation policy
 
@@ -127,3 +177,4 @@ annotated and why.
 
 - `templates/owner_summary_template.md`
 - `checklists/annotation_write_checklist.md`
+- `checklists/query_playbooks.md`
