@@ -684,7 +684,7 @@ Plaid publishes its current webhook IP ranges in the Plaid developer
 documentation (search "Plaid webhook IP ranges").  Review and update this list
 when Plaid announces changes.
 
-**Unset or empty** — no IP filtering is applied; existing behaviour is
+**Unset or empty** — no IP filtering is applied; existing behavior is
 preserved.  `ledger doctor --production-preflight` will report a `[WARN]` for
 this state to surface the choice explicitly (it is not a hard failure).
 
@@ -944,7 +944,7 @@ alternative to (or complement of) the built-in
 | `claw-plaid-ledger-sync.timer` | Operators who prefer systemd for all scheduling; allows sync to run independently of the server |
 
 Both approaches are valid; do not enable both simultaneously for the
-same set of items unless you intend the double-run behaviour.
+same set of items unless you intend the double-run behavior.
 
 Install the service and timer:
 

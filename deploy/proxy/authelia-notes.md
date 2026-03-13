@@ -2,7 +2,7 @@
 
 This file is an operator-facing guide for protecting `ledger serve` with
 [Authelia](https://www.authelia.com/) — an open-source authentication and
-authorisation server that provides OIDC, SSO, and multi-factor authentication
+authorization server that provides OIDC, SSO, and multi-factor authentication
 in front of your services.
 
 > **Pointer, not a replacement** — this document gives you the key integration

@@ -102,7 +102,7 @@ def _sync_pages(
         # Any exception raised here propagates out of the with-block,
         # causing the sqlite3 context manager to call rollback().
         # Classify known Plaid error types and wrap unknowns as
-        # transient so callers can reason about retry behaviour.
+        # transient so callers can reason about retry behavior.
         try:
             result = adapter.sync_transactions(access_token, cursor=cursor)
         except PlaidSyncError:

@@ -267,7 +267,7 @@ class TestWebhookPlaid:
     def test_unknown_webhook_type_returns_200_without_enqueuing_sync(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Unrecognised webhook types are acknowledged with 200; no sync."""
+        """Unrecognized webhook types are acknowledged with 200; no sync."""
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 

@@ -475,7 +475,7 @@ On `SYNC_UPDATES_AVAILABLE`:
    single-item sync silently.
 
 Returns 200 immediately; the sync runs in the background.
-Unrecognised webhook types are acknowledged with 200 and logged at warning
+Unrecognized webhook types are acknowledged with 200 and logged at warning
 level.
 
 ### `GET /transactions`
@@ -653,7 +653,7 @@ summary.removed > 0`.
   skipping notification"`) and returns immediately. This is not an error; it is
   a valid operator choice.
 
-### Failure behaviour
+### Failure behavior
 
 Network errors (`urllib.error.URLError`) and non-2xx HTTP responses
 (`urllib.error.HTTPError`) are caught inside `notify_openclaw`, logged at
