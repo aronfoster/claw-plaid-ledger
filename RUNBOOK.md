@@ -1,4 +1,4 @@
-# Production Operations Runbook — M11
+# Production Operations Runbook — M11 + Sprint 14 closeout
 
 ## 1. Purpose and scope
 
@@ -120,6 +120,27 @@ Canonical behavior reminder:
   raw transactions
 
 ---
+
+## 1c. Two-agent operations handoff (Sprint 14 closeout)
+
+Install both skill bundles into your local skills directory:
+
+```bash
+mkdir -p ~/.openclaw/skills/hestia-ledger ~/.openclaw/skills/athena-ledger
+cp -R skills/hestia-ledger/* ~/.openclaw/skills/hestia-ledger/
+cp -R skills/athena-ledger/* ~/.openclaw/skills/athena-ledger/
+```
+
+Recommended run pattern:
+
+- **Hestia**: event-driven on non-empty Plaid webhook syncs (default wake flow).
+- **Athena**: periodic review (daily/weekly) and targeted checks for
+  `needs-athena-review` transactions.
+
+Operational check:
+
+- Ensure `OPENCLAW_HOOKS_AGENT=Hestia` so webhook sync wakes the ingestion
+  worker first; Athena should not be woken on every sync by default.
 
 ## 2. Plaid production-access prerequisites
 
