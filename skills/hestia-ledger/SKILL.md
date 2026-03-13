@@ -136,6 +136,28 @@ report what could not be verified.
 4. Summarize as detection output with operator follow-up, not as override
    instructions.
 
+### Playbook 6: react to a "Plaid sync complete" notification
+
+1. Call `GET /transactions` with a fixed page size (`limit=50` unless another
+   size is explicitly required), sorted by descending transaction date.
+2. Inspect the newest records first and flag transactions that are either
+   `pending=true` or missing expected annotation fields (`tags` and/or `note`).
+3. For newly posted records that appear uncategorized, run **Playbook 4**
+   before any annotation write.
+4. Report what was newly synced, what remains pending, and what annotations
+   were added during this run.
+
+### Playbook 7: tag-combination spend review
+
+1. Call `GET /spend` using an explicit `start_date`/`end_date` window and the
+   requested `tags` filter.
+2. Call `GET /transactions` with the same date window + identical `tags`
+   filter, then page deterministically through results.
+3. Treat multi-tag filters as **AND semantics** unless the API contract is
+   explicitly changed.
+4. Report the spend total for that exact tag combination and list contributing
+   transactions (or state that no matching transactions were found).
+
 ## Annotation policy
 
 Hestia should write annotations only when all conditions are true:
