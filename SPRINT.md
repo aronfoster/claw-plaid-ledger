@@ -1,21 +1,38 @@
-# Sprint 13 — M12: Hestia Skill Definition
+# Sprint 14 — M12a Redirect: Two-Agent Ledger Workflow
 
 ## Sprint goal
 
-Publish a production-ready Hestia skill pack that defines **how Hestia should
-use the ledger API safely and deterministically**. By the end of the sprint,
-a developer can copy the skill files into a fresh OpenClaw workspace and get
-consistent behavior for household summaries, anomaly detection, and annotation
-hygiene without overriding canonical source-precedence rules.
+Redirect the completed M12 work into a practical **two-agent operating model**:
+
+- **Hestia (Bookkeeper):** high-frequency ingestion worker that annotates new
+  transactions deterministically.
+- **Athena (Analyst):** lower-frequency analysis worker that reviews flagged
+  items, produces rollups, and communicates insights.
+
+By the end of Sprint 14, the repository should ship two copy-ready skill
+bundles and clear runtime/documentation boundaries so operators can run Hestia
+continuously without creating human-notification fatigue.
+
+## Why this sprint exists
+
+Sprint 13 successfully produced a strong single-agent skill pack, but customer
+feedback exposed a role-mixing problem: annotation throughput work and
+higher-order analysis/reporting were bundled into one agent contract.
+
+Sprint 14 reuses that work rather than replacing it:
+
+- Keep deterministic API guardrails and annotation hygiene foundations.
+- Move analysis/reporting/anomaly synthesis content into Athena.
+- Narrow Hestia to an operationally cheap, deterministic ingestion loop with
+  explicit escalation tags.
 
 ## Working agreements
 
 - Keep each task reviewable in one PR where possible.
-- Prefer additive documentation and examples over speculative code changes.
-- Keep the skill contract implementation-agnostic for OpenClaw runtime details,
-  but concrete about API behavior and decision boundaries.
-- Do not weaken existing architecture boundaries: Hestia is an advisor and
-  annotator, never a raw-ledger mutator.
+- Prefer refactoring/re-homing existing content over rewriting from scratch.
+- Preserve privacy-safe placeholders and deterministic API guidance.
+- Do not add new API endpoints unless unavoidable; optimize for doc + skill
+  contract changes first.
 - Run the quality gate before every commit:
   - `uv run --locked ruff format . --check`
   - `uv run --locked ruff check .`
@@ -24,180 +41,155 @@ hygiene without overriding canonical source-precedence rules.
 
 ---
 
-## Task 1: Create the Hestia skill file bundle ✅ DONE
+## Task 1: Capability inventory and content split map
 
 ### Scope
 
-Create a dedicated, copy-friendly skill bundle for OpenClaw containing a
-complete `SKILL.md` and any companion markdown/templates needed for reuse.
-The bundle should live in a clearly named docs/location path and be structured
-so operators can copy it as-is into a new Hestia/OpenClaw skill project.
+Audit current Sprint 13 artifacts (skill files/templates/checklists/docs) and
+produce a concrete migration map: what stays with Hestia, what moves to Athena,
+and what should be shared.
 
 ### Required deliverables
 
-- New `SKILL.md` authored for Hestia ledger operations.
-- A short `README` (or section in existing docs) explaining:
-  - where files live,
-  - what to copy,
-  - minimum required environment assumptions.
-- Optional companion artifacts (prompt templates, checklists) kept as separate
-  files rather than embedded giant blocks in one file.
-
-### SKILL.md must include
-
-- **Purpose and boundaries** (what Hestia is and is not allowed to do).
-- **Approved tool/API calls** and expected call order for common workflows.
-- **Determinism rules** (prefer canonical views, date-window constraints,
-  explicit filters, and reproducible reasoning steps).
-- **Annotation policy** (when to write annotations, required fields/format,
-  and when to abstain).
+- A checked-in migration matrix (markdown) with columns:
+  - current file/section,
+  - future owner (`hestia`, `athena`, `shared`),
+  - action (`keep`, `move`, `copy+adapt`, `retire`),
+  - rationale.
+- Explicit list of “salvage-first” sections to port into Athena.
 
 ### Done when
 
-- A developer can copy the bundle into a new OpenClaw skill project without
-  editing internal links.
-- The file layout is obvious and documented.
-- The skill reads as operational guidance, not aspirational prose.
-- Quality gate passes.
+- Every major Sprint 13 artifact has an explicit destination.
+- No ambiguous ownership remains for anomaly/summary workflows.
+- The map is specific enough that a developer can execute Tasks 2–3 without
+  interpretation meetings.
 
 ---
 
-## Task 2: Define API guardrails and deterministic query playbooks ✅ DONE
+## Task 2: Refactor Hestia skill bundle to ingestion-only contract
 
 ### Scope
 
-Codify exactly how Hestia should query the existing API endpoints (`/transactions`,
-`/transactions/{id}`, `/spend`, `/annotations/{transaction_id}`) to produce
-consistent results and avoid over-fetching or nondeterministic summaries.
+Narrow `skills/hestia-ledger/` to a strict bookkeeper loop and remove analyst
+responsibilities.
 
-### Required content
+### Required deliverables
 
-- Canonical-first guidance (`view=canonical` default) and explicit carve-outs
-  for when `view=raw` is allowed.
-- Query playbooks for common intents:
-  - period spend summaries,
-  - owner-aware rollups,
-  - tag-based review,
-  - transaction drill-down before annotation writes.
-- Required filter hygiene:
-  - always specify date windows for summary tasks,
-  - use pagination patterns explicitly,
-  - avoid ambiguous keyword-only conclusions.
-- Error-handling guidance for partial/empty result sets and API failures.
+- Updated Hestia `SKILL.md` boundaries:
+  - Fetch unannotated transactions.
+  - Perform deterministic categorization/tagging.
+  - Write annotation updates.
+  - Escalate uncertain cases via `needs-athena-review` tag and continue.
+- Updated Hestia templates/checklists to support only:
+  - annotation quality,
+  - confidence thresholds,
+  - escalation tagging.
+- Removal or relocation of reporting/anomaly-summary language that implies
+  Hestia speaks directly to end users.
 
 ### Done when
 
-- At least 4 concrete “intent → API call sequence” playbooks are documented.
-- Guardrails explicitly prevent precedence override behavior.
-- Guidance is aligned with current API capabilities shipped through M11.
-- Quality gate passes.
+- Hestia docs no longer claim spend-summary/reporting ownership.
+- Hestia can be run frequently with low token/cost expectations.
+- Escalation behavior is explicit, deterministic, and machine-checkable.
 
 ---
 
-## Task 3: Add owner-aware summary and anomaly-review prompting guidance ✅ DONE
+## Task 3: Create Athena skill bundle by salvaging Sprint 13 analysis work
 
 ### Scope
 
-Add practical prompting patterns that make Hestia produce high-signal household
-summaries while clearly separating facts, uncertainty, and suggested follow-up.
-Include anomaly workflows that treat Hestia as a safety net.
+Create `skills/athena-ledger/` by reusing and adapting existing Sprint 13
+analysis-focused guidance.
 
-### Required content
+### Required deliverables
 
-- Prompting rubric for owner-aware output:
-  - per-owner sections,
-  - shared-household rollup,
-  - pending-vs-posted clarity,
-  - citation of queried timeframe.
-- Anomaly taxonomy and handling steps for:
-  - unusual spend spikes,
-  - missing expected transactions,
-  - likely duplicates,
-  - category/tag inconsistencies.
-- Confidence language rules:
-  - how to mark “needs human review”,
-  - when to abstain from definitive conclusions.
+- New Athena `SKILL.md` with analyst boundaries:
+  - Review `needs-athena-review` queue.
+  - Run `GET /spend` rollups for defined windows.
+  - Produce owner-aware summaries and anomaly narratives.
+  - Avoid high-volume annotation churn except analyst-level clarifications.
+- Athena companion templates/checklists migrated from Sprint 13 artifacts:
+  - summary template,
+  - anomaly review flow,
+  - weekly/monthly playbook.
+- Athena README describing trigger modes:
+  - scheduled cadence,
+  - optional agent-to-agent handoff when available.
 
 ### Done when
 
-- Prompts/templates produce structured output (not free-form only).
-- Anomaly workflow includes escalation path and recommended annotation pattern.
-- Guidance explicitly states Hestia cannot rewrite canonical precedence decisions.
-- Quality gate passes.
+- Athena bundle is copy-ready and self-contained.
+- At least 70% of analysis guidance is reused from Sprint 13 assets (adapted,
+  not duplicated blindly).
+- Athena output contract is clearly “human-facing analysis,” not ingestion.
 
 ---
 
-## Task 4: Document orphaned-transaction and discrepancy workflows ✅ DONE
+## Task 4: Notification + architecture alignment for two-agent routing
 
 ### Scope
 
-Define explicit safety-net workflows for “orphaned transactions” and
-cross-source discrepancies, including what Hestia should check, how it should
-annotate findings, and where human/operator intervention is required.
+Align runtime defaults and architecture docs with Hestia-first ingestion and
+Athena-second analysis.
 
-### Required content
+### Required deliverables
 
-- Clear definition of “orphaned transaction” in this project context.
-- Step-by-step triage flow:
-  1. detect,
-  2. validate with available API data,
-  3. annotate with standardized tags/notes,
-  4. recommend operator follow-up action.
-- A discrepancy decision table that distinguishes:
-  - data freshness/sync timing issues,
-  - true cross-account conflicts,
-  - likely annotation drift.
+- `notifier.py`/config defaults and docs updated so the webhook wake target is
+  explicitly Hestia as ingestion worker.
+- Notification message copy updated to remove language implying immediate human
+  review on every sync.
+- `ARCHITECTURE.md` updated with two-agent sequence:
+  1. Plaid sync event,
+  2. Hestia annotation pass,
+  3. Athena scheduled/flag-driven analysis.
 
 ### Done when
 
-- Workflow can be followed mechanically by a new developer/operator.
-- Annotation examples are generic and privacy-safe.
-- The process frames Hestia as detection/reporting support only.
-- Quality gate passes.
+- Runtime and docs are non-contradictory about who is woken first.
+- Operator can answer “who does what, and when?” from architecture docs alone.
+- Legacy single-agent wording is removed or clearly marked as historical.
 
 ---
 
-## Task 5: Architecture alignment and sprint closeout
+## Task 5: Sprint closeout validation and operator handoff docs
 
 ### Scope
 
-Update architecture docs to reflect the finalized agent-role boundary and verify
-that roadmap/sprint tracking reflects M12 planning status for downstream work.
+Ensure the redirected model is runnable by downstream developers/operators and
+that sprint tracking reflects completion quality.
 
-### Checklist
+### Required deliverables
 
-- `ARCHITECTURE.md` updated with an “Agent role boundary” section covering:
-  - canonical ledger authority,
-  - Hestia read/annotate responsibilities,
-  - prohibited override behaviors.
-- Any relevant operator docs cross-link to the new skill bundle location.
-- `ROADMAP.md` remains consistent with M12 scope language.
-- Add a Sprint 13 closeout section after completion summarizing shipped assets
-  and explicitly deferred follow-ups.
+- Closeout section in `SPRINT.md` summarizing shipped artifacts and any deferred
+  follow-ups.
+- Quickstart snippets for:
+  - installing/copying Hestia bundle,
+  - installing/copying Athena bundle,
+  - recommended schedule (Hestia event-driven, Athena periodic).
+- Evidence that quality gate passed on final integration PR.
 
 ### Done when
 
-- Architecture and skill guidance are non-contradictory.
-- A developer can answer “what is Hestia allowed to do?” from docs alone.
-- Sprint board is ready for closeout once tasks complete.
-- Quality gate passes.
+- New developer can bootstrap both skills without tribal knowledge.
+- Deferred items are explicit (not implied).
+- Sprint board is ready for handoff to Sprint 15 planning.
 
 ---
 
-## Acceptance criteria for Sprint 13
+## Acceptance criteria for Sprint 14
 
-- Hestia skill files exist as reusable, copy-friendly artifacts.
-- `SKILL.md` defines deterministic API usage and annotation hygiene.
-- Owner-aware summary and anomaly-review prompting guidance is documented with
-  structured templates/playbooks.
-- Orphaned/discrepancy workflows are explicitly documented with clear human
-  escalation boundaries.
-- Architecture docs clearly enforce Hestia as a safety net, not precedence
-  authority.
-- All quality-gate commands pass.
+- Two distinct, reusable skill bundles exist (`hestia-ledger`,
+  `athena-ledger`) with non-overlapping primary responsibilities.
+- Hestia contract is strictly ingestion + annotation + escalation tagging.
+- Athena contract covers rollups, anomaly interpretation, and human-facing
+  summaries.
+- Notification and architecture docs reflect Hestia-first wake flow.
+- All quality-gate commands pass on merged implementation PRs.
 
-## Explicitly deferred (out of scope for Sprint 13)
+## Explicitly deferred (out of scope for Sprint 14)
 
-- New API endpoints or database schema changes for M12.
-- Deployment hardening work (M13).
-- Doctor auto-remediation work (M14).
+- New ledger API endpoints dedicated to Athena unless blocked by a hard gap.
+- Full orchestration engine for guaranteed agent-to-agent execution.
+- M13 deployment hardening and M14 doctor auto-remediation roadmap items.

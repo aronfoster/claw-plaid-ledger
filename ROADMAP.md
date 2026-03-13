@@ -126,7 +126,7 @@ usage, anomaly discovery, and annotation hygiene.
 ### M12a - Redirect
 We were trying to cram an entire finance department's worth of responsibilities into a single agent, mixing cheap, high-volume data entry tasks with high-level cognitive analysis. Splitting them into a two-agent pipeline completely fixes the human-in-the-loop fatigue you were worried about.
 
-Here is how we should redirect Sprint 13 and the architecture to support the Hestia/Athena split:
+Here is how we should redirect the next sprint and the architecture to support the Hestia/Athena split:
 
 ### 1. The New Agent Boundaries
 
@@ -143,9 +143,9 @@ To fix the communication flow without adding complex messaging overhead, we can 
 2. **Hestia's Run:** Hestia categorizes the new batch. If she finds something she is highly uncertain about (an anomaly, an orphaned transaction, a massive unexpected bill), she applies a specific tag via the API, like `"needs-athena-review"`.
 3. **The Handoff:** Once Hestia finishes her batch, if OpenClaw supports agent-to-agent triggering, she can fire a wake command to Athena. If not, Athena can simply run on a cron schedule, querying `GET /transactions?tags=needs-athena-review` to see what Hestia flagged, alongside pulling her normal weekly `GET /spend` summaries to present to you.
 
-### 3. Redirection Plan for Sprint 13 (M12)
+### 3. Redirection Plan for Sprint 14 (M12a execution)
 
-We should scrap the current `SKILL.md` tasks and replace them with a clean split.
+Sprint 13 delivered valuable material, so Sprint 14 should refactor and split that content rather than rewriting from zero.
 
 **Task 1: Strip and refocus the Hestia skill bundle**
 
