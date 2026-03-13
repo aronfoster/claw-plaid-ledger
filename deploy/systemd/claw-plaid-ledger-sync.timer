@@ -1,0 +1,40 @@
+# claw-plaid-ledger-sync.timer — hourly trigger for claw-plaid-ledger-sync.service
+#
+# This timer fires the sync service once per hour.  It is intended as the
+# systemd-managed alternative for operators who prefer not to use the built-in
+# CLAW_SCHEDULED_SYNC_ENABLED fallback loop.  Both approaches are valid; see
+# RUNBOOK.md Section 12.3 for trade-offs.
+#
+# Activation:
+#   systemctl enable --now claw-plaid-ledger-sync.timer
+#
+# Status check:
+#   systemctl list-timers claw-plaid-ledger-sync.timer
+
+[Unit]
+Description=Run claw-plaid-ledger sync hourly
+Documentation=https://github.com/aronfoster/claw-plaid-ledger
+
+[Timer]
+# OnCalendar=hourly fires at the top of each hour (00:00, 01:00, …).
+# To change the frequency, replace "hourly" with any valid calendar
+# expression, e.g.:
+#   every 30 minutes: *:0/30
+#   twice a day:      00,12:00
+OnCalendar=hourly
+
+# Persistent=true means the timer will catch up a missed run (e.g. after
+# the host was powered off) as soon as it boots rather than waiting for the
+# next scheduled slot.  This ensures syncs are not silently skipped.
+Persistent=true
+
+# Optional: add a small random delay to spread load if multiple units fire
+# at the same time.  Disabled by default.
+# RandomizedDelaySec=120
+
+# The service unit to activate when the timer fires.
+Unit=claw-plaid-ledger-sync.service
+
+[Install]
+# Timer units are enabled directly; they pull in the service unit themselves.
+WantedBy=timers.target

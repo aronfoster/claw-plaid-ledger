@@ -31,7 +31,7 @@ patterns rather than ad-hoc shell sessions.
 
 ---
 
-## Task 1: systemd service and timer unit files
+## Task 1: systemd service and timer unit files ✅ DONE
 
 ### Scope
 

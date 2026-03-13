@@ -1,0 +1,74 @@
+# claw-plaid-ledger.service — systemd unit for "ledger serve"
+#
+# Installation (run as root or with sudo):
+#   cp deploy/systemd/claw-plaid-ledger.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now claw-plaid-ledger
+#
+# See RUNBOOK.md Section 12 for full setup instructions.
+
+[Unit]
+Description=claw-plaid-ledger HTTP server (ledger serve)
+Documentation=https://github.com/aronfoster/claw-plaid-ledger
+# Start after networking is up so Plaid API calls can succeed immediately.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- User / Group -------------------------------------------------------
+# Run as the user who owns the config directory and access tokens.
+# Replace "alice" with the actual username on your system.
+User=alice
+Group=alice
+
+# --- Secrets and configuration ------------------------------------------
+# EnvironmentFile loads all KEY=VALUE pairs from the file into the process
+# environment before ExecStart runs.  The file must be mode 600 and owned
+# by the service user; it must not be world-readable.
+#
+# Adjust the path to match the real location on your OS/user:
+#   Debian/Ubuntu single-user home:  /home/alice/.config/claw-plaid-ledger/.env
+#   Proxmox LXC (root operator):     /root/.config/claw-plaid-ledger/.env
+EnvironmentFile=/home/alice/.config/claw-plaid-ledger/.env
+
+# --- Executable ---------------------------------------------------------
+# Full path to the "ledger" entry-point installed by pip/uv.
+# Common locations:
+#   uv-managed venv (system-wide):   /usr/local/bin/ledger
+#   pipx install:                     /home/alice/.local/bin/ledger
+#   uv tool install:                  /home/alice/.local/bin/ledger
+#
+# Adjust the path if your installation uses a different prefix.
+ExecStart=/usr/local/bin/ledger serve
+
+# --- Restart policy -----------------------------------------------------
+# Restart the process automatically on non-zero exit or signal termination,
+# but not on a clean stop (e.g. "systemctl stop claw-plaid-ledger").
+Restart=on-failure
+# Wait 10 seconds before restarting to avoid hammering a broken dependency.
+RestartSec=10
+
+# --- Logging ------------------------------------------------------------
+# Standard output and error are captured by the journal.
+# View with: journalctl -u claw-plaid-ledger [-f]
+StandardOutput=journal
+StandardError=journal
+# Tag journal entries with the service name for easy filtering.
+SyslogIdentifier=claw-plaid-ledger
+
+# --- Security hardening (optional, recommended) -------------------------
+# These directives limit what the process can do on the host system.
+# Remove or comment out any that conflict with your setup.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# Allow the service to write to the user's home data directory.
+# Adjust to match CLAW_PLAID_LEDGER_DB_PATH and log directories.
+ReadWritePaths=/home/alice/.local/share/claw-plaid-ledger /home/alice/.local/state/claw-plaid-ledger
+
+[Install]
+# Enable for multi-user (non-graphical) boot targets — the standard
+# choice for a headless home server or Proxmox LXC container.
+WantedBy=multi-user.target
