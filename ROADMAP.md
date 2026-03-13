@@ -123,6 +123,47 @@ usage, anomaly discovery, and annotation hygiene.
   as a safety net, not a source-precedence override.
 - Align architecture docs with the agent role boundary.
 
+### M12a - Redirect
+We were trying to cram an entire finance department's worth of responsibilities into a single agent, mixing cheap, high-volume data entry tasks with high-level cognitive analysis. Splitting them into a two-agent pipeline completely fixes the human-in-the-loop fatigue you were worried about.
+
+Here is how we should redirect Sprint 13 and the architecture to support the Hestia/Athena split:
+
+### 1. The New Agent Boundaries
+
+* **Hestia (The Bookkeeper):** Wakes up when the Plaid webhook fires. She runs on an inexpensive, fast model. Her only job is to query `GET /transactions` for anything missing an annotation, look at the raw data, and `PUT /annotations/{id}` to categorize it. She never talks to you.
+* **Athena (The Analyst):** Wakes up either on a schedule (e.g., weekly) or when Hestia explicitly asks her to review something weird. She runs on a smarter model. She handles the `GET /spend` rollups, tag reviews, anomaly detection, and actually formats the summaries for you.
+
+### 2. Fixing the Communication and Notifications
+
+Right now, `notifier.py` hardcodes a message that says: *"Plaid sync complete... Review new transactions and annotate as appropriate"*.
+
+To fix the communication flow without adding complex messaging overhead, we can use an **event-driven database handoff**:
+
+1. **The Server Wake:** `notifier.py` wakes Hestia silently in the background.
+2. **Hestia's Run:** Hestia categorizes the new batch. If she finds something she is highly uncertain about (an anomaly, an orphaned transaction, a massive unexpected bill), she applies a specific tag via the API, like `"needs-athena-review"`.
+3. **The Handoff:** Once Hestia finishes her batch, if OpenClaw supports agent-to-agent triggering, she can fire a wake command to Athena. If not, Athena can simply run on a cron schedule, querying `GET /transactions?tags=needs-athena-review` to see what Hestia flagged, alongside pulling her normal weekly `GET /spend` summaries to present to you.
+
+### 3. Redirection Plan for Sprint 13 (M12)
+
+We should scrap the current `SKILL.md` tasks and replace them with a clean split.
+
+**Task 1: Strip and refocus the Hestia skill bundle**
+
+* Remove all mention of household summaries, anomalies, and reporting.
+* Define her strict loop: Fetch unannotated `GET /transactions`, apply logic, write `PUT /annotations/{id}`.
+* Define her escalation rule: When confidence is low, tag it `"needs-athena-review"` and move on.
+
+**Task 2: Create the Athena skill bundle (`skills/athena-ledger/`)**
+
+* Give Athena the analytical playbooks.
+* Define how she queries `GET /spend` for date windows and filters by tags.
+* Define her anomaly-review playbook (looking at Hestia's flagged transactions).
+
+**Task 3: Update `notifier.py` and `ARCHITECTURE.md**`
+
+* Change the default `OPENCLAW_HOOKS_AGENT` configuration to ensure it explicitly targets Hestia as the ingestion worker.
+* Change the notification prompt string to remove the implication that a human needs to read the OpenClaw alert.
+
 ### M13 — Hardened deployment & local security
 
 **Focus:** Durable home-server operations with explicit local trust boundaries.
