@@ -128,7 +128,7 @@ The template file `.env.example` includes all supported keys. Key variables:
 | `CLAW_LOG_LEVEL` | no | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) |
 | `OPENCLAW_HOOKS_URL` | no | `http://127.0.0.1:18789/hooks/agent` | OpenClaw notification endpoint |
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; leave unset to disable notifications |
-| `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw agent to wake after a sync |
+| `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw ingestion agent to wake after a sync |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw |
 | `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
 | `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1 |
@@ -180,8 +180,9 @@ All endpoints except `/health`, `/openapi.json`, and `/docs` require
 
 After a webhook-triggered sync that adds, modifies, or removes at least one
 transaction, the server sends a `POST` to the OpenClaw `/hooks/agent` endpoint
-to wake the configured agent (Hestia by default). Set `OPENCLAW_HOOKS_TOKEN`
-to enable this; leave it unset to disable silently.
+to wake the configured ingestion agent (Hestia by default). Athena analysis
+runs later on schedule or anomaly-triggered follow-up. Set
+`OPENCLAW_HOOKS_TOKEN` to enable this; leave it unset to disable silently.
 
 ## Observability and tracing
 
