@@ -785,3 +785,237 @@ scheduled-sync: ENABLED — fallback window 24h, check interval 60min
 
 The loop is cancelled cleanly on server shutdown; no data is lost if
 the server restarts mid-check.
+
+---
+
+## 12. Systemd deployment
+
+This section covers running `ledger serve` as a managed systemd service
+and scheduling syncs and DuckDNS updates via systemd timers.  The unit
+files live in `deploy/systemd/` in the repository.
+
+### 12.1 Prerequisites
+
+- A Debian, Ubuntu, or Proxmox LXC host running systemd (version ≥ 240).
+- `ledger` installed and reachable at a known absolute path
+  (e.g. `/usr/local/bin/ledger` for system-wide installs,
+  `/home/alice/.local/bin/ledger` for pipx/uv tool installs).
+- The config directory and `.env` file created and permissions set:
+
+  ```bash
+  mkdir -p ~/.config/claw-plaid-ledger
+  chmod 700 ~/.config/claw-plaid-ledger
+  cp .env.example ~/.config/claw-plaid-ledger/.env
+  chmod 600 ~/.config/claw-plaid-ledger/.env
+  ```
+
+- The data and log directories created:
+
+  ```bash
+  mkdir -p ~/.local/share/claw-plaid-ledger \
+           ~/.local/state/claw-plaid-ledger
+  ```
+
+### 12.2 Installing the main service unit
+
+Copy the unit file to the systemd system directory and reload the daemon:
+
+```bash
+sudo cp deploy/systemd/claw-plaid-ledger.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Before enabling, edit the file to match your environment:
+
+| Placeholder | Replace with |
+|---|---|
+| `alice` (User/Group) | Your OS username |
+| `/home/alice/...` paths | Actual absolute paths for config, data, and state dirs |
+| `/usr/local/bin/ledger` | Actual path to the installed `ledger` binary |
+
+Enable and start the service:
+
+```bash
+sudo systemctl enable --now claw-plaid-ledger
+```
+
+Confirm it is running:
+
+```bash
+sudo systemctl status claw-plaid-ledger
+```
+
+Expected output includes `Active: active (running)`.
+
+### 12.3 Installing the scheduled-sync timer
+
+The sync timer runs `ledger sync --all` every hour.  This is an
+alternative to (or complement of) the built-in
+`CLAW_SCHEDULED_SYNC_ENABLED` fallback loop:
+
+| Approach | Best for |
+|---|---|
+| `CLAW_SCHEDULED_SYNC_ENABLED=true` | Simple setups; sync tied to the server process |
+| `claw-plaid-ledger-sync.timer` | Operators who prefer systemd for all scheduling; allows sync to run independently of the server |
+
+Both approaches are valid; do not enable both simultaneously for the
+same set of items unless you intend the double-run behaviour.
+
+Install the service and timer:
+
+```bash
+sudo cp deploy/systemd/claw-plaid-ledger-sync.service /etc/systemd/system/
+sudo cp deploy/systemd/claw-plaid-ledger-sync.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Edit `claw-plaid-ledger-sync.service` to set the correct `User`,
+`Group`, `EnvironmentFile`, and `ExecStart` paths (same adjustments as
+for the main service unit).
+
+Enable the timer (not the service directly — the timer activates it):
+
+```bash
+sudo systemctl enable --now claw-plaid-ledger-sync.timer
+```
+
+Verify the timer is scheduled:
+
+```bash
+systemctl list-timers claw-plaid-ledger-sync.timer
+```
+
+### 12.4 Installing the DuckDNS timer
+
+The DuckDNS timer replaces the cron entry from **Section 10.4**.  Remove
+the cron entry before enabling this timer to avoid duplicate updates.
+
+Install the units:
+
+```bash
+sudo cp deploy/systemd/claw-plaid-ledger-duckdns.service /etc/systemd/system/
+sudo cp deploy/systemd/claw-plaid-ledger-duckdns.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Edit `claw-plaid-ledger-duckdns.service`:
+
+- Set `User` and `Group` to your OS username.
+- Set `EnvironmentFile` to the `.env` file containing `DUCKDNS_TOKEN`
+  and `DUCKDNS_DOMAIN`.
+- Set `ExecStart` to the absolute path of `scripts/duckdns-update.sh`
+  (e.g. `/opt/claw-plaid-ledger/scripts/duckdns-update.sh`).
+
+Enable the timer:
+
+```bash
+sudo systemctl enable --now claw-plaid-ledger-duckdns.timer
+```
+
+Confirm the first run succeeds:
+
+```bash
+sudo systemctl start claw-plaid-ledger-duckdns.service
+journalctl -u claw-plaid-ledger-duckdns --no-pager
+```
+
+### 12.5 Passing secrets securely via EnvironmentFile
+
+The `EnvironmentFile=` directive loads `KEY=VALUE` pairs into the
+service's environment before the process starts.  Critical rules:
+
+- The file must be owned by the service user and mode **600** (not
+  world-readable):
+
+  ```bash
+  chmod 600 ~/.config/claw-plaid-ledger/.env
+  ls -l ~/.config/claw-plaid-ledger/.env
+  # -rw------- 1 alice alice ...
+  ```
+
+- Never store secrets in the unit file itself — unit files in
+  `/etc/systemd/system/` are world-readable by default.
+- If multiple services share the same `.env`, verify that all
+  co-located services are equally trusted.
+
+### 12.6 Daily operations — status, logs, and restart
+
+Check service status:
+
+```bash
+sudo systemctl status claw-plaid-ledger
+sudo systemctl status claw-plaid-ledger-sync.timer
+sudo systemctl status claw-plaid-ledger-duckdns.timer
+```
+
+Stream live logs (follow mode):
+
+```bash
+journalctl -u claw-plaid-ledger -f
+```
+
+View the last 100 lines for a unit:
+
+```bash
+journalctl -u claw-plaid-ledger -n 100 --no-pager
+```
+
+Restart the main service (e.g. after updating the `.env` file):
+
+```bash
+sudo systemctl restart claw-plaid-ledger
+```
+
+Stop and disable the service:
+
+```bash
+sudo systemctl disable --now claw-plaid-ledger
+```
+
+### 12.7 Drop-in overrides for site-specific customisation
+
+To override individual directives without editing the shipped unit file,
+use `systemctl edit` to create a drop-in snippet:
+
+```bash
+sudo systemctl edit claw-plaid-ledger
+```
+
+This opens an editor for `/etc/systemd/system/claw-plaid-ledger.service.d/override.conf`.
+Changes here survive package updates that overwrite the base unit file.
+
+Example drop-in: change the restart delay and add an extra environment
+variable:
+
+```ini
+[Service]
+RestartSec=30
+Environment=CLAW_SERVER_PORT=9000
+```
+
+After editing, reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart claw-plaid-ledger
+```
+
+### 12.8 Proxmox LXC privilege considerations
+
+When running inside a Proxmox LXC container:
+
+- **Unprivileged containers** (recommended): systemd works normally.
+  The unit files can be copied and enabled as described above.  The
+  container's UID namespace means `User=alice` inside the container
+  maps to a high UID on the Proxmox host — this is the intended,
+  secure configuration.
+- **Privileged containers**: systemd also works, but the host UID
+  namespace is shared.  Apply the same file-permission hardening
+  (`chmod 600` on `.env`, `chmod 700` on the config directory).
+- The `ProtectSystem=strict` and `PrivateTmp=true` directives in the
+  unit files are supported in both container types on recent Proxmox
+  versions (PVE 7+).  If you see errors about missing kernel features,
+  remove or comment out those lines and file a bug report.
+- Bind-mounts for the config directory from host to container are
+  supported; see the Proxmox documentation for `mp0` bind-mount
+  configuration.

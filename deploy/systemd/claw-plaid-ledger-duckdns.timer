@@ -1,0 +1,31 @@
+# claw-plaid-ledger-duckdns.timer — every-5-minute trigger for DuckDNS update
+#
+# Fires claw-plaid-ledger-duckdns.service every 5 minutes to keep the DuckDNS
+# record pointing at the current public IP.  This matches the cron cadence
+# documented in RUNBOOK.md Section 10.4 and supersedes it for systemd hosts.
+#
+# Activation:
+#   systemctl enable --now claw-plaid-ledger-duckdns.timer
+#
+# Status check:
+#   systemctl list-timers claw-plaid-ledger-duckdns.timer
+
+[Unit]
+Description=Update DuckDNS record every 5 minutes
+Documentation=https://github.com/aronfoster/claw-plaid-ledger
+
+[Timer]
+# OnCalendar=*:0/5 fires at minutes 0, 5, 10, 15, … of every hour.
+# This notation matches the cron "*/5 * * * *" expression.
+OnCalendar=*:0/5
+
+# Persistent=true catches up a missed run after boot rather than waiting
+# for the next 5-minute slot.  This is important for DuckDNS — after a
+# reboot the IP record should be updated as soon as the network is available.
+Persistent=true
+
+# The service unit to activate when the timer fires.
+Unit=claw-plaid-ledger-duckdns.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,61 @@
+# claw-plaid-ledger-duckdns.service — oneshot unit for DuckDNS IP update
+#
+# Runs scripts/duckdns-update.sh to keep the DuckDNS DNS record pointing at
+# the current public IP address.  Triggered every 5 minutes by
+# claw-plaid-ledger-duckdns.timer.
+#
+# This unit supersedes the cron entry documented in RUNBOOK.md Section 10.4.
+# Operators should remove the cron entry before enabling this timer to avoid
+# duplicate updates.
+#
+# Installation:
+#   cp deploy/systemd/claw-plaid-ledger-duckdns.service /etc/systemd/system/
+#   cp deploy/systemd/claw-plaid-ledger-duckdns.timer   /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now claw-plaid-ledger-duckdns.timer
+#
+# See RUNBOOK.md Section 12.4 for full setup instructions.
+
+[Unit]
+Description=Update DuckDNS record with current public IP
+Documentation=https://github.com/aronfoster/claw-plaid-ledger
+# Only run when the network is up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=oneshot: run the script to completion and exit.
+Type=oneshot
+
+# --- User / Group -------------------------------------------------------
+# The DuckDNS update script only needs outbound HTTPS access; it does not
+# need to read the Plaid secrets.  It can run as a less-privileged user or
+# as the same operator user — adjust to match your setup.
+User=alice
+Group=alice
+
+# --- DuckDNS credentials ------------------------------------------------
+# DUCKDNS_TOKEN and DUCKDNS_DOMAIN must be set in the environment.
+# Option A: include them in the shared .env file (simplest):
+EnvironmentFile=/home/alice/.config/claw-plaid-ledger/.env
+# Option B: use a dedicated, narrowly-scoped env file (better separation):
+# EnvironmentFile=/home/alice/.config/claw-plaid-ledger/duckdns.env
+
+# --- Script path --------------------------------------------------------
+# Adjust the path to where the repository is checked out on your system.
+# The script reads DUCKDNS_TOKEN and DUCKDNS_DOMAIN from the environment.
+ExecStart=/bin/bash /opt/claw-plaid-ledger/scripts/duckdns-update.sh
+
+# --- Logging ------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claw-plaid-ledger-duckdns
+
+# --- Security hardening -------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+# The script only makes an outbound HTTPS request; it writes no local files.
+ProtectSystem=strict
+
+# Note: [Install] is intentionally absent — this unit is activated by its
+# timer, not by systemctl enable directly.
