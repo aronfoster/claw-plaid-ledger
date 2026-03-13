@@ -275,7 +275,7 @@ changes are expected.
 
 ---
 
-## Task 5: Sprint closeout and deployment selection guide
+## Task 5: Sprint closeout and deployment selection guide ✅ DONE
 
 ### Scope
 
@@ -328,3 +328,37 @@ close out the sprint.
 - Guaranteed agent-to-agent orchestration (remains deferred from Sprint 14).
 - Kubernetes / Helm deployment (not a target platform for this home-server
   project).
+
+---
+
+## Sprint 15 Closeout
+
+### Shipped artifacts
+
+| Task | Deliverable | Status |
+|---|---|---|
+| Task 1 | `deploy/systemd/` — service, sync, and DuckDNS unit files; RUNBOOK.md Section 12 | ✅ Shipped |
+| Task 2 | `deploy/docker/` — Dockerfile, docker-compose.yml, .dockerignore, README; RUNBOOK.md Section 13 | ✅ Shipped |
+| Task 3 | `CLAW_WEBHOOK_ALLOWED_IPS` / `CLAW_TRUSTED_PROXIES` middleware; `doctor` allowlist check; RUNBOOK.md Section 9.6; ARCHITECTURE.md webhook section; tests | ✅ Shipped |
+| Task 4 | `deploy/proxy/` — Caddyfile.example, nginx-mtls.conf.example, authelia-notes.md; RUNBOOK.md Section 14; ARCHITECTURE.md auth boundary section | ✅ Shipped |
+| Task 5 | RUNBOOK.md Section 15 (deployment selection guide); ARCHITECTURE.md M13 closeout note; ROADMAP.md M13 moved to completed | ✅ Shipped |
+
+### Quality-gate evidence (final integration)
+
+All four commands passed on the final sprint branch:
+
+```
+uv run --locked ruff format . --check   ✅
+uv run --locked ruff check .            ✅
+uv run --locked mypy .                  ✅
+uv run --locked pytest -v               ✅
+```
+
+### Deferred items carried to M14
+
+- Automated TLS certificate provisioning within `ledger serve` (TLS remains
+  the reverse proxy's responsibility).
+- `ledger doctor --fix` auto-remediation flows.
+- Kubernetes / Helm deployment (out of scope for this home-server project).
+- Guaranteed agent-to-agent orchestration (deferred from Sprint 14; remains
+  unscheduled).

@@ -1,12 +1,13 @@
-# Production Operations Runbook — M11 + Sprint 14 closeout
+# Production Operations Runbook — M13 (Sprint 15 closeout)
 
 ## 1. Purpose and scope
 
 This runbook covers the steps an operator needs to move
-`claw-plaid-ledger` from Plaid sandbox to a live production environment
-and to validate the setup before the first real sync.
+`claw-plaid-ledger` from Plaid sandbox to a live production environment,
+validate the setup before the first real sync, and operate the service
+durably on a home server.
 
-**In scope (M7 + M9 + M10 + M11):**
+**In scope (M7 + M9 + M10 + M11 + M13):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -19,6 +20,11 @@ and to validate the setup before the first real sync.
 - Multi-item webhook routing and scheduled sync fallback (M10)
 - Stable public webhook URL setup with DuckDNS (M10)
 - Request/sync correlation-ID tracing in logs (M11)
+- Webhook ingress IP allowlisting (M13, Section 9.6)
+- systemd service and timer deployment (M13, Section 12)
+- Container deployment via Docker Compose or Proxmox LXC (M13, Section 13)
+- Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (M13, Section 14)
+- Deployment selection guide (M13, Section 15)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -1545,3 +1551,155 @@ The reverse-proxy layer and `CLAW_API_SECRET` are independent and complementary:
 **Never remove `CLAW_API_SECRET`** even when running behind mTLS or Authelia.
 The bearer token ensures that an attacker who bypasses the proxy layer (e.g.
 via a misconfigured firewall rule) cannot read financial data without the token.
+
+---
+
+## Section 15 — Deployment selection guide
+
+Use this section to choose the right deployment strategy for your setup.
+Every path ends at the same running `ledger serve` process — the difference
+is how it is managed and what network boundary sits in front of it.
+
+### 15.1 Deployment method decision table
+
+| Scenario | Recommended method | Go to |
+|---|---|---|
+| **Development / local testing** | Bare `ledger serve` | — |
+| **Linux home server (Debian/Ubuntu/Proxmox host)** | systemd service | Section 12 |
+| **Containerized setup (any OS)** | Docker Compose | Section 13 |
+| **Proxmox OS container (LXC)** | LXC + systemd-inside-LXC | Section 13.2 |
+| **NAS / low-power appliance (non-systemd)** | Docker Compose | Section 13 |
+
+#### Bare `ledger serve` (dev/test only)
+
+Run directly from the terminal for development, troubleshooting, or a
+one-off sync-and-serve session:
+
+```bash
+source ~/.config/claw-plaid-ledger/.env
+ledger serve
+```
+
+This is **not suitable for production** because there is no automatic restart
+on failure and no OS-level process supervision.
+
+#### systemd (Linux/Proxmox — recommended for production)
+
+Best for operators who want the OS to manage the process lifecycle:
+
+- Automatic start at boot via `WantedBy=multi-user.target`
+- Automatic restart on failure (`Restart=on-failure`)
+- Structured logs via `journalctl -u claw-plaid-ledger`
+- Scheduled sync and DuckDNS timer units included
+
+→ See **Section 12** for the complete install and enable walkthrough.
+
+#### Docker Compose (containerized setup)
+
+Best for operators who prefer container isolation or run multiple services
+on a single host using Docker:
+
+- Application runs as a non-root user (`ledger`, UID 1000)
+- Secrets passed via `env_file`, never baked into the image
+- Named volume for the SQLite database preserves data across container restarts
+- Single command to start: `docker compose up -d`
+
+→ See **Section 13** for build, run, and update instructions.
+
+#### LXC (Proxmox OS container)
+
+Best for Proxmox operators who want OS-level isolation without the overhead
+of a full VM:
+
+- Use the Debian LXC template
+- Mount the config directory from the host using a bind-mount
+- Run `ledger serve` under systemd inside the container (same as Section 12)
+- Or run `docker compose` inside the LXC if Docker isolation is preferred
+
+→ See **Section 13.2** for Proxmox-specific LXC guidance.
+
+---
+
+### 15.2 Auth hardening decision table
+
+Choose the network-layer auth boundary based on your access model.
+`CLAW_API_SECRET` is always required regardless of which option you pick.
+
+| Access model | Recommended pattern | Go to |
+|---|---|---|
+| **Simple home LAN, single operator, no browser UI access** | No proxy (direct `127.0.0.1` bind) | — |
+| **Automated agents calling the API over LAN or Tailscale** | Caddy mTLS | Section 14 |
+| **nginx already running on the host** | nginx mTLS | Section 14.3 |
+| **Browser-based access or shared household (multiple users)** | Authelia OIDC front-proxy | Section 14.5 |
+| **Reverse proxy present but no client-cert requirement** | Bearer token only (`CLAW_API_SECRET`) | — |
+
+#### No proxy (simple home LAN)
+
+`ledger serve` binds to `127.0.0.1:8000` by default.  Agents running on the
+same host reach it directly.  If agents run on other LAN hosts, bind to the
+host's LAN IP and ensure the host firewall restricts access to trusted hosts.
+
+`CLAW_API_SECRET` remains the sole auth mechanism.  This is adequate for a
+single-operator home setup where the LAN is trusted.
+
+No additional configuration is required.
+
+#### Caddy mTLS (agent access hardening)
+
+Adds a client-certificate requirement in front of the API.  Only clients
+presenting a certificate signed by your local CA can reach the protected
+routes.  Best for automated agents where a certificate-per-agent model is
+preferred over a shared bearer token.
+
+→ See **Section 14** for the CA generation, cert issuance, Caddy
+configuration, and cert rotation walkthrough.
+
+→ Copy `deploy/proxy/Caddyfile.example` as your starting point.
+
+#### Authelia OIDC front-proxy (browser + shared access)
+
+Adds SSO-style authentication in front of the Swagger UI and API.  Best
+when multiple household members access the system interactively via a browser
+or when per-user audit logs are required.
+
+→ See **Section 14.5** for the Authelia integration guide.
+
+→ Read `deploy/proxy/authelia-notes.md` for complete configuration stubs.
+
+---
+
+### 15.3 Combining deployment method and auth pattern
+
+The deployment method and auth pattern are independent choices.  Common
+combinations:
+
+| Deployment | Auth | Notes |
+|---|---|---|
+| systemd | No proxy | Standard single-operator home setup |
+| systemd | Caddy mTLS | Add Caddy as a second systemd service on the same host |
+| Docker Compose | No proxy | Expose port to `127.0.0.1` only (default) |
+| Docker Compose | Caddy mTLS | Add Caddy container to the Compose stack or run on host |
+| LXC + systemd | Authelia OIDC | Proxmox multi-user household with browser access |
+
+When a reverse proxy is in use, always set `CLAW_TRUSTED_PROXIES` to the
+proxy's IP so that `X-Forwarded-For` headers are resolved correctly by the
+webhook IP allowlist.  See Section 9.6 for allowlist configuration details.
+
+---
+
+### 15.4 Quick reference: section cross-index
+
+| Topic | Section |
+|---|---|
+| systemd unit files — install and enable | Section 12 |
+| systemd — drop-in overrides, `journalctl`, restart | Section 12 |
+| Docker — build, run, and update | Section 13 |
+| LXC (Proxmox) — OS container guidance | Section 13.2 |
+| Webhook ingress IP allowlisting | Section 9.6 |
+| Caddy mTLS — CA generation and cert issuance | Section 14 |
+| nginx mTLS | Section 14.3 |
+| Authelia OIDC front-proxy | Section 14.5 |
+| Cert rotation | Section 14.4 |
+| Production preflight checklist | Section 3 |
+| DuckDNS stable webhook URL | Section 10 |
+| Scheduled sync fallback | Section 11 |

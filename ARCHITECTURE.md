@@ -15,6 +15,9 @@ production-grade deployment primitives for home-server operators:
 - `deploy/proxy/` — Caddy mTLS, nginx mTLS, and Authelia OIDC/SSO
   configuration examples; RUNBOOK.md Section 14 auth-hardening walkthrough
   (Task 4)
+- RUNBOOK.md Section 15 — deployment selection guide with decision tables
+  for deployment method (bare/systemd/Docker/LXC) and auth hardening
+  pattern (no proxy/Caddy mTLS/Authelia OIDC); sprint closeout (Task 5)
 
 M11 (advanced agent API & logging) is complete. Sprint 12 adds a spend
 summary endpoint, richer transaction filtering, and correlation-ID logging
