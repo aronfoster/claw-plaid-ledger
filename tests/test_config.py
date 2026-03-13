@@ -183,7 +183,7 @@ def test_load_config_item_id_reads_from_env_var() -> None:
 
 
 def test_load_config_invalid_log_level_raises_config_error() -> None:
-    """CLAW_LOG_LEVEL with an unrecognised value raises ConfigError."""
+    """CLAW_LOG_LEVEL with an unrecognized value raises ConfigError."""
     with pytest.raises(ConfigError, match="Invalid CLAW_LOG_LEVEL"):
         load_config(
             {
@@ -194,7 +194,7 @@ def test_load_config_invalid_log_level_raises_config_error() -> None:
 
 
 def test_load_config_debug_log_level_accepted() -> None:
-    """CLAW_LOG_LEVEL=DEBUG is a recognised level and loads without error."""
+    """CLAW_LOG_LEVEL=DEBUG is a recognized level and loads without error."""
     cfg = load_config(
         {
             "CLAW_PLAID_LEDGER_DB_PATH": "ledger.db",

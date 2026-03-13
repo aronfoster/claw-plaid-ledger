@@ -1,0 +1,142 @@
+# nginx-mtls.conf.example — nginx reverse-proxy with mTLS for claw-plaid-ledger
+#
+# Trust model
+# -----------
+# This file is the nginx equivalent of deploy/proxy/Caddyfile.example.
+# It enforces mutual TLS (client certificate authentication) on the routes
+# that carry sensitive financial data or trigger Plaid syncs.
+#
+# The NETWORK-LAYER mTLS boundary is additive — the application-layer
+# CLAW_API_SECRET bearer token is still required on every protected API call.
+#
+# Prerequisites
+# -------------
+#   - nginx 1.19+ (ssl_verify_client and named locations are standard)
+#   - A self-signed CA and a client certificate issued by it
+#     (see RUNBOOK.md Section 14.2 for generation commands)
+#   - `ledger serve` running on 127.0.0.1:8000
+#
+# Quick-start
+# -----------
+#   1. Generate your CA and client cert (RUNBOOK.md Section 14.2).
+#   2. Copy to /etc/nginx/sites-available/claw-plaid-ledger
+#   3. ln -s /etc/nginx/sites-available/claw-plaid-ledger \
+#              /etc/nginx/sites-enabled/claw-plaid-ledger
+#   4. nginx -t && systemctl reload nginx
+#
+# .env values to add
+# ------------------
+# CLAW_TRUSTED_PROXIES=127.0.0.1
+# (Replace 127.0.0.1 with the nginx host IP if nginx and ledger serve run on
+# different hosts, e.g. CLAW_TRUSTED_PROXIES=10.0.0.1)
+
+# Upstream block — points to the running ledger serve process.
+upstream ledger_upstream {
+    server 127.0.0.1:8000;
+    # keepalive improves performance for repeated API calls from agents.
+    keepalive 32;
+}
+
+# ---------------------------------------------------------------------------
+# Main server block — HTTPS with mTLS
+# Replace "ledger.home.example" with your LAN hostname or DuckDNS FQDN.
+# Replace certificate paths with the actual locations on your server.
+# ---------------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ledger.home.example;
+
+    # ------------------------------------------------------------------
+    # Server TLS certificate (the certificate nginx presents to clients)
+    # ------------------------------------------------------------------
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+
+    # ------------------------------------------------------------------
+    # Client certificate (mTLS) — CA trust root
+    # ssl_client_certificate points to the CA cert that issued your agent
+    # client certificates.
+    # ------------------------------------------------------------------
+    ssl_client_certificate /etc/nginx/certs/ca.crt;
+
+    # ssl_verify_client is set per-location below.
+    # Setting it to "optional" here means nginx performs the TLS handshake
+    # and makes the verification result available via $ssl_client_verify,
+    # which locations then check.  This allows open routes (/health, /docs)
+    # to skip the requirement without a second TLS handshake.
+    ssl_verify_client optional;
+
+    # ------------------------------------------------------------------
+    # Modern TLS settings
+    # ------------------------------------------------------------------
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # ------------------------------------------------------------------
+    # Proxy common headers
+    # X-Forwarded-For carries the direct connection IP (nginx's $remote_addr).
+    # CLAW_TRUSTED_PROXIES must list the nginx host IP so ledger serve trusts
+    # this header for webhook IP allowlisting (Task 3 feature).
+    # ------------------------------------------------------------------
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection        "";
+    proxy_http_version 1.1;
+
+    # ------------------------------------------------------------------
+    # Protected routes — require a valid client certificate
+    # Clients that present a cert signed by the CA in ssl_client_certificate
+    # are allowed through.  All others receive 403.
+    # ------------------------------------------------------------------
+    location ~ ^/(transactions|annotations|spend|webhooks/plaid) {
+        # Enforce client cert on these paths.
+        if ($ssl_client_verify != SUCCESS) {
+            return 403 '{"detail":"client certificate required"}';
+        }
+
+        proxy_pass http://ledger_upstream;
+    }
+
+    # ------------------------------------------------------------------
+    # Open routes — no client certificate required
+    # /health is used by monitoring tools; /docs and /openapi.json are for
+    # interactive exploration.  They still require the CLAW_API_SECRET bearer
+    # token if the application enforces auth on them (by default they do not).
+    # ------------------------------------------------------------------
+    location = /health {
+        proxy_pass http://ledger_upstream;
+    }
+
+    location /docs {
+        proxy_pass http://ledger_upstream;
+    }
+
+    location = /openapi.json {
+        proxy_pass http://ledger_upstream;
+    }
+
+    # ------------------------------------------------------------------
+    # Catch-all — forward everything else to ledger serve.
+    # Add explicit location blocks here if you extend the API surface.
+    # ------------------------------------------------------------------
+    location / {
+        proxy_pass http://ledger_upstream;
+    }
+}
+
+# ---------------------------------------------------------------------------
+# HTTP → HTTPS redirect (optional but recommended)
+# ---------------------------------------------------------------------------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ledger.home.example;
+
+    # Return 301 for all HTTP traffic so clients are directed to HTTPS.
+    return 301 https://$host$request_uri;
+}

@@ -138,7 +138,7 @@ the gap between "Plaid HMAC signature verification" (cryptographic) and
 
 - `CLAW_WEBHOOK_ALLOWED_IPS` — optional, comma-separated list of IPv4/IPv6
   CIDRs (e.g. `"52.21.0.0/16,3.211.0.0/16"`).  Unset or empty = no IP
-  filtering (preserves current behaviour).
+  filtering (preserves current behavior).
 - `CLAW_TRUSTED_PROXIES` — optional, comma-separated list of trusted reverse-
   proxy IPs for `X-Forwarded-For` resolution (default: `"127.0.0.1"`).  Used
   only when `CLAW_WEBHOOK_ALLOWED_IPS` is set.
@@ -179,7 +179,7 @@ the gap between "Plaid HMAC signature verification" (cryptographic) and
 **ARCHITECTURE.md**
 
 - Update the webhook ingress section to document the IP-resolution order and
-  the 403 behaviour.
+  the 403 behavior.
 
 **Tests**
 
@@ -201,7 +201,7 @@ the gap between "Plaid HMAC signature verification" (cryptographic) and
 
 ---
 
-## Task 4: Local-network auth hardening — reverse-proxy examples
+## Task 4: Local-network auth hardening — reverse-proxy examples ✅ DONE
 
 ### Scope
 
@@ -314,7 +314,7 @@ close out the sprint.
   files and RUNBOOK.md Section 12 alone (no tribal knowledge required).
 - An operator can deploy using Docker Compose and RUNBOOK.md Section 13 alone.
 - `CLAW_WEBHOOK_ALLOWED_IPS` is functional: when set, non-allowlisted IPs
-  receive HTTP 403; when unset, existing behaviour is unchanged.
+  receive HTTP 403; when unset, existing behavior is unchanged.
 - `doctor` reports webhook allowlist status.
 - `deploy/proxy/` examples and RUNBOOK.md Section 14 give an operator enough
   to configure Caddy mTLS without external research.

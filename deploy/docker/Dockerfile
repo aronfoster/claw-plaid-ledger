@@ -20,7 +20,7 @@ WORKDIR /build
 COPY pyproject.toml uv.lock ./
 
 # Install production dependencies into .venv.
-# --frozen       : honour the exact versions in uv.lock
+# --frozen       : honor the exact versions in uv.lock
 # --no-dev       : skip development-only packages (pytest, mypy, ruff …)
 # --no-install-project : skip the package itself for now (installed below)
 RUN uv sync --frozen --no-dev --no-install-project

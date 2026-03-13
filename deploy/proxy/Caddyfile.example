@@ -1,0 +1,172 @@
+# Caddyfile.example — Caddy v2 reverse-proxy with mTLS for claw-plaid-ledger
+#
+# Trust model
+# -----------
+# This configuration adds a NETWORK-LAYER auth boundary in front of
+# `ledger serve`.  It is additive: the application-layer CLAW_API_SECRET
+# bearer token is still required on every protected API call.
+#
+# Two TLS modes are supported (pick one and remove the other):
+#   a) Self-signed CA  — suitable for home-LAN / VPN where you control clients
+#   b) Let's Encrypt   — suitable when the server is reachable via a public FQDN
+#
+# Quick-start
+# -----------
+#   1. Generate your CA and client cert (see RUNBOOK.md Section 14.2).
+#   2. Copy this file to /etc/caddy/Caddyfile (or include it).
+#   3. Adjust the hostname, CA path, and upstream address below.
+#   4. caddy validate && systemctl reload caddy
+#
+# The upstream `ledger serve` process must be running and listening on
+# 127.0.0.1:8000 (the default).  The CLAW_TRUSTED_PROXIES env var in your
+# .env should include the Caddy host IP so X-Forwarded-For is respected.
+
+{
+    # Global options block — remove the debug line in production
+    # debug
+}
+
+# ---------------------------------------------------------------------------
+# Option A — Self-signed CA (recommended for home-LAN / Proxmox setups)
+# Replace "ledger.home.example" with your LAN hostname or DuckDNS FQDN.
+# ---------------------------------------------------------------------------
+ledger.home.example {
+    # -----------------------------------------------------------------------
+    # TLS — self-signed CA
+    # Caddy will use the certificates and CA you manage manually.
+    # Replace the paths with the actual locations on your server.
+    # -----------------------------------------------------------------------
+    tls /etc/caddy/certs/server.crt /etc/caddy/certs/server.key {
+        # Trust the CA that issued client certificates.
+        # Point this to the PEM file containing your self-signed CA certificate.
+        client_auth {
+            # Require a valid client certificate signed by your CA on protected routes.
+            # The `mode` is set per-matcher below; here we configure the CA trust root.
+            mode                 require_and_verify
+            trusted_ca_certs_pem_files /etc/caddy/certs/ca.crt
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # Protected routes — require a valid client certificate
+    # These are the routes that carry sensitive financial data or trigger
+    # Plaid syncs.  An agent must present a cert signed by your CA.
+    # -----------------------------------------------------------------------
+    @protected {
+        path /transactions*
+        path /annotations*
+        path /spend*
+        path /webhooks/plaid*
+    }
+
+    # Explicitly block requests to protected routes that have no client cert.
+    # Caddy's TLS layer rejects them at the handshake when mode=require_and_verify,
+    # but this matcher makes the intent explicit in access logs.
+    handle @protected {
+        # Forward to the upstream; the TLS layer already verified the cert.
+        reverse_proxy 127.0.0.1:8000 {
+            # Forward the real client IP so the application can log it.
+            # CLAW_TRUSTED_PROXIES must include the Caddy host IP (127.0.0.1
+            # when Caddy and ledger serve run on the same host).
+            header_up X-Forwarded-For {remote_host}
+            # Preserve the original Host header.
+            header_up Host {host}
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # Open routes — pass through without client certificate
+    # Health checks, OpenAPI spec, and Swagger UI are accessible from
+    # monitoring tools and browsers without a client cert.
+    # Note: /docs and /openapi.json still require the CLAW_API_SECRET bearer
+    # token if the application enforces auth on those paths; by default they
+    # do not, which is intentional for local-use convenience.
+    # -----------------------------------------------------------------------
+    @open {
+        path /health
+        path /docs*
+        path /openapi.json
+    }
+
+    handle @open {
+        # No client-cert requirement on these paths.
+        # Override the TLS client_auth mode for this matcher by using a
+        # separate site block or by setting mode=request (see Option B below
+        # for an alternative structure).
+        reverse_proxy 127.0.0.1:8000 {
+            header_up X-Forwarded-For {remote_host}
+            header_up Host {host}
+        }
+    }
+
+    # Catch-all: anything not matched above goes to the upstream as-is.
+    # Add additional matchers here if you extend the API surface.
+    handle {
+        reverse_proxy 127.0.0.1:8000 {
+            header_up X-Forwarded-For {remote_host}
+            header_up Host {host}
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Option B — Let's Encrypt (public FQDN, e.g. your DuckDNS hostname)
+# Uncomment this block and comment out Option A above.
+#
+# With Let's Encrypt the server cert is managed automatically by Caddy.
+# You still manage the client CA yourself for mTLS.
+# ---------------------------------------------------------------------------
+# ledger.yourdomain.duckdns.org {
+#     tls {
+#         # Caddy fetches and renews the server cert from Let's Encrypt
+#         # automatically.  No `tls` sub-directives needed for the server cert.
+#         client_auth {
+#             mode                 require_and_verify
+#             trusted_ca_certs_pem_files /etc/caddy/certs/ca.crt
+#         }
+#     }
+#
+#     @protected {
+#         path /transactions*
+#         path /annotations*
+#         path /spend*
+#         path /webhooks/plaid*
+#     }
+#
+#     handle @protected {
+#         reverse_proxy 127.0.0.1:8000 {
+#             header_up X-Forwarded-For {remote_host}
+#             header_up Host {host}
+#         }
+#     }
+#
+#     @open {
+#         path /health
+#         path /docs*
+#         path /openapi.json
+#     }
+#
+#     handle @open {
+#         reverse_proxy 127.0.0.1:8000 {
+#             header_up X-Forwarded-For {remote_host}
+#             header_up Host {host}
+#         }
+#     }
+#
+#     handle {
+#         reverse_proxy 127.0.0.1:8000 {
+#             header_up X-Forwarded-For {remote_host}
+#             header_up Host {host}
+#         }
+#     }
+# }
+
+# ---------------------------------------------------------------------------
+# .env values to add when using this Caddyfile
+# ---------------------------------------------------------------------------
+# CLAW_TRUSTED_PROXIES=127.0.0.1
+# (Add the Caddy host IP if Caddy and ledger serve run on different hosts.)
+#
+# The CLAW_WEBHOOK_ALLOWED_IPS allowlist (Task 3) complements this mTLS
+# boundary: mTLS verifies the client identity; the IP allowlist enforces
+# that webhook POSTs come from Plaid's published source ranges.

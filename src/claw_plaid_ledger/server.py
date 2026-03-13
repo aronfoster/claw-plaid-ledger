@@ -113,7 +113,7 @@ def _resolve_client_ip(
     trusted_proxies: list[ipaddress.IPv4Address | ipaddress.IPv6Address],
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     """
-    Return the real client IP, honouring X-Forwarded-For from proxies.
+    Return the real client IP, honoring X-Forwarded-For from proxies.
 
     If the direct connection address is in *trusted_proxies*, use the
     leftmost address in the ``X-Forwarded-For`` header as the real client
@@ -177,7 +177,7 @@ class WebhookIPAllowlistMiddleware(BaseHTTPMiddleware):
             config = load_config()
         except ConfigError:
             # Config unavailable — fail open so the existing auth layers
-            # remain the last line of defence rather than a broken startup.
+            # remain the last line of defense rather than a broken startup.
             return await call_next(request)
 
         if not config.webhook_allowed_ips:
@@ -784,6 +784,6 @@ async def webhook_plaid(
                 _background_sync, sync_run_id=sync_run_id
             )
     else:
-        logger.warning("Unrecognised Plaid webhook type: %s", webhook_type)
+        logger.warning("Unrecognized Plaid webhook type: %s", webhook_type)
 
     return {"status": "ok"}
