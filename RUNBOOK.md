@@ -138,22 +138,27 @@ cp -R skills/hestia-ledger/* ~/.openclaw/workspace/agents/hestia/skills/hestia-l
 cp -R skills/athena-ledger/* ~/.openclaw/workspace/agents/athena/skills/athena-ledger/
 ```
 
-Create the OpenClaw ledger credential file so both agents can reach the
-running `ledger serve` instance without accessing the main ledger `.env`:
+Add the ledger credentials to `~/.openclaw/.env` so that OpenClaw loads
+them automatically at startup — no flags or manual exports required:
 
 ```bash
-mkdir -p ~/.openclaw/config
-cat >> ~/.openclaw/config/ledger.env <<'EOF'
+cat >> ~/.openclaw/.env <<'EOF'
 CLAW_API_SECRET=<your-CLAW_API_SECRET-value>
 CLAW_LEDGER_URL=http://127.0.0.1:8000
 EOF
-chmod 600 ~/.openclaw/config/ledger.env
+chmod 600 ~/.openclaw/.env
 ```
 
 `CLAW_API_SECRET` must match the value in
 `~/.config/claw-plaid-ledger/.env`.  `CLAW_LEDGER_URL` is the base URL
 of the running `ledger serve` instance; adjust the port if you changed
 `CLAW_SERVER_PORT`.
+
+OpenClaw reads `~/.openclaw/.env` on every startup (lower precedence
+than the process environment, so existing shell exports are never
+overridden).  Because the vars are in the environment when the gateway
+starts, the `env`-source SecretRef objects in `openclaw.json` resolve
+them automatically — no `--env-file` flags are needed.
 
 Register both skills in `~/.openclaw/openclaw.json` so OpenClaw injects
 the credentials into each agent's session.  Without this step the skills
