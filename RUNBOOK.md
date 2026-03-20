@@ -129,12 +129,36 @@ Canonical behavior reminder:
 
 ## 1c. Two-agent operations handoff (Sprint 14 closeout)
 
-Install both skill bundles into your local skills directory:
+Install both skill bundles into the agent-specific workspace directories:
 
 ```bash
-mkdir -p ~/.openclaw/skills/hestia-ledger ~/.openclaw/skills/athena-ledger
-cp -R skills/hestia-ledger/* ~/.openclaw/skills/hestia-ledger/
-cp -R skills/athena-ledger/* ~/.openclaw/skills/athena-ledger/
+mkdir -p ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger
+mkdir -p ~/.openclaw/workspace/agents/athena/skills/athena-ledger
+cp -R skills/hestia-ledger/* ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger/
+cp -R skills/athena-ledger/* ~/.openclaw/workspace/agents/athena/skills/athena-ledger/
+```
+
+Create the OpenClaw ledger credential file so both agents can reach the
+running `ledger serve` instance without accessing the main ledger `.env`:
+
+```bash
+mkdir -p ~/.openclaw/config
+cat >> ~/.openclaw/config/ledger.env <<'EOF'
+CLAW_API_SECRET=<your-CLAW_API_SECRET-value>
+CLAW_LEDGER_URL=http://127.0.0.1:8000
+EOF
+chmod 600 ~/.openclaw/config/ledger.env
+```
+
+`CLAW_API_SECRET` must match the value in
+`~/.config/claw-plaid-ledger/.env`.  `CLAW_LEDGER_URL` is the base URL
+of the running `ledger serve` instance; adjust the port if you changed
+`CLAW_SERVER_PORT`.
+
+Start the ledger server before invoking either agent skill:
+
+```bash
+uv run --locked ledger serve
 ```
 
 Recommended run pattern:
