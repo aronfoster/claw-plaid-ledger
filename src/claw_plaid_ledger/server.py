@@ -7,7 +7,6 @@ import contextlib
 import ipaddress
 import json
 import logging
-import os
 import secrets
 import sqlite3
 import uuid
@@ -34,6 +33,7 @@ from claw_plaid_ledger.config import (
     OpenClawConfig,
     load_api_secret,
     load_config,
+    load_merged_env,
 )
 from claw_plaid_ledger.db import (
     AnnotationRow,
@@ -355,7 +355,7 @@ async def _sync_item_if_overdue(
         item_cfg.id,
         hours_desc,
     )
-    token = os.environ.get(item_cfg.access_token_env)
+    token = load_merged_env().get(item_cfg.access_token_env)
     if not token:
         logger.error(
             "scheduled-sync: item %s: env var %s not set; skipping",
@@ -743,7 +743,7 @@ async def webhook_plaid(
             if items:
                 cfg = next((c for c in items if c.id == payload_item_id), None)
                 if cfg is not None:
-                    token = os.environ.get(cfg.access_token_env)
+                    token = load_merged_env().get(cfg.access_token_env)
                     if token:
                         logger.info(
                             "Enqueuing background sync for item_id=%s"
