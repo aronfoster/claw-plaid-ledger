@@ -9,19 +9,18 @@ metadata:
         - CLAW_API_SECRET
         - CLAW_LEDGER_URL
       config:
-        - ~/.openclaw/config/ledger.env
+        - ~/.openclaw/.env
     primaryEnv: CLAW_API_SECRET
 ---
 
 ## Setup
 
 ```bash
-mkdir -p ~/.openclaw/config
-cat >> ~/.openclaw/config/ledger.env <<'EOF'
+cat >> ~/.openclaw/.env <<'EOF'
 CLAW_API_SECRET=<your-CLAW_API_SECRET-value>
 CLAW_LEDGER_URL=http://127.0.0.1:8000
 EOF
-chmod 600 ~/.openclaw/config/ledger.env
+chmod 600 ~/.openclaw/.env
 ```
 
 `CLAW_API_SECRET` is the bearer token required on all non-health ledger API endpoints.
