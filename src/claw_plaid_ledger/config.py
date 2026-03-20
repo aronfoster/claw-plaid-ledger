@@ -172,7 +172,8 @@ def load_merged_env(
     *,
     env_file: Path | None = None,
 ) -> dict[str, str]:
-    """Return env vars merged from .env file and the process environment.
+    """
+    Return env vars merged from .env file and the process environment.
 
     The process environment takes precedence over the .env file, matching
     the behaviour of ``load_config``.  Use this when you need to look up
