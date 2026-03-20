@@ -31,9 +31,9 @@ uv run --locked mypy .
 Install the split skill bundles into your Codex/OpenClaw skills directory:
 
 ```bash
-mkdir -p ~/.openclaw/skills/hestia-ledger ~/.openclaw/skills/athena-ledger
-cp -R skills/hestia-ledger/* ~/.openclaw/skills/hestia-ledger/
-cp -R skills/athena-ledger/* ~/.openclaw/skills/athena-ledger/
+mkdir -p ~/.openclaw/workspace/agents/hestia/skills ~/.openclaw/workspace/agents/athena/skills
+cp -R skills/hestia-ledger/* ~/.openclaw/workspace/agents/hestia/skills/
+cp -R skills/athena-ledger/* ~/.openclaw/workspace/agents/athena/skills/
 ```
 
 Recommended operating cadence:
