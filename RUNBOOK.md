@@ -155,6 +155,57 @@ chmod 600 ~/.openclaw/config/ledger.env
 of the running `ledger serve` instance; adjust the port if you changed
 `CLAW_SERVER_PORT`.
 
+Register both skills in `~/.openclaw/openclaw.json` so OpenClaw injects
+the credentials into each agent's session.  Without this step the skills
+are discovered (files are present) but not **eligible** — the required
+env vars (`CLAW_API_SECRET`, `CLAW_LEDGER_URL`) are never injected, so
+the skills do not appear in the agent's system prompt and the agent
+reports not having them.
+
+If `~/.openclaw/openclaw.json` does not exist yet, create it with the
+full block below.  If it already exists, merge the `skills` key into the
+existing JSON manually (or use `jq` — see the note below).
+
+```json
+{
+  "skills": {
+    "entries": {
+      "hestia-ledger": {
+        "apiKey": "<your-CLAW_API_SECRET-value>",
+        "env": {
+          "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
+        }
+      },
+      "athena-ledger": {
+        "apiKey": "<your-CLAW_API_SECRET-value>",
+        "env": {
+          "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
+        }
+      }
+    }
+  }
+}
+```
+
+`apiKey` maps to the skill's declared `primaryEnv` (`CLAW_API_SECRET`).
+`env.CLAW_LEDGER_URL` satisfies the second required variable.  Both
+values are injected into the agent process for that turn only; OpenClaw
+restores the original environment afterward.
+
+> **jq one-liner (if the file already exists and contains valid JSON):**
+> ```bash
+> jq --arg secret "<your-CLAW_API_SECRET-value>" \
+>    --arg url "http://127.0.0.1:8000" \
+>    '.skills.entries["hestia-ledger"] = {apiKey: $secret, env: {CLAW_LEDGER_URL: $url}} |
+>     .skills.entries["athena-ledger"] = {apiKey: $secret, env: {CLAW_LEDGER_URL: $url}}' \
+>    ~/.openclaw/openclaw.json > /tmp/openclaw.json \
+>    && mv /tmp/openclaw.json ~/.openclaw/openclaw.json
+> ```
+
+After saving `openclaw.json`, start a **new** OpenClaw session for each
+agent — OpenClaw snapshots eligible skills at session start and the
+updated config will not take effect in an already-running session.
+
 Start the ledger server before invoking either agent skill:
 
 ```bash
