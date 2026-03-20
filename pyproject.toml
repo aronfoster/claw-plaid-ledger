@@ -61,8 +61,9 @@ skip-magic-trailing-comma = false
 line-ending = "lf"
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --basetemp=/dev/shm/claw-plaid-ledger-tests"
 testpaths = ["tests"]
+tmp_path_retention_policy = "none"
 
 [tool.mypy]
 python_version = "3.12"

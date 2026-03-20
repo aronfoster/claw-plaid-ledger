@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from os import environ as os_environ
 from pathlib import Path
 
-from claw_plaid_ledger.config import ConfigError, _parse_cidr_list
+from claw_plaid_ledger.config import (
+    ConfigError,
+    _default_env_file,
+    _load_env_file,
+    _parse_cidr_list,
+)
 from claw_plaid_ledger.items_config import ItemsConfigError, load_items_config
 
 logger = logging.getLogger(__name__)
@@ -248,9 +253,16 @@ def run_production_preflight(
     environ: dict[str, str] | None = None,
     *,
     items_config_path: Path | None = None,
+    env_file: Path | None = None,
 ) -> list[CheckResult]:
     """Run all production preflight checks and return results."""
-    env = dict(os_environ if environ is None else environ)
+    if environ is not None:
+        env = dict(environ)
+    else:
+        file_values = _load_env_file(
+            _default_env_file() if env_file is None else env_file
+        )
+        env = {**file_values, **os_environ}
     results: list[CheckResult] = [
         _check_env_var(var, env) for var in _REQUIRED_PLAID_CLIENT_VARS
     ]
