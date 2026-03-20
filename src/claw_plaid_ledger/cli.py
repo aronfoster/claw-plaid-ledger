@@ -17,6 +17,7 @@ from claw_plaid_ledger.config import (
     Config,
     ConfigError,
     load_config,
+    load_merged_env,
 )
 from claw_plaid_ledger.db import (
     apply_account_precedence,
@@ -389,7 +390,8 @@ def _sync_named_item(item_id: str) -> None:
         typer.echo(f"sync: item '{item_id}' not found in items.toml")
         raise SystemExit(2)
 
-    token = os.environ.get(item_cfg.access_token_env)
+    merged_env = load_merged_env()
+    token = merged_env.get(item_cfg.access_token_env)
     if token is None:
         typer.echo(f"sync: {item_cfg.access_token_env} is not set")
         raise SystemExit(2)
@@ -421,9 +423,10 @@ def _sync_all_items() -> None:
     adapter = PlaidClientAdapter.from_config(config)
     success_count = 0
     failure_count = 0
+    merged_env = load_merged_env()
 
     for item_cfg in items_config:
-        token = os.environ.get(item_cfg.access_token_env)
+        token = merged_env.get(item_cfg.access_token_env)
         if token is None:
             typer.echo(
                 "sync["
@@ -623,9 +626,10 @@ def items() -> None:
 
     healthy = 0
     total = len(items_config)
+    merged_env = load_merged_env()
 
     for item_cfg in items_config:
-        token_val = os.environ.get(item_cfg.access_token_env)
+        token_val = merged_env.get(item_cfg.access_token_env)
         token_status = "SET" if token_val else "MISSING"
         if token_val:
             healthy += 1

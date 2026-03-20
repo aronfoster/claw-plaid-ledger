@@ -42,7 +42,7 @@ def test_all_required_checks_pass_with_valid_env(tmp_path: Path) -> None:
     """All required checks pass when environment is fully configured."""
     env = _make_base_env(tmp_path)
 
-    results = run_production_preflight(env)
+    results = run_production_preflight(env, items_config_path=tmp_path / "items.toml")
 
     failures = [
         r
@@ -126,7 +126,7 @@ def test_sandbox_warning_does_not_block_required_pass(
     env = _make_base_env(tmp_path)
     env["PLAID_ENV"] = "sandbox"
 
-    results = run_production_preflight(env)
+    results = run_production_preflight(env, items_config_path=tmp_path / "items.toml")
 
     required_failures = [
         r
