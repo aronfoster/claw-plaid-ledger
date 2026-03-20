@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import sqlite3
 import uuid
 import webbrowser
-from typing import Annotated, cast
+from typing import TYPE_CHECKING, Annotated, cast
+
+if TYPE_CHECKING:
+    import os
 
 import typer
 import uvicorn
@@ -809,7 +811,9 @@ def overlaps() -> None:
 @app.command()
 def serve() -> None:
     """Start the HTTP server on CLAW_SERVER_HOST:CLAW_SERVER_PORT."""
-    if not os.environ.get("CLAW_API_SECRET"):
+    env = load_merged_env()
+
+    if not env.get("CLAW_API_SECRET"):
         typer.echo(
             "serve: CLAW_API_SECRET is not set; refusing to start. "
             "Set CLAW_API_SECRET to a strong random secret before "
@@ -817,7 +821,7 @@ def serve() -> None:
         )
         raise SystemExit(1)
 
-    log_level_raw = (os.environ.get("CLAW_LOG_LEVEL") or "INFO").upper()
+    log_level_raw = (env.get("CLAW_LOG_LEVEL") or "INFO").upper()
     if log_level_raw not in _VALID_LOG_LEVELS:
         typer.echo(
             f"serve: invalid CLAW_LOG_LEVEL={log_level_raw!r}. "
@@ -832,8 +836,8 @@ def serve() -> None:
     for handler in logging.root.handlers:
         handler.addFilter(CorrelationIdFilter())
 
-    host = os.environ.get("CLAW_SERVER_HOST", "127.0.0.1")
-    port_str = os.environ.get("CLAW_SERVER_PORT", "8000")
+    host = env.get("CLAW_SERVER_HOST") or "127.0.0.1"
+    port_str = env.get("CLAW_SERVER_PORT") or "8000"
     try:
         port = int(port_str)
     except ValueError as exc:
