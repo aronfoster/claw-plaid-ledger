@@ -162,6 +162,15 @@ env vars (`CLAW_API_SECRET`, `CLAW_LEDGER_URL`) are never injected, so
 the skills do not appear in the agent's system prompt and the agent
 reports not having them.
 
+**Use the `SecretRef` object form for `apiKey` — do not use a plaintext
+value or `"${VAR}"` string interpolation.**  Multiple OpenClaw CLI
+operations (`doctor --fix`, `update`, `config.patch`) have historically
+resolved `${...}` references to plaintext at write time, permanently
+baking secrets into the config file on disk (openclaw/openclaw issues
+#4654, #9627, #15932).  The `SecretRef` object form is not subject to
+this class of bug — OpenClaw preserves the reference object on
+write-back and resolves the secret in memory at activation time only.
+
 If `~/.openclaw/openclaw.json` does not exist yet, create it with the
 full block below.  If it already exists, merge the `skills` key into the
 existing JSON manually (or use `jq` — see the note below).
@@ -171,13 +180,13 @@ existing JSON manually (or use `jq` — see the note below).
   "skills": {
     "entries": {
       "hestia-ledger": {
-        "apiKey": "<your-CLAW_API_SECRET-value>",
+        "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" },
         "env": {
           "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
         }
       },
       "athena-ledger": {
-        "apiKey": "<your-CLAW_API_SECRET-value>",
+        "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" },
         "env": {
           "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
         }
@@ -188,19 +197,37 @@ existing JSON manually (or use `jq` — see the note below).
 ```
 
 `apiKey` maps to the skill's declared `primaryEnv` (`CLAW_API_SECRET`).
-`env.CLAW_LEDGER_URL` satisfies the second required variable.  Both
-values are injected into the agent process for that turn only; OpenClaw
-restores the original environment afterward.
+The `{ source, provider, id }` SecretRef tells OpenClaw to read the
+value from the named environment variable at activation time — the
+plaintext secret is never written to disk.  `CLAW_API_SECRET` must be
+present in the shell environment (or the agent's process environment)
+when OpenClaw starts.
+
+`env.CLAW_LEDGER_URL` is a non-sensitive local URL and is safe as a
+literal string.
 
 > **jq one-liner (if the file already exists and contains valid JSON):**
 > ```bash
-> jq --arg secret "<your-CLAW_API_SECRET-value>" \
->    --arg url "http://127.0.0.1:8000" \
->    '.skills.entries["hestia-ledger"] = {apiKey: $secret, env: {CLAW_LEDGER_URL: $url}} |
->     .skills.entries["athena-ledger"] = {apiKey: $secret, env: {CLAW_LEDGER_URL: $url}}' \
+> jq '.skills.entries["hestia-ledger"] = {
+>       apiKey: {source:"env",provider:"default",id:"CLAW_API_SECRET"},
+>       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}} |
+>     .skills.entries["athena-ledger"] = {
+>       apiKey: {source:"env",provider:"default",id:"CLAW_API_SECRET"},
+>       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}}' \
 >    ~/.openclaw/openclaw.json > /tmp/openclaw.json \
 >    && mv /tmp/openclaw.json ~/.openclaw/openclaw.json
 > ```
+
+After writing `openclaw.json`, verify no plaintext secrets leaked into
+the file or runtime artifacts:
+
+```bash
+openclaw secrets audit --check
+```
+
+A clean audit shows no plaintext findings.  If any are reported, run
+`openclaw secrets configure` to interactively re-map affected credentials
+to SecretRefs, then re-run the audit.
 
 After saving `openclaw.json`, start a **new** OpenClaw session for each
 agent — OpenClaw snapshots eligible skills at session start and the
