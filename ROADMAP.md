@@ -176,33 +176,28 @@ are resolved:
   API call lists; `GET /spend` new filter params documented; account-scoped
   spend playbook added to Athena's `query_playbooks.md`.
 
+### M16 — Spend trends (Sprint 18)
+
+Sprint 18 is complete. Month-over-month spend analysis is now available
+without manual stitching:
+
+- **BUG-011** — `GET /spend/trends` returns a plain JSON array of monthly
+  bucket objects (oldest → newest), zero-filling months with no qualifying
+  transactions. Each bucket contains `month` (YYYY-MM), `total_spend`,
+  `transaction_count`, and `partial` (true only on the current in-progress
+  month). The `months` parameter (default 6, minimum 1, no upper bound)
+  controls the lookback window. All seven filter parameters from `GET /spend`
+  (`owner`, `tags`, `category`, `tag`, `account_id`, `view`,
+  `include_pending`) are supported for direct comparability.
+- **Skill docs** — `skills/athena-ledger/SKILL.md` lists `GET /spend/trends`
+  in the approved API calls and documents it under Core analysis workflows
+  (section 4). `skills/athena-ledger/checklists/query_playbooks.md` includes
+  a "Month-over-month trends" playbook entry (playbook 7). Hestia's skill
+  docs are unchanged.
+
 ---
 
 ## Upcoming Milestones
-
-### M16 — Spend trends
-
-**Focus:** Month-over-month analysis without manual stitching.
-
-**Goal:** A single endpoint returns spend aggregated by calendar month,
-replacing multiple `GET /spend` calls and client-side summation.
-
-**Scope**
-
-- **BUG-011** — `GET /spend/trends` returns an array of monthly buckets
-  (oldest → newest) each with `month`, `total_spend`, `transaction_count`, and
-  `partial` flag for the current in-progress month. Accepts a `months` lookback
-  parameter (default 6). Supports the same filter set as `GET /spend`
-  (`owner`, `tags`, `category`, `account_id`, `view`, `include_pending`) for
-  direct comparability.
-
-**Skill doc updates required:** Add `GET /spend/trends` to the approved API
-calls list in `skills/athena-ledger/SKILL.md` and document its usage in
-`skills/athena-ledger/checklists/query_playbooks.md` (e.g. as a new
-"Month-over-month trends" playbook entry). Update Hestia's skill docs if
-Hestia is ever permitted to call this endpoint.
-
----
 
 ### M17 — Errors visible to OpenClaw
 

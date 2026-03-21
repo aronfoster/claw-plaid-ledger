@@ -308,6 +308,7 @@ All endpoints are served by `ledger serve`.
 | `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list (supports tags and optional note search) |
 | `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window or named range shorthand with optional owner/tag filters |
+| `GET` | `/spend/trends` | Bearer | Monthly spend buckets for a lookback window; exactly `months` buckets oldest → newest with a `partial` flag on the current month |
 | `GET` | `/categories` | Bearer | Distinct sorted category values from all annotations |
 | `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all annotations |
 | `GET` | `/accounts` | Bearer | All synced accounts joined with label data (`label`, `description`) from `account_labels` |
@@ -541,6 +542,44 @@ supplied either as explicit ISO dates or as a named range shorthand.
 - `total_spend` is the arithmetic sum of `amount` (Plaid sign convention is preserved).
 - `transaction_count` is the number of matching rows before aggregation.
 - Empty windows return zeros (`total_spend=0`, `transaction_count=0`) not `null`.
+
+### `GET /spend/trends`
+
+Returns spend aggregated by calendar month for a lookback window.  Always
+returns exactly `months` buckets ordered oldest → newest, zero-filling any
+month with no qualifying transactions.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `months` | integer ≥ 1 | `6` | Number of calendar months to return, ending with the current month. |
+| `owner` | string | — | Restrict to accounts tagged with this owner. |
+| `tags` | list[string] | `[]` | Annotation tags filter with AND semantics. |
+| `account_id` | string | — | Restrict to a single Plaid account. |
+| `category` | string | — | Restrict to one annotation category (case-insensitive). |
+| `tag` | string | — | Restrict to one annotation tag (case-insensitive, singular). |
+| `include_pending` | bool | `false` | Include pending transactions when true. |
+| `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
+
+**Response** (HTTP 200) — a plain JSON array, oldest bucket first:
+
+```json
+[
+  {"month": "2025-10", "total_spend": 3241.50, "transaction_count": 47, "partial": false},
+  {"month": "2026-03", "total_spend": 850.00,  "transaction_count": 12, "partial": true}
+]
+```
+
+- `month` — `YYYY-MM` label for the calendar month.
+- `total_spend` — arithmetic sum of `amount` for matching transactions (Plaid sign convention preserved).
+- `transaction_count` — number of matching rows.
+- `partial` — `true` only on the current in-progress month; `false` on all complete prior months.
+- Months with no qualifying transactions appear as `{"total_spend": 0.0, "transaction_count": 0}` — they are never omitted.
+- `?months=0` or `?months=-1` returns HTTP 422.
+
+All seven filter parameters produce results directly comparable to a matching
+point-in-time `GET /spend` call over the same window and filters.
 
 ### `GET /transactions/{transaction_id}`
 
