@@ -854,10 +854,10 @@ class TestGetTransactionDetailEndpoint:
 class TestPutAnnotationEndpoint:
     """Tests for PUT /annotations/{transaction_id} endpoint behavior."""
 
-    def test_put_creates_annotation_returns_ok(
+    def test_put_returns_full_transaction_shape(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """PUT creates a new annotation; response is {status: ok}."""
+        """PUT returns HTTP 200 with full transaction shape, not status:ok."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -874,7 +874,20 @@ class TestPutAnnotationEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json() == {"status": "ok"}
+        body = response.json()
+        # Must contain full transaction fields
+        assert body["id"] == "tx_1"
+        assert body["account_id"] == "acct_1"
+        assert "amount" in body
+        assert body["name"] == "Starbucks"
+        assert "annotation" in body
+        # Annotation block must reflect values just written
+        annotation = body["annotation"]
+        assert annotation is not None
+        assert annotation["category"] == "food"
+        assert annotation["note"] == "Morning coffee"
+        assert annotation["tags"] == ["discretionary"]
+        assert annotation["updated_at"] is not None
 
     def test_second_put_replaces_annotation_preserves_created_at(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -911,6 +924,39 @@ class TestPutAnnotationEndpoint:
         assert second.note == "Second note"
         # updated_at should be >= first_updated_at
         assert second.updated_at >= first_updated_at
+
+    def test_second_put_response_reflects_updated_annotation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Second PUT (update) returns the newly updated annotation fields."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        client.put(
+            "/annotations/tx_1",
+            json={"category": "food", "note": "First note", "tags": ["a"]},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        response = client.put(
+            "/annotations/tx_1",
+            json={
+                "category": "transport",
+                "note": "Updated note",
+                "tags": ["b", "c"],
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        annotation = body["annotation"]
+        assert annotation is not None
+        assert annotation["category"] == "transport"
+        assert annotation["note"] == "Updated note"
+        assert annotation["tags"] == ["b", "c"]
 
     def test_put_empty_body_stores_all_null(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path

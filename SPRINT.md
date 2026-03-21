@@ -26,7 +26,7 @@ TOOLS.md is updated by hand. M14 closes all four gaps with minimal surface area.
 
 ---
 
-## Task 1: BUG-006 — PUT /annotations returns the updated transaction record
+## Task 1: BUG-006 — PUT /annotations returns the updated transaction record ✅ DONE
 
 ### Background
 
