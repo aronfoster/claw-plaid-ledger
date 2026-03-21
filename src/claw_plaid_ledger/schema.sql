@@ -47,3 +47,12 @@ CREATE TABLE IF NOT EXISTS annotations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS account_labels (
+    id INTEGER PRIMARY KEY,
+    plaid_account_id TEXT NOT NULL UNIQUE,
+    label TEXT,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

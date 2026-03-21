@@ -36,9 +36,12 @@ from claw_plaid_ledger.config import (
     load_merged_env,
 )
 from claw_plaid_ledger.db import (
+    AccountLabelRow,
     AnnotationRow,
     SpendQuery,
     TransactionQuery,
+    get_account,
+    get_all_accounts,
     get_all_sync_state,
     get_annotation,
     get_distinct_categories,
@@ -46,6 +49,7 @@ from claw_plaid_ledger.db import (
     get_transaction,
     query_spend,
     query_transactions,
+    upsert_account_label,
     upsert_annotation,
 )
 from claw_plaid_ledger.items_config import ItemConfig, load_items_config
@@ -794,6 +798,49 @@ def get_tags() -> dict[str, object]:
     with sqlite3.connect(config.db_path) as connection:
         tags = get_distinct_tags(connection)
     return {"tags": tags}
+
+
+@app.get("/accounts", dependencies=[Depends(require_bearer_token)])
+def list_accounts() -> dict[str, object]:
+    """Return all known accounts joined with any available label data."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        accounts = get_all_accounts(connection)
+    return {"accounts": accounts}
+
+
+class AccountLabelRequest(BaseModel):
+    """Request body for PUT /accounts/{account_id}."""
+
+    label: str | None = None
+    description: str | None = None
+
+
+@app.put(
+    "/accounts/{account_id}",
+    dependencies=[Depends(require_bearer_token)],
+)
+def put_account_label(
+    account_id: str, body: AccountLabelRequest
+) -> dict[str, object]:
+    """Upsert label data for an account and return the full account record."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        if get_account(connection, account_id) is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        now = datetime.now(tz=UTC).isoformat()
+        row = AccountLabelRow(
+            plaid_account_id=account_id,
+            label=body.label,
+            description=body.description,
+            created_at=now,
+            updated_at=now,
+        )
+        upsert_account_label(connection, row)
+        result = get_account(connection, account_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return result
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])
