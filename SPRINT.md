@@ -273,7 +273,7 @@ confirm what window was actually used.
 
 ---
 
-## Task 4: BUG-004 — Agent skill auto-discovery via sync-skills.sh
+## Task 4: BUG-004 — Agent skill auto-discovery via sync-skills.sh ✅ DONE
 
 ### Background
 
