@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -573,6 +573,7 @@ def query_spend(
     # tag strings) is bound via the params list as a `?` placeholder, so
     # there is no injection risk.  Ruff cannot prove the fragments are safe
     # from static analysis alone, making the noqa unavoidable here.
+    # The same rationale applies to query_spend_trends() below.
     row = connection.execute(
         (
             "SELECT COALESCE(SUM(t.amount), 0.0), COUNT(*) "  # noqa: S608
@@ -588,6 +589,121 @@ def query_spend(
     total_spend = float(row[0]) if row[0] is not None else 0.0
     count = int(row[1]) if row[1] is not None else 0
     return total_spend, count
+
+
+@dataclass(frozen=True)
+class SpendTrendsQuery:
+    """Filters for the monthly spend trends query."""
+
+    months: int
+    owner: str | None = None
+    tags: tuple[str, ...] = ()
+    include_pending: bool = False
+    canonical_only: bool = True
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
+
+
+def query_spend_trends(
+    connection: sqlite3.Connection,
+    query: SpendTrendsQuery,
+    today: date,
+) -> list[dict[str, object]]:
+    """Return monthly spend buckets, oldest → newest, zero-filled."""
+    labels: list[str] = []
+    year, month = today.year, today.month
+    for _ in range(query.months):
+        labels.append(f"{year}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    labels.reverse()
+
+    start_date = f"{labels[0]}-01"
+    end_date = today.isoformat()
+
+    effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
+
+    need_accounts_join = query.canonical_only or query.owner is not None
+    accounts_join = (
+        "JOIN accounts a ON a.plaid_account_id = t.plaid_account_id "
+        if need_accounts_join
+        else ""
+    )
+    annotations_join = (
+        "LEFT JOIN annotations ann "
+        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
+    )
+
+    where_parts: list[str] = [
+        f"{effective_date_sql} >= ?",
+        f"{effective_date_sql} <= ?",
+    ]
+    params: list[object] = [start_date, end_date]
+
+    if query.canonical_only:
+        where_parts.append("a.canonical_account_id IS NULL")
+
+    if not query.include_pending:
+        where_parts.append("t.pending = 0")
+
+    if query.owner is not None:
+        where_parts.append("a.owner = ?")
+        params.append(query.owner)
+
+    for tag in query.tags:
+        where_parts.append(
+            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+        )
+        params.append(tag)
+
+    if query.account_id is not None:
+        where_parts.append("t.plaid_account_id = ?")
+        params.append(query.account_id)
+
+    if query.category is not None:
+        where_parts.append("LOWER(ann.category) = LOWER(?)")
+        params.append(query.category)
+
+    if query.tag is not None:
+        where_parts.append(
+            "EXISTS ("
+            "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
+            ")"
+        )
+        params.append(query.tag)
+
+    where_sql = " AND ".join(where_parts)
+    month_expr = f"strftime('%Y-%m', {effective_date_sql})"
+    rows = connection.execute(
+        (
+            f"SELECT {month_expr} AS month, "  # noqa: S608
+            "COALESCE(SUM(t.amount), 0.0), COUNT(*) "
+            "FROM transactions t "
+            f"{accounts_join}"
+            f"{annotations_join}"
+            f"WHERE {where_sql} "
+            "GROUP BY month "
+            "ORDER BY month ASC"
+        ),
+        params,
+    ).fetchall()
+
+    current_month = f"{today.year}-{today.month:02d}"
+    results: dict[str, tuple[float, int]] = {
+        str(row[0]): (float(row[1]), int(row[2])) for row in rows
+    }
+    return [
+        {
+            "month": label,
+            "total_spend": results.get(label, (0.0, 0))[0],
+            "transaction_count": results.get(label, (0.0, 0))[1],
+            "partial": label == current_month,
+        }
+        for label in labels
+    ]
 
 
 @dataclass(frozen=True)
