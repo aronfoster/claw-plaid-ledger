@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import fastapi
@@ -2525,6 +2525,183 @@ class TestGetSpendRangeParam:
         assert "end_date" in body
         assert body["start_date"] == "2026-02-01"
         assert body["end_date"] == "2026-02-28"
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /spend enriched filters (BUG-008 + BUG-009)
+# ---------------------------------------------------------------------------
+
+# Enriched-filter test constants derived from the _seed_spend_data fixture.
+
+_SPEND_JAN_ACCT_ALICE_COUNT = 2
+_SPEND_JAN_ACCT_ALICE_TOTAL = 150.0
+_SPEND_JAN_CATEGORY_FOOD_COUNT = 2
+_SPEND_JAN_CATEGORY_FOOD_TOTAL = 150.0
+_SPEND_JAN_TAG_GROCERIES_COUNT = 2
+_SPEND_JAN_TAG_GROCERIES_TOTAL = 150.0
+_SPEND_JAN_TAG_FOOD_COUNT = 1
+_SPEND_JAN_TAG_FOOD_TOTAL = 100.0
+
+
+class TestGetSpendEnrichedFilters:
+    """Tests for GET /spend enriched filters: account_id, category, tag."""
+
+    def get_spend_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: pathlib.Path,
+        params: dict[str, str],
+    ) -> dict[str, object]:
+        """Seed DB, call GET /spend with given params, return parsed JSON."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        merged: dict[str, str] = {
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-31",
+            **params,
+        }
+        response = client.get(
+            "/spend",
+            params=merged,
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        return cast("dict[str, object]", response.json())
+
+    def test_account_id_restricts_spend(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?account_id=acct_alice restricts spend to Alice's transactions."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"account_id": "acct_alice"}
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_ACCT_ALICE_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
+
+    def test_unknown_account_id_returns_zero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?account_id=<unknown> returns zero spend without error."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"account_id": "acct_unknown"}
+        )
+        assert body["total_spend"] == 0.0
+        assert body["transaction_count"] == 0
+
+    def test_category_filter_restricts_spend(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?category=food restricts spend to food-annotated transactions."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"category": "food"}
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_CATEGORY_FOOD_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+
+    def test_category_filter_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?category=Food (mixed case) matches category stored as 'food'."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"category": "Food"}
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_CATEGORY_FOOD_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+
+    def test_tag_filter_restricts_spend(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tag=groceries restricts spend to transactions with that tag."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"tag": "groceries"}
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_TAG_GROCERIES_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
+
+    def test_tag_filter_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?tag=Groceries (mixed case) matches tag stored as 'groceries'."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"tag": "Groceries"}
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_TAG_GROCERIES_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
+
+    def test_category_and_tag_and_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?category=food&tag=food ANDs both filters; only tx_a1 matches."""
+        body = self.get_spend_response(
+            monkeypatch, tmp_path, {"category": "food", "tag": "food"}
+        )
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_TAG_FOOD_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_TAG_FOOD_COUNT
+
+    def test_account_id_and_category_and_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?account_id=acct_alice&category=food ANDs both filters."""
+        body = self.get_spend_response(
+            monkeypatch,
+            tmp_path,
+            {"account_id": "acct_alice", "category": "food"},
+        )
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_ACCT_ALICE_TOTAL
+        )
+        assert body["transaction_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
+
+    def test_no_new_filters_unchanged_behavior(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Omitting new filters does not change existing behavior."""
+        body = self.get_spend_response(monkeypatch, tmp_path, {})
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
+        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+
+    def test_filters_field_always_includes_new_keys(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Response filters dict always includes account_id, category, tag."""
+        body = self.get_spend_response(monkeypatch, tmp_path, {})
+        filters = cast("dict[str, object]", body["filters"])
+        assert "account_id" in filters
+        assert "category" in filters
+        assert "tag" in filters
+        assert filters["account_id"] is None
+        assert filters["category"] is None
+        assert filters["tag"] is None
+
+    def test_filters_field_reflects_supplied_values(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Response filters dict echoes back the supplied filter values."""
+        body = self.get_spend_response(
+            monkeypatch,
+            tmp_path,
+            {
+                "account_id": "acct_alice",
+                "category": "food",
+                "tag": "groceries",
+            },
+        )
+        filters = cast("dict[str, object]", body["filters"])
+        assert filters["account_id"] == "acct_alice"
+        assert filters["category"] == "food"
+        assert filters["tag"] == "groceries"
 
 
 # ---------------------------------------------------------------------------

@@ -506,6 +506,9 @@ class SpendQuery:
     tags: tuple[str, ...] = ()
     include_pending: bool = False
     canonical_only: bool = True
+    account_id: str | None = None  # BUG-008
+    category: str | None = None  # BUG-009
+    tag: str | None = None  # BUG-009 (singular, case-insensitive)
 
 
 def query_spend(
@@ -547,6 +550,22 @@ def query_spend(
             "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
         )
         params.append(tag)
+
+    if query.account_id is not None:
+        where_parts.append("t.plaid_account_id = ?")
+        params.append(query.account_id)
+
+    if query.category is not None:
+        where_parts.append("LOWER(ann.category) = LOWER(?)")
+        params.append(query.category)
+
+    if query.tag is not None:
+        where_parts.append(
+            "EXISTS ("
+            "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
+            ")"
+        )
+        params.append(query.tag)
 
     where_sql = " AND ".join(where_parts)
     # S608: accounts_join, annotations_join, and where_sql are built from
