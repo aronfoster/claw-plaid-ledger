@@ -24,7 +24,7 @@ import fastapi
 import fastapi.responses
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from claw_plaid_ledger.config import (
@@ -39,6 +39,7 @@ from claw_plaid_ledger.db import (
     AccountLabelRow,
     AnnotationRow,
     SpendQuery,
+    SpendTrendsQuery,
     TransactionQuery,
     get_account,
     get_all_accounts,
@@ -48,6 +49,7 @@ from claw_plaid_ledger.db import (
     get_distinct_tags,
     get_transaction,
     query_spend,
+    query_spend_trends,
     query_transactions,
     upsert_account_label,
     upsert_annotation,
@@ -699,6 +701,54 @@ def get_spend(
             "tag": params.tag,
         },
     }
+
+
+class SpendTrendsListQuery(BaseModel):
+    """Scalar query parameters for GET /spend/trends."""
+
+    months: int = Field(default=6, ge=1)
+    owner: str | None = None
+    # bool | None avoids FBT001/FBT002; None is treated as False (conservative
+    # default: exclude pending transactions unless caller opts in).
+    include_pending: bool | None = None
+    view: Literal["canonical", "raw"] = "canonical"
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
+
+
+@app.get("/spend/trends", dependencies=[Depends(require_bearer_token)])
+def get_spend_trends(
+    params: Annotated[SpendTrendsListQuery, Depends()],
+    tags: Annotated[list[str] | None, Query()] = None,
+) -> list[dict[str, object]]:
+    """
+    Return spend aggregated by calendar month for a lookback window.
+
+    Returns exactly ``months`` buckets ordered oldest → newest. The
+    current (in-progress) calendar month is flagged ``partial: true``
+    so callers know not to compare it directly against complete months.
+    Months with no qualifying transactions appear as zero-filled buckets.
+
+    Supports the same filters as ``GET /spend`` (``owner``, ``tags``,
+    ``category``, ``tag``, ``account_id``, ``view``,
+    ``include_pending``) for direct comparability.
+    """
+    resolved_tags: list[str] = tags or []
+    include_pending = params.include_pending is True
+    config = load_config()
+    trends_query = SpendTrendsQuery(
+        months=params.months,
+        owner=params.owner,
+        tags=tuple(resolved_tags),
+        include_pending=include_pending,
+        canonical_only=params.view == "canonical",
+        account_id=params.account_id,
+        category=params.category,
+        tag=params.tag,
+    )
+    with sqlite3.connect(config.db_path) as connection:
+        return query_spend_trends(connection, trends_query, _today())
 
 
 def _fetch_transaction_with_annotation(

@@ -69,6 +69,8 @@ Athena must not:
 6. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
 7. `GET /accounts` — retrieve all known accounts with human-readable labels
 8. `PUT /accounts/{account_id}` — write or update a label for an account
+9. `GET /spend/trends` — monthly spend buckets for a lookback window;
+   supports the same filters as `GET /spend`
 
 ## Core analysis workflows
 
@@ -115,7 +117,18 @@ confirm the resolved window).
 2. Drill into outliers with `GET /transactions/{id}` before quoting details.
 3. Use the owner summary template for structured output.
 
-### 4) Anomaly narrative workflow
+### 4) Month-over-month trends
+
+Use `GET /spend/trends` when the question involves change over time
+(e.g. "is spending increasing?", "which month was the most expensive?").
+
+- `?months=<n>` controls the lookback window (default 6, no upper bound).
+- The current month is flagged `partial: true` — treat it as incomplete
+  and avoid direct comparison against prior complete months.
+- Supports the same filters as `GET /spend`: `owner`, `account_id`,
+  `category`, `tag`, `tags`, `view`, `include_pending`.
+
+### 5) Anomaly narrative workflow
 
 1. Confirm candidate anomalies with canonical queries over explicit windows.
 2. Use raw view only when discrepancy diagnosis is needed.

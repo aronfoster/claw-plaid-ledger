@@ -69,6 +69,17 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 3. `GET /spend` with `account_id=<id>` and desired date window.
 4. Optionally narrow further with `category` or `tag` filters.
 
+### 7) Month-over-month trends
+
+1. `GET /spend/trends` with `?months=<n>` (default 6).
+2. Note which buckets have `partial: true` (current month) — exclude from
+   comparisons or call out explicitly.
+3. To narrow the trend to a subset, add the same filters used in
+   `GET /spend`: `owner`, `account_id`, `category`, `tag`.
+4. To validate a specific month's total, cross-check with
+   `GET /spend?start_date=<YYYY-MM-01>&end_date=<YYYY-MM-last-day>`
+   using matching filters — the numbers must agree.
+
 ## Failure handling
 
 - Failed endpoint call: report error and lower confidence.
