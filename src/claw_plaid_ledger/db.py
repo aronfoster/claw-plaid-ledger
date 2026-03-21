@@ -571,6 +571,109 @@ def query_spend(
     return total_spend, count
 
 
+@dataclass(frozen=True)
+class AccountLabelRow:
+    """Normalized account label fields ready for SQL parameter binding."""
+
+    plaid_account_id: str
+    label: str | None
+    description: str | None
+    created_at: str
+    updated_at: str
+
+
+def get_all_accounts(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    """Return all accounts LEFT JOIN account_labels, ordered by account ID."""
+    rows = connection.execute(
+        "SELECT a.plaid_account_id, a.name, a.mask, a.type, a.subtype, "
+        "a.institution_name, a.owner, a.item_id, a.canonical_account_id, "
+        "al.label, al.description "
+        "FROM accounts a "
+        "LEFT JOIN account_labels al "
+        "ON al.plaid_account_id = a.plaid_account_id "
+        "ORDER BY a.plaid_account_id ASC"
+    ).fetchall()
+    return [
+        {
+            "account_id": str(row[0]),
+            "plaid_name": str(row[1]),
+            "mask": str(row[2]) if row[2] is not None else None,
+            "type": str(row[3]) if row[3] is not None else None,
+            "subtype": str(row[4]) if row[4] is not None else None,
+            "institution_name": str(row[5]) if row[5] is not None else None,
+            "owner": str(row[6]) if row[6] is not None else None,
+            "item_id": str(row[7]) if row[7] is not None else None,
+            "canonical_account_id": (
+                str(row[8]) if row[8] is not None else None
+            ),
+            "label": str(row[9]) if row[9] is not None else None,
+            "description": str(row[10]) if row[10] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+def get_account(
+    connection: sqlite3.Connection,
+    plaid_account_id: str,
+) -> dict[str, object] | None:
+    """Return one account with label data, or None if not in accounts."""
+    row = connection.execute(
+        (
+            "SELECT a.plaid_account_id, a.name, a.mask, a.type, a.subtype, "
+            "a.institution_name, a.owner, a.item_id, a.canonical_account_id, "
+            "al.label, al.description "
+            "FROM accounts a "
+            "LEFT JOIN account_labels al "
+            "ON al.plaid_account_id = a.plaid_account_id "
+            "WHERE a.plaid_account_id = ?"
+        ),
+        (plaid_account_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "account_id": str(row[0]),
+        "plaid_name": str(row[1]),
+        "mask": str(row[2]) if row[2] is not None else None,
+        "type": str(row[3]) if row[3] is not None else None,
+        "subtype": str(row[4]) if row[4] is not None else None,
+        "institution_name": str(row[5]) if row[5] is not None else None,
+        "owner": str(row[6]) if row[6] is not None else None,
+        "item_id": str(row[7]) if row[7] is not None else None,
+        "canonical_account_id": (str(row[8]) if row[8] is not None else None),
+        "label": str(row[9]) if row[9] is not None else None,
+        "description": str(row[10]) if row[10] is not None else None,
+    }
+
+
+def upsert_account_label(
+    connection: sqlite3.Connection,
+    row: AccountLabelRow,
+) -> None:
+    """Insert or update an account label keyed on plaid_account_id."""
+    connection.execute(
+        (
+            "INSERT INTO account_labels "
+            "(plaid_account_id, label, description, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(plaid_account_id) DO UPDATE SET "
+            "label = excluded.label, "
+            "description = excluded.description, "
+            "updated_at = excluded.updated_at"
+        ),
+        (
+            row.plaid_account_id,
+            row.label,
+            row.description,
+            row.created_at,
+            row.updated_at,
+        ),
+    )
+
+
 def get_distinct_categories(connection: sqlite3.Connection) -> list[str]:
     """Return distinct non-null category values sorted alphabetically."""
     rows = connection.execute(

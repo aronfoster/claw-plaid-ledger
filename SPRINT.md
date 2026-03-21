@@ -31,7 +31,7 @@ Post-M14 production use revealed three concrete gaps:
 
 ---
 
-## Task 1: BUG-005 — Account labels (GET /accounts + PUT /accounts/{account_id})
+## Task 1: BUG-005 — Account labels (GET /accounts + PUT /accounts/{account_id}) ✅ DONE
 
 ### Background
 
