@@ -27,6 +27,7 @@ durably on a home server.
 - Deployment selection guide (Section 15)
 - Agent skill auto-registration via `sync-skills.sh push` (Section 16)
 - Account labels and enriched spend queries (Section 17)
+- Month-over-month spend trends via `GET /spend/trends` (Section 18)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -2015,3 +2016,96 @@ If you need to re-push the skill bundles to your OpenClaw workspace:
 This copies the `hestia-ledger` and `athena-ledger` bundles into your
 agent workspace directories and refreshes TOOLS.md. See Section 16 for
 the full push walkthrough.
+
+## 18. Month-over-month spend trends
+
+`GET /spend/trends` returns spend aggregated by calendar month without
+requiring multiple `GET /spend` calls and manual date arithmetic.
+
+### Basic usage
+
+Six-month lookback (default):
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends" | jq .
+```
+
+Custom lookback window:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=3" | jq .
+```
+
+Response is a plain JSON array — one bucket per calendar month, oldest first:
+
+```json
+[
+  {"month": "2026-01", "total_spend": 2980.00, "transaction_count": 41, "partial": false},
+  {"month": "2026-02", "total_spend": 3100.25, "transaction_count": 44, "partial": false},
+  {"month": "2026-03", "total_spend":  850.00, "transaction_count": 12, "partial": true}
+]
+```
+
+The current calendar month always has `partial: true`; all prior complete
+months have `partial: false`. Months with no qualifying transactions appear
+as zero-filled buckets (`total_spend: 0.0`, `transaction_count: 0`) and are
+never omitted.
+
+### Scoped trends
+
+**By owner:**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&owner=alice" | jq .
+```
+
+**By account:**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&account_id=acc_abc123" | jq .
+```
+
+**By annotation category (case-insensitive):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&category=software" | jq .
+```
+
+**By annotation tag (case-insensitive, singular):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&tag=recurring" | jq .
+```
+
+**Multiple tags (AND semantics):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&tags=groceries&tags=household" | jq .
+```
+
+### Validating a specific month's total
+
+Cross-check any bucket against `GET /spend` using matching filters:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?start_date=2026-01-01&end_date=2026-01-31" | jq .
+```
+
+The `total_spend` values must agree between the two endpoints when the same
+filters are applied.
+
+### Notes
+
+- `?months=0` or `?months=-1` returns HTTP 422 (minimum is 1).
+- Supports `include_pending=true` and `view=raw` with identical semantics to
+  `GET /spend`.
+- The current month's bucket is always partial; avoid direct comparisons
+  between it and prior complete months.

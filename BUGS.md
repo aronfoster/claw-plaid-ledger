@@ -8,11 +8,17 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
+*(No active bugs.)*
+
+---
+
+## Resolved bugs
+
 ---
 
 ### BUG-004 — Agents do not auto-discover skills in their personal skills folder
 
-**Status:** Active
+**Status:** Resolved (Sprint 16, M14)
 **Severity:** Medium (skill is deployed but invisible to the agent until manually registered)
 **Area:** OpenClaw agent setup / RUNBOOK
 
@@ -44,11 +50,16 @@ frontmatter and careful idempotent upsert logic.
 (Skills section) is the current working example of what a correct manual
 entry looks like.
 
+**Fix:** `scripts/sync-skills.sh push` now idempotently injects a `## Skills`
+block (sourced from each SKILL.md frontmatter) into the target agent's
+`TOOLS.md` after copying skill files. RUNBOOK.md Section 16 documents the
+workflow and manual fallback.
+
 ---
 
 ### BUG-005 — Account IDs are opaque numbers; no human-readable names or descriptions
 
-**Status:** Active
+**Status:** Resolved (Sprint 17, M15)
 **Severity:** Medium (agents and operators cannot identify accounts without manual ID mapping)
 **Area:** Database schema, API (`/accounts`)
 
@@ -73,16 +84,16 @@ explicitly).
 3. **`PUT /accounts/{account_id}`** — upserts `name` and `description` for a
    given account ID. Primary write surface for agents and operators.
 
-**Suggested fix:** Add an Alembic migration for `account_labels`, implement
-the two endpoints, and decorate `GET /transactions` and `GET /spend` responses
-to inline `account_name` where available (or keep it join-only on
-`GET /accounts` to avoid response bloat — TBD).
+**Fix:** Added `account_labels` table (idempotent `CREATE TABLE IF NOT EXISTS`)
+with `label` and `description` columns keyed on Plaid account ID. `GET /accounts`
+returns all known accounts LEFT JOINed with label data. `PUT /accounts/{account_id}`
+upserts label data and returns the full account record; returns 404 for unknown IDs.
 
 ---
 
 ### BUG-006 — `PUT /annotations/{transaction_id}` returns `{"status": "ok"}` instead of the updated record
 
-**Status:** Active
+**Status:** Resolved (Sprint 16, M14)
 **Severity:** Low (UX friction; callers must issue a follow-up GET to confirm the write)
 **Area:** API (`PUT /annotations/{transaction_id}`)
 
@@ -91,15 +102,15 @@ After a successful annotation write the endpoint returns a minimal
 the final merged state of the record without issuing a separate
 `GET /transactions/{id}`.
 
-**Suggested fix:** After applying the annotation update, fetch the full
-transaction record and return it as the 200 response body, matching the shape
-of `GET /transactions/{id}`. No schema change required.
+**Fix:** After applying the annotation update, the endpoint now fetches and
+returns the full transaction record (same shape as `GET /transactions/{id}`).
+No schema change required.
 
 ---
 
 ### BUG-007 — No endpoints to enumerate existing category or tag values
 
-**Status:** Active
+**Status:** Resolved (Sprint 16, M14)
 **Severity:** Medium (agents must guess or infer valid values from transaction samples, risking inconsistent tagging)
 **Area:** API
 
@@ -116,15 +127,16 @@ sampled transaction data, which leads to duplicate or near-duplicate values
 2. **`GET /tags`** — returns the distinct set of tag values present across
    all annotations, sorted alphabetically.
 
-**Suggested fix:** Both endpoints are simple `SELECT DISTINCT` queries over
-the annotations store with no new schema changes. Response shape can be a
-plain sorted array of strings.
+**Fix:** `GET /categories` returns distinct non-null category values sorted
+alphabetically. `GET /tags` returns distinct tag values unnested from all
+annotation rows, sorted alphabetically. Both are simple `SELECT DISTINCT`
+queries with no schema changes.
 
 ---
 
 ### BUG-008 — `GET /spend` has no `account_id` filter
 
-**Status:** Active
+**Status:** Resolved (Sprint 17, M15)
 **Severity:** Medium (per-card breakdowns require manual ID tracking out of band)
 **Area:** API (`GET /spend`)
 
@@ -133,16 +145,15 @@ account. Producing a per-card breakdown requires either multiple filtered
 `GET /transactions` calls and manual summation, or maintaining an account ID
 mapping outside the ledger.
 
-**Suggested fix:** Add an optional `account_id` query parameter that, when
-present, restricts the spend aggregation to transactions belonging to that
-account. Pairs naturally with BUG-005 (`GET /accounts`) once account labels
-are available.
+**Fix:** Added `account_id` query parameter to `GET /spend`. When present,
+restricts the aggregation to transactions belonging to the specified Plaid
+account ID via a direct `plaid_account_id` match (no JOIN required).
 
 ---
 
 ### BUG-009 — `GET /spend` has no `category` or `tag` filter
 
-**Status:** Active
+**Status:** Resolved (Sprint 17, M15)
 **Severity:** Medium (category/tag rollups require paginating all transactions and summing manually)
 **Area:** API (`GET /spend`)
 
@@ -151,16 +162,16 @@ There is no way to request spend totals scoped to a category or tag (e.g.
 `GET /transactions`, filter client-side, and sum amounts manually — which is
 slow and error-prone for large datasets.
 
-**Suggested fix:** Add optional `category` and `tag` query parameters to
-`GET /spend`. When both are supplied they are applied as AND filters, further
-narrowing the aggregation. Each should be case-insensitive and consistent with
-the vocabulary surfaced by `GET /categories` and `GET /tags` (BUG-007).
+**Fix:** Added `category` (case-insensitive match via `LOWER(ann.category) = LOWER(?)`)
+and `tag` (case-insensitive match via `json_each`) query parameters to `GET /spend`.
+All three new filters (`account_id`, `category`, `tag`) are AND-combined with each
+other and with the existing `owner` and `tags` parameters.
 
 ---
 
 ### BUG-010 — `GET /spend` requires explicit dates; no relative range shorthand
 
-**Status:** Active
+**Status:** Resolved (Sprint 16, M14)
 **Severity:** Low (minor ergonomic friction for common queries)
 **Area:** API (`GET /spend`)
 
@@ -169,19 +180,19 @@ queries like "last month" or "last 30 days" require the caller to compute and
 format both dates explicitly, which is inconvenient interactively and verbose
 in agent prompts.
 
-**Suggested fix:** Add an optional `range` parameter accepting shorthands such
-as `last_month`, `this_month`, `last_30_days`, and `last_7_days`. When
-`range` is supplied, `start_date` / `end_date` should be optional and derived
-server-side. Explicit dates should continue to work unchanged and take
-precedence if provided alongside `range`.
+**Fix:** Added optional `range` parameter to `GET /spend` accepting
+`last_month`, `this_month`, `last_30_days`, and `last_7_days`. Server derives
+`start_date`/`end_date` from the shorthand using server local time and echoes
+the resolved dates in the response. Explicit dates continue to work unchanged
+and take precedence when provided alongside `range`.
 
 ---
 
 ### BUG-011 — No spend trends endpoint for month-over-month analysis
 
-**Status:** Active
+**Status:** Resolved (Sprint 18, M16)
 **Severity:** Medium (trend analysis requires multiple `/spend` calls and manual stitching)
-**Area:** API (`GET /spend/trends` or `GET /trends`)
+**Area:** API (`GET /spend/trends`)
 
 There is no endpoint that returns spend aggregated by calendar month.
 Producing a month-over-month view currently requires one `GET /spend` call
@@ -209,13 +220,14 @@ following behaviour:
   applied consistently so a trend query and a point-in-time spend query over
   the same filters are directly comparable.
 
-**Suggested fix:** Implement as a GROUP BY month query over the same filtered
-transaction set used by `GET /spend`, using the same canonical/raw view logic.
-No new schema changes required.
+**Fix:** Implemented `GET /spend/trends` as a GROUP BY month query over the
+same filtered transaction set used by `GET /spend`. Returns a plain JSON
+array of `{month, total_spend, transaction_count, partial}` objects ordered
+oldest → newest, zero-filled for months with no matching transactions. The
+`months` parameter (default 6, minimum 1) controls the lookback window.
+Supports all seven filters from `GET /spend`. No schema changes required.
 
 ---
-
-## Resolved bugs
 
 ---
 
