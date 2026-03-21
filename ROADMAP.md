@@ -155,39 +155,30 @@ of the two-agent household:
   copying skill files; RUNBOOK.md Section 16 documents the workflow and manual
   fallback.
 
+### M15 — Account labels & enriched spend queries (Sprint 17)
+
+Sprint 17 is complete. Three production gaps from the first M14 deployment
+are resolved:
+
+- **BUG-005** — `account_labels` table (idempotent `CREATE TABLE IF NOT
+  EXISTS`) with `label` and `description` columns keyed on Plaid account ID.
+  `GET /accounts` returns all known accounts LEFT JOINed with label data.
+  `PUT /accounts/{account_id}` upserts label data; returns 404 for unknown
+  account IDs.
+- **BUG-008** — `GET /spend` now accepts `account_id` to restrict aggregation
+  to a single account (no JOIN required; direct `plaid_account_id` match).
+- **BUG-009** — `GET /spend` now accepts `category` (case-insensitive category
+  match against annotations) and `tag` (case-insensitive singular tag match
+  via `json_each`). All three new filters are AND-combined with each other
+  and with the existing `owner` and `tags` parameters.
+- **Skill docs** — Both `hestia-ledger` and `athena-ledger` skill bundles
+  updated: `GET /accounts` and `PUT /accounts/{account_id}` added to approved
+  API call lists; `GET /spend` new filter params documented; account-scoped
+  spend playbook added to Athena's `query_playbooks.md`.
+
 ---
 
 ## Upcoming Milestones
-
-### M15 — Account labels & enriched spend queries
-
-**Focus:** Give account IDs human-readable identity and expand spend filtering.
-
-**Goal:** Eliminate manual ID-to-name mapping maintained out of band by agents
-and operators; allow spend to be scoped by account, category, and tag.
-
-**Scope**
-
-- **BUG-005** — `account_labels` table (Alembic migration) with `name` and
-  `description` columns keyed on Plaid account ID. `GET /accounts` returns all
-  known account IDs joined with labels. `PUT /accounts/{account_id}` upserts
-  label data.
-- **BUG-008** — `GET /spend` accepts an optional `account_id` query parameter
-  to restrict aggregation to a single account. Pairs with `GET /accounts`.
-- **BUG-009** — `GET /spend` accepts optional `category` and `tag` query
-  parameters (AND-combined when both supplied, case-insensitive, consistent with
-  the vocabulary from `GET /categories` and `GET /tags`).
-
-**Skill doc updates required:** Every new or changed endpoint that agents may
-call must be reflected in `skills/athena-ledger/` and `skills/hestia-ledger/`
-before the milestone is considered done. Specifically:
-
-- Add `GET /accounts` and `PUT /accounts/{account_id}` to the approved API
-  calls lists and any relevant playbooks in both skills.
-- Update `GET /spend` documentation in `athena-ledger` to describe the new
-  `account_id`, `category`, and `tag` filter parameters.
-
----
 
 ### M16 — Spend trends
 

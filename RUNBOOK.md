@@ -1,4 +1,4 @@
-# Production Operations Runbook — M14 (Sprint 16 closeout)
+# Production Operations Runbook
 
 ## 1. Purpose and scope
 
@@ -7,25 +7,26 @@ This runbook covers the steps an operator needs to move
 validate the setup before the first real sync, and operate the service
 durably on a home server.
 
-**In scope (M7 + M9 + M10 + M11 + M13 + M14):**
+**In scope:**
 
 - Obtaining Plaid production API access
-- Connecting institutions via the `ledger link` browser flow (M8)
+- Connecting institutions via the `ledger link` browser flow
 - Household source precedence setup (`suppressed_accounts`,
-  `ledger apply-precedence`, `ledger overlaps`) (M9)
+  `ledger apply-precedence`, `ledger overlaps`)
 - Configuring and isolating the production environment
 - Running `ledger doctor --production-preflight` before first live sync
-- Daily item health checks via `ledger items` and `ledger sync --all` (M8)
-- Canonical-vs-raw transaction view behavior for agent/API consumers (M9)
-- Multi-item webhook routing and scheduled sync fallback (M10)
-- Stable public webhook URL setup with DuckDNS (M10)
-- Request/sync correlation-ID tracing in logs (M11)
-- Webhook ingress IP allowlisting (M13, Section 9.6)
-- systemd service and timer deployment (M13, Section 12)
-- Container deployment via Docker Compose or Proxmox LXC (M13, Section 13)
-- Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (M13, Section 14)
-- Deployment selection guide (M13, Section 15)
-- Agent skill auto-registration via `sync-skills.sh push` (M14, Section 16)
+- Daily item health checks via `ledger items` and `ledger sync --all`
+- Canonical-vs-raw transaction view behavior for agent/API consumers
+- Multi-item webhook routing and scheduled sync fallback
+- Stable public webhook URL setup with DuckDNS
+- Request/sync correlation-ID tracing in logs
+- Webhook ingress IP allowlisting (Section 9.6)
+- systemd service and timer deployment (Section 12)
+- Container deployment via Docker Compose or Proxmox LXC (Section 13)
+- Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (Section 14)
+- Deployment selection guide (Section 15)
+- Agent skill auto-registration via `sync-skills.sh push` (Section 16)
+- Account labels and enriched spend queries (Section 17)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -78,7 +79,7 @@ for simple single-institution setups.
 
 
 
-### Household source precedence setup (M9)
+### Household source precedence setup
 
 Use this flow after all household items are linked and synced at least once.
 
@@ -609,7 +610,7 @@ Check that `sync_state rows=1` (or more for multi-item) and
 ### Step 8 — (Optional) Start the HTTP server
 
 Before starting `ledger serve`, confirm your intent for the scheduled sync
-fallback (M10):
+fallback:
 
 - **Webhooks only (default):** leave `CLAW_SCHEDULED_SYNC_ENABLED` unset or
   set to `false`.  No background loop is started.
@@ -1002,7 +1003,7 @@ running.
 
 ## 11. Scheduled sync fallback
 
-The scheduled sync fallback is an optional background loop (M10) that
+The scheduled sync fallback is an optional background loop that
 automatically triggers a sync for any configured item that has not been
 synced within a configurable window (default 24 hours).  It is the
 safety net for missed or delayed webhooks.
@@ -1919,3 +1920,98 @@ TOOLS.md and fill in the fields from the skill's `SKILL.md` frontmatter:
 - `description` — the `description:` field.
 - `VAR1`, `VAR2` — the entries under
   `metadata.openclaw.requires.env` in the SKILL.md frontmatter.
+
+---
+
+## 17. Account labels & enriched spend queries
+
+### Labelling accounts
+
+Once accounts have been synced (`ledger sync --all`), retrieve the list to
+discover account IDs:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  http://127.0.0.1:8000/accounts | jq .
+```
+
+Then attach a human-readable label to any account:
+
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "Alice Joint Checking", "description": "Primary household account"}' \
+  http://127.0.0.1:8000/accounts/acc_abc123 | jq .
+```
+
+The response is the full account record with the newly written fields.
+Labels survive sync runs — the sync engine never writes to `account_labels`.
+
+To clear a label, send `null`:
+
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": null, "description": null}' \
+  http://127.0.0.1:8000/accounts/acc_abc123 | jq .
+```
+
+### Scoped spend queries
+
+**By account:**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123" | jq .
+```
+
+**By annotation category (case-insensitive):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_month&category=software" | jq .
+```
+
+**By annotation tag (case-insensitive, singular):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_30_days&tag=recurring" | jq .
+```
+
+**Combined filters (AND semantics):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123&category=software&tag=recurring" \
+  | jq .
+```
+
+All four filter keys (`owner`, `tags`, `account_id`, `category`, `tag`) are
+always present in the `filters` object of the response, even when not supplied:
+
+```json
+{
+  "filters": {
+    "owner": null,
+    "tags": [],
+    "account_id": "acc_abc123",
+    "category": "software",
+    "tag": null
+  }
+}
+```
+
+### Updating skill bundles
+
+If you need to re-push the skill bundles to your OpenClaw workspace:
+
+```bash
+./scripts/sync-skills.sh push
+```
+
+This copies the `hestia-ledger` and `athena-ledger` bundles into your
+agent workspace directories and refreshes TOOLS.md. See Section 16 for
+the full push walkthrough.
