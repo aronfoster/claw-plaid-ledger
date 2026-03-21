@@ -176,22 +176,55 @@ baking secrets into the config file on disk (openclaw/openclaw issues
 this class of bug — OpenClaw preserves the reference object on
 write-back and resolves the secret in memory at activation time only.
 
+**Restrict each skill to its intended agent** using the
+`agents.list[].skills` allowlist.  OpenClaw treats this field as an
+allowlist: only skills named in the array are eligible for that agent.
+Omitting the field entirely grants the agent access to all registered
+skills.  Without this step both agents can see both skills, which is
+undesirable — Hestia should never be offered `athena-ledger`, and vice
+versa.
+
 If `~/.openclaw/openclaw.json` does not exist yet, create it with the
-full block below.  If it already exists, merge the `skills` key into the
-existing JSON manually (or use `jq` — see the note below).
+full block below.  If it already exists, merge the `skills` key and the
+`agents.list[].skills` allowlists into the existing JSON manually (or
+use `jq` — see the note below).
 
 ```json
 {
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "skills": [
+          "athena-ledger"
+        ]
+      },
+      {
+        "id": "hestia",
+        "skills": [
+          "hestia-ledger"
+        ]
+      }
+    ]
+  },
   "skills": {
     "entries": {
       "hestia-ledger": {
-        "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" },
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "CLAW_API_SECRET"
+        },
         "env": {
           "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
         }
       },
       "athena-ledger": {
-        "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" },
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "CLAW_API_SECRET"
+        },
         "env": {
           "CLAW_LEDGER_URL": "http://127.0.0.1:8000"
         }
@@ -218,7 +251,9 @@ literal string.
 >       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}} |
 >     .skills.entries["athena-ledger"] = {
 >       apiKey: {source:"env",provider:"default",id:"CLAW_API_SECRET"},
->       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}}' \
+>       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}} |
+>     (.agents.list[] | select(.id == "main")).skills = ["athena-ledger"] |
+>     (.agents.list[] | select(.id == "hestia")).skills = ["hestia-ledger"]' \
 >    ~/.openclaw/openclaw.json > /tmp/openclaw.json \
 >    && mv /tmp/openclaw.json ~/.openclaw/openclaw.json
 > ```
