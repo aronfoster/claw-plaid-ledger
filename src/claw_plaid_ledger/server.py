@@ -620,21 +620,16 @@ def get_spend(
     }
 
 
-@app.get(
-    "/transactions/{transaction_id}",
-    dependencies=[Depends(require_bearer_token)],
-)
-def get_transaction_detail(transaction_id: str) -> dict[str, object]:
-    """Return one transaction with optional merged annotation."""
-    config = load_config()
-    with sqlite3.connect(config.db_path) as connection:
-        transaction = get_transaction(connection, transaction_id)
-        if transaction is None:
-            raise HTTPException(
-                status_code=404, detail="Transaction not found"
-            )
+def _fetch_transaction_with_annotation(
+    connection: sqlite3.Connection,
+    transaction_id: str,
+) -> dict[str, object] | None:
+    """Return a transaction merged with its annotation, or None if absent."""
+    transaction = get_transaction(connection, transaction_id)
+    if transaction is None:
+        return None
 
-        annotation = get_annotation(connection, transaction_id)
+    annotation = get_annotation(connection, transaction_id)
 
     annotation_payload: dict[str, object] | None = None
     if annotation is not None:
@@ -653,6 +648,20 @@ def get_transaction_detail(transaction_id: str) -> dict[str, object]:
     return {**transaction, "annotation": annotation_payload}
 
 
+@app.get(
+    "/transactions/{transaction_id}",
+    dependencies=[Depends(require_bearer_token)],
+)
+def get_transaction_detail(transaction_id: str) -> dict[str, object]:
+    """Return one transaction with optional merged annotation."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        result = _fetch_transaction_with_annotation(connection, transaction_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return result
+
+
 class AnnotationRequest(BaseModel):
     """Request body for PUT /annotations/{transaction_id}."""
 
@@ -667,7 +676,7 @@ class AnnotationRequest(BaseModel):
 )
 def put_annotation(
     transaction_id: str, body: AnnotationRequest
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Create or fully replace an annotation for a transaction."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
@@ -694,7 +703,11 @@ def put_annotation(
             body.category,
             body.tags,
         )
-    return {"status": "ok"}
+        result = _fetch_transaction_with_annotation(connection, transaction_id)
+    if result is None:
+        # Should not happen: we verified the transaction exists above.
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return result
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])
