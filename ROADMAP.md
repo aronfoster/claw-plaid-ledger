@@ -252,6 +252,94 @@ checks) and include a playbook entry in the relevant checklist files.
 - What risk level is acceptable for auto-remediation (config edits only vs.
   database mutations)?
 
+---
+
+### M19 — Allocation Model for Multi-Purpose Transactions
+
+**Goal:** support one Plaid transaction being budgeted across multiple categories without mutating imported transaction data.
+
+#### Problem
+
+Plaid transactions represent settlement events, not necessarily a single budgeting intent. Merchants like Amazon commonly bundle unrelated purchases into one bank transaction, which breaks one-transaction / one-category assumptions.
+
+#### Design
+
+- Keep `transactions` as immutable imported Plaid data.
+- Introduce `allocations` as the budgeting layer.
+- Each Plaid transaction will map to one or more allocation rows.
+- A normal transaction is represented by exactly one allocation.
+- A mixed-purpose transaction (for example, an Amazon order containing household, toiletries, and kids items) can have multiple allocations.
+- `annotations` remains transaction-level metadata only and no longer stores category/tag information.
+
+#### Invariants
+
+- Every categorized transaction must be represented through `allocations`.
+- Sum of allocation amounts for a transaction must equal the transaction amount.
+- Plaid-synced transaction rows remain the source of truth for imported banking data.
+- Allocation logic is independent from duplicate-account canonicalization.
+
+#### Deliverables
+
+- Add `allocations` table keyed to `plaid_transaction_id`.
+- Migrate existing categorized transactions so each one gets a single allocation row.
+- Remove category/tag ownership from `annotations`.
+- Update transaction detail flows to read/write allocations.
+- Update reporting, budgeting, and category summaries to read from allocations only.
+- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles to reflect the new `allocations`-based categorization model: remove references to category/tag fields on `annotations`, document the `allocations` table and any new API endpoints, and update query playbooks accordingly.
+
+#### Acceptance criteria
+
+- Existing categorized transactions continue to work after migration through their single allocation row.
+- A single Plaid transaction can be decomposed into multiple category allocations.
+- Reports and rollups use allocations as the sole source of budgeting truth.
+- Plaid import and sync logic does not change its ownership boundaries.
+
+---
+
+### M20 — Manual Allocation Editing
+
+**Goal:** make multi-allocation transactions usable before any receipt automation exists.
+
+#### Deliverables
+
+- Add API and/or CLI support for creating, updating, and deleting allocations for a transaction.
+- Show raw transaction totals alongside allocation totals for validation.
+- Prevent saving allocations whose amounts do not reconcile to the parent transaction.
+- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles with the new allocation editing endpoints, validation behavior, and relevant playbook entries.
+
+#### Acceptance criteria
+
+- A user can take one imported transaction and allocate it across multiple categories.
+- Validation prevents under- or over-allocation.
+- Unmodified transactions still behave as a single-allocation case.
+
+---
+
+### M21 — Receipt-Assisted Amazon Allocation
+
+**Goal:** use forwarded receipts to propose allocations for mixed Amazon purchases.
+
+#### Deliverables
+
+- Parse forwarded Amazon receipts into candidate line items.
+- Map receipt totals back to the imported Plaid transaction.
+- Convert parsed line items into proposed allocations.
+- Allow review/edit before final save when needed.
+- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles to document receipt-assisted allocation flows, any new endpoints or CLI commands introduced, and when agents should use or surface proposed allocations.
+
+#### Notes
+
+- Receipt parsing proposes allocation structure; it does not replace immutable Plaid transaction data.
+- Automation should build on the allocation model, not invent a second categorization path.
+
+#### Acceptance criteria
+
+- An Amazon transaction can be expanded into multiple allocations derived from receipt contents.
+- Users can correct allocations before committing them.
+- Final saved budgeting data still lives only in `allocations`.
+
+---
+
 ## Deferred / Unscheduled
 
 ### Split test files for LLM context window compatibility
