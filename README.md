@@ -168,9 +168,11 @@ Notes:
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; supports `tags` and optional `search_notes=true`) |
-| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `include_pending`, and `view` filters |
+| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters |
 | `GET` | `/categories` | Distinct sorted category values from all annotations |
 | `GET` | `/tags` | Distinct sorted tag values from all annotations |
+| `GET` | `/accounts` | All synced accounts with human-readable labels (`label`, `description`) from `account_labels`; use to discover account IDs |
+| `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
 | `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
 | `PUT` | `/annotations/{id}` | Upsert annotation; returns the full updated transaction record (no follow-up GET needed) |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
@@ -236,13 +238,16 @@ uv run ledger sync
 uv run ledger serve   # starts API server on http://127.0.0.1:8000
 ```
 
-## Sprint 16 closeout status
+## Sprint 17 closeout status
 
-Sprint 16 (M14) is complete: `PUT /annotations/{id}` returns the full
-transaction record, `GET /categories` and `GET /tags` expose annotation
-vocabulary, `GET /spend` accepts named range shorthands, and
-`sync-skills.sh push` auto-injects skill entries into each agent's TOOLS.md.
-See `SPRINT.md` and `RUNBOOK.md` Section 16 for details.
+Sprint 17 (M15) is complete: `GET /accounts` returns all synced accounts
+with human-readable labels from the new `account_labels` table;
+`PUT /accounts/{account_id}` upserts label data for any known account;
+`GET /spend` now accepts `account_id`, `category`, and `tag` filter
+parameters (AND-combined, case-insensitive). Both skill bundles
+(`hestia-ledger`, `athena-ledger`) document the new endpoints and updated
+`GET /spend` parameters. See `SPRINT.md` and `RUNBOOK.md` Section 17 for
+details.
 
 ## Quality defaults
 

@@ -160,6 +160,7 @@ Zero-change syncs skip the notification entirely.
 ## Key entities
 
 - `account`
+- `account_label` (agent/operator-owned; sync engine never touches this)
 - `transaction`
 - `annotation` (agent-owned; sync engine never touches this)
 - `sync_state`
@@ -189,8 +190,6 @@ Plaid account metadata. Written by the sync engine on each sync run.
 non-null means the account is suppressed in canonical views and points to the
 winning canonical Plaid account.
 
-
-
 ```sql
 CREATE TABLE IF NOT EXISTS accounts (
     id                   INTEGER PRIMARY KEY,
@@ -201,9 +200,36 @@ CREATE TABLE IF NOT EXISTS accounts (
     subtype              TEXT,
     owner                TEXT,
     item_id              TEXT,
-    canonical_account_id TEXT
+    canonical_account_id TEXT,
+    institution_name     TEXT
 );
 ```
+
+### `account_labels`
+
+Operator- and agent-authored human-readable labels for Plaid accounts.
+Keyed on `plaid_account_id`. Written via `PUT /accounts/{account_id}`;
+read by `GET /accounts` via a LEFT JOIN on `accounts`. The sync engine
+never reads from or writes to this table.
+
+```sql
+CREATE TABLE IF NOT EXISTS account_labels (
+    id               INTEGER PRIMARY KEY,
+    plaid_account_id TEXT NOT NULL UNIQUE,
+    label            TEXT,
+    description      TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `plaid_account_id` | TEXT | FK to `accounts.plaid_account_id`; unique per label row |
+| `label` | TEXT \| NULL | Short human-readable name (e.g. "Alice Joint Checking") |
+| `description` | TEXT \| NULL | Longer free-text description |
+| `created_at` | TEXT | ISO 8601 UTC; set on first insert; never changed on update |
+| `updated_at` | TEXT | ISO 8601 UTC; updated on every upsert |
 
 ### `sync_state`
 
@@ -280,6 +306,8 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window or named range shorthand with optional owner/tag filters |
 | `GET` | `/categories` | Bearer | Distinct sorted category values from all annotations |
 | `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all annotations |
+| `GET` | `/accounts` | Bearer | All synced accounts joined with label data (`label`, `description`) from `account_labels` |
+| `PUT` | `/accounts/{account_id}` | Bearer | Upsert a human-readable label for an account; returns the full account record; 404 if unknown |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
 | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation; returns the full updated transaction record |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
@@ -403,6 +431,61 @@ sorted alphabetically (case-insensitive).
 - Empty array when no annotations have tags set.
 - Requires bearer token auth.
 
+### `GET /accounts`
+
+Returns all synced accounts joined with any available label data from
+`account_labels`. A household will have ≤ ~20 accounts; no pagination
+is needed.
+
+**Response** (HTTP 200):
+
+```json
+{
+  "accounts": [
+    {
+      "account_id": "acc_abc123",
+      "plaid_name": "Plaid Checking",
+      "mask": "1234",
+      "type": "depository",
+      "subtype": "checking",
+      "institution_name": "bank-alice",
+      "owner": "alice",
+      "item_id": "item-alice-001",
+      "canonical_account_id": null,
+      "label": "Alice Joint Checking",
+      "description": "Primary joint household account"
+    }
+  ]
+}
+```
+
+- `label` and `description` are `null` for accounts without a label row.
+- `canonical_account_id` is non-null only for suppressed accounts (M9
+  source-precedence feature).
+- Empty array if no accounts have been synced yet.
+- Requires bearer token auth.
+
+### `PUT /accounts/{account_id}`
+
+Upserts label data for a given Plaid account ID.
+
+**Request body** (both fields optional):
+
+```json
+{
+  "label": "Alice Joint Checking",
+  "description": "Primary joint household account"
+}
+```
+
+Sending `null` for a field clears its value in the store.
+
+**Response** — HTTP 200 with the full account record (same shape as one
+entry from `GET /accounts`).  HTTP 404 if `account_id` does not exist in
+the `accounts` table (pre-labelling an unseen account is not supported).
+
+Requires bearer token auth.
+
 ### `GET /spend`
 
 Returns aggregate spend totals for a date window.  The window can be
@@ -417,6 +500,9 @@ supplied either as explicit ISO dates or as a named range shorthand.
 | `end_date` | `YYYY-MM-DD` | required if `range` absent | Window end (inclusive); overrides range-derived end when both supplied. |
 | `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
+| `account_id` | string | — | Restrict to a single Plaid account (use `GET /accounts` to discover IDs). |
+| `category` | string | — | Restrict to one annotation category (case-insensitive; use `GET /categories` for vocabulary). |
+| `tag` | string | — | Restrict to one annotation tag (case-insensitive, singular; use `GET /tags` for vocabulary). |
 | `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
 
@@ -440,7 +526,10 @@ supplied either as explicit ISO dates or as a named range shorthand.
   "includes_pending": false,
   "filters": {
     "owner": "alice",
-    "tags": ["groceries"]
+    "tags": ["groceries"],
+    "account_id": null,
+    "category": null,
+    "tag": null
   }
 }
 ```

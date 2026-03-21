@@ -1,4 +1,4 @@
-# Production Operations Runbook — M14 (Sprint 16 closeout)
+# Production Operations Runbook — M15 (Sprint 17 closeout)
 
 ## 1. Purpose and scope
 
@@ -7,7 +7,7 @@ This runbook covers the steps an operator needs to move
 validate the setup before the first real sync, and operate the service
 durably on a home server.
 
-**In scope (M7 + M9 + M10 + M11 + M13 + M14):**
+**In scope (M7 + M9 + M10 + M11 + M13 + M14 + M15):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -26,6 +26,7 @@ durably on a home server.
 - Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (M13, Section 14)
 - Deployment selection guide (M13, Section 15)
 - Agent skill auto-registration via `sync-skills.sh push` (M14, Section 16)
+- Account labels and enriched spend queries (M15, Section 17)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -1919,3 +1920,109 @@ TOOLS.md and fill in the fields from the skill's `SKILL.md` frontmatter:
 - `description` — the `description:` field.
 - `VAR1`, `VAR2` — the entries under
   `metadata.openclaw.requires.env` in the SKILL.md frontmatter.
+
+---
+
+## 17. Account labels & enriched spend queries (M15)
+
+### What was added in Sprint 17
+
+Sprint 17 (M15) ships three targeted improvements:
+
+| Area | Change |
+|---|---|
+| `GET /accounts` | Returns all synced accounts with label data joined from `account_labels` |
+| `PUT /accounts/{account_id}` | Upserts a `label` and `description` for an account; 404 for unknown IDs |
+| `GET /spend` | New `account_id`, `category`, and `tag` filter parameters |
+
+### Labelling accounts
+
+Once accounts have been synced (`ledger sync --all`), retrieve the list to
+discover account IDs:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  http://127.0.0.1:8000/accounts | jq .
+```
+
+Then attach a human-readable label to any account:
+
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "Alice Joint Checking", "description": "Primary household account"}' \
+  http://127.0.0.1:8000/accounts/acc_abc123 | jq .
+```
+
+The response is the full account record with the newly written fields.
+Labels survive sync runs — the sync engine never writes to `account_labels`.
+
+To clear a label, send `null`:
+
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"label": null, "description": null}' \
+  http://127.0.0.1:8000/accounts/acc_abc123 | jq .
+```
+
+### Scoped spend queries
+
+**By account:**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123" | jq .
+```
+
+**By annotation category (case-insensitive):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_month&category=software" | jq .
+```
+
+**By annotation tag (case-insensitive, singular):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_30_days&tag=recurring" | jq .
+```
+
+**Combined filters (AND semantics):**
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123&category=software&tag=recurring" \
+  | jq .
+```
+
+All four filter keys (`owner`, `tags`, `account_id`, `category`, `tag`) are
+always present in the `filters` object of the response, even when not supplied:
+
+```json
+{
+  "filters": {
+    "owner": null,
+    "tags": [],
+    "account_id": "acc_abc123",
+    "category": "software",
+    "tag": null
+  }
+}
+```
+
+### Updating skill bundles after M15
+
+If you need to re-push the updated skill bundles to your OpenClaw workspace:
+
+```bash
+./scripts/sync-skills.sh push
+```
+
+This copies the updated `hestia-ledger` and `athena-ledger` bundles
+(including M15 endpoint additions and the new spend-filter documentation)
+into your agent workspace directories and refreshes TOOLS.md. See
+Section 16 for the full push walkthrough.
