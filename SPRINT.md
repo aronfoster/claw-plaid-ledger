@@ -258,7 +258,7 @@ labelled/unlabelled case.
 
 ---
 
-## Task 2: BUG-008 + BUG-009 — GET /spend enriched filters (account_id, category, tag)
+## Task 2: BUG-008 + BUG-009 — GET /spend enriched filters (account_id, category, tag) ✅ DONE
 
 ### Background
 

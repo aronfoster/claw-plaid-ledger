@@ -586,6 +586,9 @@ class SpendListQuery(BaseModel):
     # default: exclude pending transactions unless caller opts in).
     include_pending: bool | None = None
     view: Literal["canonical", "raw"] = "canonical"
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
 
 
 _SpendRange = Literal[
@@ -676,6 +679,9 @@ def get_spend(
         tags=tuple(resolved_tags),
         include_pending=include_pending,
         canonical_only=params.view == "canonical",
+        account_id=params.account_id,
+        category=params.category,
+        tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:
         total_spend, transaction_count = query_spend(connection, spend_query)
@@ -688,6 +694,9 @@ def get_spend(
         "filters": {
             "owner": params.owner,
             "tags": resolved_tags,
+            "account_id": params.account_id,
+            "category": params.category,
+            "tag": params.tag,
         },
     }
 
