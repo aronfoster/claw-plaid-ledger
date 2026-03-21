@@ -36,6 +36,8 @@ Option B — range shorthand (interactive / quick queries):
 2. Confirm the resolved `start_date`/`end_date` in the response.
 3. Run `GET /transactions` with matching window for evidence.
 
+Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
+
 ### 2) Owner-aware rollup
 
 1. `GET /spend` with `owner`, date window, `view=canonical`.
@@ -59,6 +61,13 @@ Option B — range shorthand (interactive / quick queries):
 1. `GET /transactions` with canonical view over fixed filters.
 2. Repeat exactly with raw view.
 3. Report differences as investigation guidance, not override instructions.
+
+### 6) Account-scoped spend
+
+1. `GET /accounts` to list all known accounts with labels.
+2. Identify the target `account_id` from the response.
+3. `GET /spend` with `account_id=<id>` and desired date window.
+4. Optionally narrow further with `category` or `tag` filters.
 
 ## Failure handling
 

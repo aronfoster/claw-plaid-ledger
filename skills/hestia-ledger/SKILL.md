@@ -69,6 +69,8 @@ Hestia may call only:
 4. `GET /tags` — discover existing tag vocabulary before writing
 5. `PUT /annotations/{transaction_id}` — returns the full transaction record
    (no follow-up `GET /transactions/{id}` needed to confirm the written state)
+6. `GET /accounts` — retrieve all known accounts with human-readable labels
+7. `PUT /accounts/{account_id}` — write or update a label for an account
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
@@ -86,6 +88,15 @@ For each run:
 6. If confidence is low, annotate with `needs-athena-review` and continue.
 
 ## API guardrails
+
+### Account identity
+
+- Call `GET /accounts` when account identity context is needed (e.g. to
+  map an opaque Plaid account ID to a human-readable label for annotation
+  purposes).
+- Call `PUT /accounts/{account_id}` to apply a label when the operator has
+  provided one. Only label accounts that already exist in the `accounts` table
+  (the endpoint returns 404 for unknown IDs).
 
 ### Vocabulary hygiene
 
