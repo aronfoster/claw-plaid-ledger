@@ -1,4 +1,4 @@
-# Production Operations Runbook — M13 (Sprint 15 closeout)
+# Production Operations Runbook — M14 (Sprint 16 closeout)
 
 ## 1. Purpose and scope
 
@@ -7,7 +7,7 @@ This runbook covers the steps an operator needs to move
 validate the setup before the first real sync, and operate the service
 durably on a home server.
 
-**In scope (M7 + M9 + M10 + M11 + M13):**
+**In scope (M7 + M9 + M10 + M11 + M13 + M14):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -25,6 +25,7 @@ durably on a home server.
 - Container deployment via Docker Compose or Proxmox LXC (M13, Section 13)
 - Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (M13, Section 14)
 - Deployment selection guide (M13, Section 15)
+- Agent skill auto-registration via `sync-skills.sh push` (M14, Section 16)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference

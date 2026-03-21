@@ -135,33 +135,29 @@ for home-server operators:
 - RUNBOOK.md Section 15 — deployment selection guide with decision tables for
   deployment method and auth hardening pattern.
 
+### M14 — API quality-of-life & skill discovery (Sprint 16)
+
+Sprint 16 is complete. Four focused improvements from the first production run
+of the two-agent household:
+
+- **BUG-006** — `PUT /annotations/{transaction_id}` now returns the full
+  updated transaction record (same shape as `GET /transactions/{id}`),
+  eliminating the need for a follow-up GET.
+- **BUG-007** — `GET /categories` and `GET /tags` return the distinct, sorted
+  vocabulary of category and tag values already present in annotations, giving
+  agents a consistent vocabulary to annotate against.
+- **BUG-010** — `GET /spend` accepts an optional `range` parameter
+  (`last_month`, `this_month`, `last_30_days`, `last_7_days`) so callers do
+  not have to compute and format date pairs for common queries; resolved dates
+  are always surfaced in the response.
+- **BUG-004** — `sync-skills.sh push` now idempotently injects a `## Skills`
+  block (from SKILL.md frontmatter) into each target agent's `TOOLS.md` after
+  copying skill files; RUNBOOK.md Section 16 documents the workflow and manual
+  fallback.
+
 ---
 
 ## Upcoming Milestones
-
-### M14 — API quality-of-life & skill discovery
-
-**Focus:** Ship quick wins from real-world OpenClaw usage with no schema changes.
-
-**Goal:** Tighten API ergonomics and fix agent skill visibility gaps surfaced
-during the first production run.
-
-**Scope**
-
-- **BUG-006** — `PUT /annotations/{transaction_id}` returns the full updated
-  transaction record instead of `{"status": "ok"}`, eliminating the need for a
-  follow-up GET.
-- **BUG-007** — `GET /categories` and `GET /tags` enumerate distinct values
-  already present in annotations, giving agents a consistent vocabulary to
-  annotate against.
-- **BUG-010** — `GET /spend` accepts an optional `range` parameter
-  (`last_month`, `this_month`, `last_30_days`, `last_7_days`) so callers do not
-  have to compute and format date pairs for common queries.
-- **BUG-004** — Agent skill auto-discovery: add a RUNBOOK step (and optionally
-  extend `sync-skills.sh`) so skills pushed to an agent's skills directory are
-  registered in that agent's `TOOLS.md` automatically.
-
----
 
 ### M15 — Account labels & enriched spend queries
 

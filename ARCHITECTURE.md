@@ -2,6 +2,26 @@
 
 ## Current milestone focus
 
+M14 (API quality-of-life & skill discovery) is complete. Sprint 16 shipped
+four focused improvements surfaced during the first production run of the
+two-agent household:
+
+- `PUT /annotations/{transaction_id}` — now returns the full updated
+  transaction record (same shape as `GET /transactions/{id}`) instead of
+  `{"status": "ok"}`, eliminating the need for a follow-up GET (BUG-006)
+- `GET /categories` / `GET /tags` — two new read-only endpoints that return
+  the distinct, sorted vocabulary of category and tag values already present
+  in the annotations table, giving agents a consistent vocabulary to annotate
+  against (BUG-007)
+- `GET /spend?range=<shorthand>` — optional `range` parameter
+  (`last_month`, `this_month`, `last_30_days`, `last_7_days`) so callers do
+  not have to compute and format date pairs for common queries; resolved
+  dates are always surfaced in the response (BUG-010)
+- `scripts/sync-skills.sh push` — now idempotently injects a `## Skills`
+  block into each target agent's `TOOLS.md` after copying skill files, using
+  SKILL.md frontmatter as the source; RUNBOOK.md Section 16 documents the
+  workflow and manual fallback (BUG-004)
+
 M13 (hardened deployment & local security) is complete. Sprint 15 shipped
 production-grade deployment primitives for home-server operators:
 
@@ -432,9 +452,11 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/health` | None | Service liveness check; returns `{"status": "ok"}` |
 | `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list (supports tags and optional note search) |
-| `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window with optional owner/tag filters |
+| `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window or named range shorthand with optional owner/tag filters |
+| `GET` | `/categories` | Bearer | Distinct sorted category values from all annotations |
+| `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all annotations |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
-| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
+| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation; returns the full updated transaction record |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
 
@@ -528,20 +550,59 @@ Returns a paginated, filtered list of transactions.
 - Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
 - `date` is `COALESCE(posted_date, authorized_date)`.
 
+### `GET /categories`
+
+Returns the distinct set of non-null `category` values present across all
+annotation rows, sorted alphabetically (case-insensitive).
+
+**Response** (HTTP 200):
+
+```json
+{"categories": ["food", "software", "transport", "utilities"]}
+```
+
+- Empty array when no annotations have a category set.
+- Requires bearer token auth.
+
+### `GET /tags`
+
+Returns the distinct set of tag values unnested from all annotation rows,
+sorted alphabetically (case-insensitive).
+
+**Response** (HTTP 200):
+
+```json
+{"tags": ["discretionary", "needs-athena-review", "recurring", "subscription"]}
+```
+
+- Empty array when no annotations have tags set.
+- Requires bearer token auth.
+
 ### `GET /spend`
 
-Returns aggregate spend totals for a required date window.
+Returns aggregate spend totals for a date window.  The window can be
+supplied either as explicit ISO dates or as a named range shorthand.
 
 **Query parameters:**
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `start_date` | `YYYY-MM-DD` | required | Window start (inclusive). Missing or invalid values return HTTP 422. |
-| `end_date` | `YYYY-MM-DD` | required | Window end (inclusive). Missing or invalid values return HTTP 422. |
+| `range` | `last_month` \| `this_month` \| `last_30_days` \| `last_7_days` | — | Named range shorthand; derives `start_date`/`end_date` from server local time. |
+| `start_date` | `YYYY-MM-DD` | required if `range` absent | Window start (inclusive); overrides range-derived start when both supplied. |
+| `end_date` | `YYYY-MM-DD` | required if `range` absent | Window end (inclusive); overrides range-derived end when both supplied. |
 | `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
 | `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
+
+**Range shorthand date resolution (server local time):**
+
+| `range` value | `start_date` | `end_date` |
+|---|---|---|
+| `this_month` | First day of current month | Today |
+| `last_month` | First day of previous calendar month | Last day of previous calendar month |
+| `last_30_days` | Today − 30 days (inclusive) | Today |
+| `last_7_days` | Today − 7 days (inclusive) | Today |
 
 **Response** (HTTP 200):
 
@@ -619,8 +680,12 @@ the annotation row. Omitted fields are stored as `null`.
 - `tags` must be a JSON array of strings or `null`.
 - Returns HTTP 404 if `transaction_id` does not exist in `transactions`.
   Agents cannot annotate phantom transactions.
-- Returns HTTP 200 `{"status": "ok"}` on successful create or update.
+- Returns HTTP 200 with the full transaction record (same shape as
+  `GET /transactions/{transaction_id}`) on successful create or update.
+  The `annotation` block in the response always reflects the values just
+  written — it is never `null` in a successful PUT response.
 - `created_at` is preserved on updates; `updated_at` is refreshed.
+- No follow-up GET is needed to confirm the write.
 
 ## OpenAPI / SKILL definition
 

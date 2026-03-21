@@ -186,9 +186,11 @@ Notes:
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; supports `tags` and optional `search_notes=true`) |
-| `GET` | `/spend` | Aggregate spend total/count for a required date window with optional `owner`, `tags`, `include_pending`, and `view` filters |
+| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `include_pending`, and `view` filters |
+| `GET` | `/categories` | Distinct sorted category values from all annotations |
+| `GET` | `/tags` | Distinct sorted tag values from all annotations |
 | `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
-| `PUT` | `/annotations/{id}` | Upsert annotation for a transaction |
+| `PUT` | `/annotations/{id}` | Upsert annotation; returns the full updated transaction record (no follow-up GET needed) |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |
 
@@ -252,11 +254,13 @@ uv run ledger sync
 uv run ledger serve   # starts API server on http://127.0.0.1:8000
 ```
 
-## Sprint 14 closeout status
+## Sprint 16 closeout status
 
-Sprint 14 is complete: Hestia/Athena skill bundles are split, runtime wake flow
-is Hestia-first, and operator docs include two-agent bootstrap and scheduling
-guidance. See `SPRINT.md` closeout for shipped/deferred details.
+Sprint 16 (M14) is complete: `PUT /annotations/{id}` returns the full
+transaction record, `GET /categories` and `GET /tags` expose annotation
+vocabulary, `GET /spend` accepts named range shorthands, and
+`sync-skills.sh push` auto-injects skill entries into each agent's TOOLS.md.
+See `SPRINT.md` and `RUNBOOK.md` Section 16 for details.
 
 ## Quality defaults
 
