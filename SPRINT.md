@@ -25,7 +25,7 @@ bespoke date arithmetic — tedious for agents and operators alike. (BUG-011)
 
 ---
 
-## Task 1: BUG-011 — GET /spend/trends + skill doc updates
+## Task 1: BUG-011 — GET /spend/trends + skill doc updates ✅ DONE
 
 ### Background
 
