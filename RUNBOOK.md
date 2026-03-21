@@ -128,16 +128,16 @@ Canonical behavior reminder:
 
 ---
 
-## 1c. Two-agent operations handoff (Sprint 14 closeout)
+## 1c. Two-agent OpenClaw setup
 
-Install both skill bundles into the agent-specific workspace directories:
+Push both skill bundles into the agent workspace directories and register
+them in each agent's `TOOLS.md` in one step:
 
 ```bash
-mkdir -p ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger
-mkdir -p ~/.openclaw/workspace/agents/athena/skills/athena-ledger
-cp -R skills/hestia-ledger/* ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger/
-cp -R skills/athena-ledger/* ~/.openclaw/workspace/agents/athena/skills/athena-ledger/
+./scripts/sync-skills.sh push
 ```
+
+See Section 16 for what this does and how to verify it.
 
 Add the ledger credentials to `~/.openclaw/.env` so that OpenClaw loads
 them automatically at startup — no flags or manual exports required:
