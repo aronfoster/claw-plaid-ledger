@@ -1845,3 +1845,76 @@ webhook IP allowlist.  See Section 9.6 for allowlist configuration details.
 | Production preflight checklist | Section 3 |
 | DuckDNS stable webhook URL | Section 10 |
 | Scheduled sync fallback | Section 11 |
+| Skill registration (sync-skills push) | Section 16 |
+
+---
+
+## 16. Skill registration
+
+### What `sync-skills.sh push` does end-to-end
+
+Running `./scripts/sync-skills.sh push` performs two actions for each skill:
+
+1. **Copies skill files** — uses `rsync` to mirror the skill directory from
+   this repo into the agent's openclaw workspace:
+   ```
+   skills/<skill-name>/  →  ~/.openclaw/workspace/agents/<agent>/skills/<skill-name>/
+   ```
+
+2. **Updates the agent's `TOOLS.md`** — reads the skill's `SKILL.md`
+   frontmatter (`name`, `description`, and
+   `metadata.openclaw.requires.env`) and upserts a `## Skills` block in
+   `~/.openclaw/workspace/agents/<agent>/TOOLS.md` between sentinel markers:
+   ```
+   <!-- sync-skills-start -->
+   ...
+   <!-- sync-skills-end -->
+   ```
+   Content outside the sentinel markers is never modified. The operation is
+   **idempotent**: running push twice produces the same TOOLS.md.
+
+### Verify the injection worked
+
+After running push, inspect the target agent's TOOLS.md:
+
+```bash
+cat ~/.openclaw/workspace/agents/hestia/TOOLS.md
+cat ~/.openclaw/workspace/agents/athena/TOOLS.md
+```
+
+Confirm that a `## Skills` section is present and contains the correct
+`### <skill-name>` entry with matching description, skill path, and required
+environment variable names.
+
+### Re-run push after updating a skill definition
+
+Push is safe to re-run at any time. After editing a skill's `SKILL.md`
+frontmatter, simply run:
+
+```bash
+./scripts/sync-skills.sh push
+```
+
+The script will overwrite the existing entry between the sentinel markers
+with the updated values. No manual TOOLS.md editing is required.
+
+### Manual fallback
+
+If `sync-skills.sh` is unavailable, copy the template below into the agent's
+TOOLS.md and fill in the fields from the skill's `SKILL.md` frontmatter:
+
+```markdown
+## Skills (managed by sync-skills.sh — do not edit between markers)
+
+<!-- sync-skills-start -->
+### <name>
+- **Description:** <description from SKILL.md>
+- **Skill path:** ~/.openclaw/workspace/agents/<agent>/skills/<name>/SKILL.md
+- **Required env:** `VAR1`, `VAR2`
+<!-- sync-skills-end -->
+```
+
+- `name` — the `name:` field in the SKILL.md YAML frontmatter.
+- `description` — the `description:` field.
+- `VAR1`, `VAR2` — the entries under
+  `metadata.openclaw.requires.env` in the SKILL.md frontmatter.
