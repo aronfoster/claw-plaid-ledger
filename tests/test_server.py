@@ -3180,9 +3180,7 @@ class TestWebhookIPAllowlistMiddleware:
                 },
             )
 
-        assert any(
-            "webhook IP blocked" in r.message for r in caplog.records
-        )
+        assert any("webhook IP blocked" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
