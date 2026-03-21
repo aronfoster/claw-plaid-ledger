@@ -230,27 +230,27 @@ checks) and include a playbook entry in the relevant checklist files.
 
 ---
 
-### M18 — `doctor` auto-remediation
+### M18 — Split test files
 
-**Focus:** Reduce manual maintenance and recovery toil.
+**Focus:** Break up unwieldy test modules for LLM context window compatibility
+and general maintainability.
 
-**Goal:** Expand diagnostics into safe, explicit remediation workflows.
+**Goal:** No single test file exceeds ~2 000 lines; each module covers a
+focused slice of the surface area; shared fixtures live in `conftest.py`.
 
 **Scope**
 
-- Add `ledger doctor --fix` style flows for common recoverable issues:
-  - Missing/incomplete `items.toml` bootstrap
-  - Stale or pending migrations
-  - File permission and path readiness problems
-- Add pre-sync health checks before `sync --all` with clear, actionable errors.
-- Preserve dry-run and audit output so operators can review planned fixes.
-
-**Design questions for PM/user**
-
-- Should auto-fix be interactive by default, or non-interactive with
-  `--yes/--force` semantics?
-- What risk level is acceptable for auto-remediation (config edits only vs.
-  database mutations)?
+- Split `tests/test_server.py` into focused modules:
+  - `test_server_transactions.py`
+  - `test_server_annotations.py`
+  - `test_server_spend.py`
+  - `test_server_webhooks.py`
+  - (additional splits as line counts warrant)
+- Move shared fixtures and helpers into `tests/conftest.py`.
+- Audit other test files (e.g. `test_cli.py`, `test_sync.py`) and split any
+  that are approaching the threshold.
+- Confirm the full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`)
+  passes after the reorganisation with no test regressions.
 
 ---
 
@@ -342,15 +342,27 @@ Plaid transactions represent settlement events, not necessarily a single budgeti
 
 ## Deferred / Unscheduled
 
-### Split test files for LLM context window compatibility
+### `doctor` auto-remediation
 
-`tests/test_server.py` has grown large enough that it no longer fits in a
-single LLM context window, making it difficult for AI coding agents to read
-and reason about the full test suite in one pass. Break it into focused
-modules (`test_server_transactions.py`, `test_server_annotations.py`,
-`test_server_spend.py`, `test_server_webhooks.py`, etc.) with shared
-fixtures moved to `conftest.py`. Revisit when the file exceeds ~2 000 lines
-or when agent context pressure becomes a recurring problem.
+**Focus:** Reduce manual maintenance and recovery toil.
+
+**Goal:** Expand diagnostics into safe, explicit remediation workflows.
+
+**Scope**
+
+- Add `ledger doctor --fix` style flows for common recoverable issues:
+  - Missing/incomplete `items.toml` bootstrap
+  - Stale or pending migrations
+  - File permission and path readiness problems
+- Add pre-sync health checks before `sync --all` with clear, actionable errors.
+- Preserve dry-run and audit output so operators can review planned fixes.
+
+**Design questions for PM/user**
+
+- Should auto-fix be interactive by default, or non-interactive with
+  `--yes/--force` semantics?
+- What risk level is acceptable for auto-remediation (config edits only vs.
+  database mutations)?
 
 ### Markdown export
 
