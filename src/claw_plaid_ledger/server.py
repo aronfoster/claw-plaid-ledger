@@ -41,6 +41,8 @@ from claw_plaid_ledger.db import (
     TransactionQuery,
     get_all_sync_state,
     get_annotation,
+    get_distinct_categories,
+    get_distinct_tags,
     get_transaction,
     query_spend,
     query_transactions,
@@ -708,6 +710,24 @@ def put_annotation(
         # Should not happen: we verified the transaction exists above.
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
+
+
+@app.get("/categories", dependencies=[Depends(require_bearer_token)])
+def get_categories() -> dict[str, object]:
+    """Return distinct non-null category values from annotations, sorted."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        categories = get_distinct_categories(connection)
+    return {"categories": categories}
+
+
+@app.get("/tags", dependencies=[Depends(require_bearer_token)])
+def get_tags() -> dict[str, object]:
+    """Return distinct tag values unnested from all annotations, sorted."""
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        tags = get_distinct_tags(connection)
+    return {"tags": tags}
 
 
 @app.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])

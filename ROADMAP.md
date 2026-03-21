@@ -246,6 +246,16 @@ errors without tailing logs directly, enabling proactive alerting to users.
 
 ## Deferred / Unscheduled
 
+### Split test files for LLM context window compatibility
+
+`tests/test_server.py` has grown large enough that it no longer fits in a
+single LLM context window, making it difficult for AI coding agents to read
+and reason about the full test suite in one pass. Break it into focused
+modules (`test_server_transactions.py`, `test_server_annotations.py`,
+`test_server_spend.py`, `test_server_webhooks.py`, etc.) with shared
+fixtures moved to `conftest.py`. Revisit when the file exceeds ~2 000 lines
+or when agent context pressure becomes a recurring problem.
+
 ### Markdown export
 
 Human-readable transaction summaries written to the OpenClaw workspace.
