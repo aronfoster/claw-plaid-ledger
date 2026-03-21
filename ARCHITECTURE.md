@@ -87,7 +87,7 @@ certificate generation, Caddy/nginx configuration, and cert rotation.
 
 ## Data flow
 
-### Two-agent routing sequence (Sprint 14)
+### Two-agent routing sequence
 
 1. **Plaid sync event**: `SYNC_UPDATES_AVAILABLE` arrives and starts a
    background sync for the mapped item.
@@ -108,7 +108,7 @@ items.toml ─┐
             │                    -> [card-alice] run_sync -> SQLite
 PLAID_ENV  ─┘
 
-Webhook-first ingestion (M10):
+Webhook-first ingestion:
 
 POST /webhooks/plaid (SYNC_UPDATES_AVAILABLE)
   └─ extract item_id from payload
@@ -116,7 +116,7 @@ POST /webhooks/plaid (SYNC_UPDATES_AVAILABLE)
        ├─ item_id not in items.toml ────> WARNING + _background_sync() [legacy]
        └─ no item_id / no items.toml ──> _background_sync() [legacy]
 
-Scheduled sync fallback (M10, opt-in):
+Scheduled sync fallback (opt-in):
 
 _scheduled_sync_loop (every 60 min)
   └─ _check_and_sync_overdue_items
@@ -128,7 +128,7 @@ _scheduled_sync_loop (every 60 min)
        └─ no items.toml ──────> single-item PLAID_ACCESS_TOKEN fallback
 ```
 
-### Operator handoff (Sprint 14 closeout)
+### Operator handoff
 
 - **Skill install source**: `skills/hestia-ledger/` and `skills/athena-ledger/`
   are copy-ready bundles for downstream agent runtimes.
@@ -460,8 +460,8 @@ is needed.
 ```
 
 - `label` and `description` are `null` for accounts without a label row.
-- `canonical_account_id` is non-null only for suppressed accounts (M9
-  source-precedence feature).
+- `canonical_account_id` is non-null only for suppressed accounts (source
+  precedence feature).
 - Empty array if no accounts have been synced yet.
 - Requires bearer token auth.
 
@@ -607,8 +607,8 @@ FastAPI auto-generates a machine-readable OpenAPI spec at `GET /openapi.json`
 and a Swagger UI at `GET /docs`. Both are served without authentication
 (consistent with the local-only security posture).
 
-`GET /openapi.json` is the **canonical machine-readable spec** and is intended
-to seed the OpenClaw SKILL definition (M11). Any agent that needs to
+`GET /openapi.json` is the **canonical machine-readable spec** intended
+to seed the OpenClaw SKILL definition. Any agent that needs to
 introspect the available API surface should fetch this endpoint rather than
 reading the source code.
 
@@ -679,7 +679,7 @@ Authorization: Bearer <OPENCLAW_HOOKS_TOKEN>
 
 ### Purpose
 
-M6 introduces multi-item sync so one command can process every Plaid item in a
+Multi-item sync allows one command to process every Plaid item in a
 household (for example personal bank, shared credit card, partner accounts)
 without manually editing environment variables between runs.
 
@@ -811,18 +811,18 @@ src/claw_plaid_ledger/
   config.py
   db.py
   items_config.py   # multi-item items.toml loader
-  link_server.py    # local HTTP server for Plaid Link flow (M8)
+  link_server.py    # local HTTP server for Plaid Link flow
   notifier.py
   plaid_adapter.py
   plaid_models.py
-  preflight.py      # production preflight check logic (M7)
+  preflight.py      # production preflight check logic
   schema.sql
-  server.py         # webhook routing, scheduled sync loop (M10)
+  server.py         # webhook routing, scheduled sync loop
   sync_engine.py
   webhook_auth.py
 
 scripts/
-  duckdns-update.sh # DuckDNS IP-update script for cron/systemd (M10)
+  duckdns-update.sh # DuckDNS IP-update script for cron/systemd
   install-hooks.sh
 
 tests/
@@ -838,14 +838,14 @@ tests/
   test_sync_engine.py
   test_webhook_auth.py
 
-items.toml.example  # household configuration example (M8)
+items.toml.example  # household configuration example
 pyproject.toml
 README.md
 AGENTS.md
 ARCHITECTURE.md
 BUGS.md
 ROADMAP.md
-RUNBOOK.md          # production operations runbook (M7+, M10)
+RUNBOOK.md          # production operations runbook
 SPRINT.md
 VISION.md
 ```

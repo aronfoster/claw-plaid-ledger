@@ -26,7 +26,7 @@ uv run --locked ruff check .
 uv run --locked mypy .
 ```
 
-## Two-agent skill bundle quickstart (Sprint 14)
+## Two-agent skill bundle quickstart
 
 Install the split skill bundles into your Codex/OpenClaw skills directory:
 
@@ -238,16 +238,6 @@ uv run ledger sync
 uv run ledger serve   # starts API server on http://127.0.0.1:8000
 ```
 
-## Sprint 17 closeout status
-
-Sprint 17 (M15) is complete: `GET /accounts` returns all synced accounts
-with human-readable labels from the new `account_labels` table;
-`PUT /accounts/{account_id}` upserts label data for any known account;
-`GET /spend` now accepts `account_id`, `category`, and `tag` filter
-parameters (AND-combined, case-insensitive). Both skill bundles
-(`hestia-ledger`, `athena-ledger`) document the new endpoints and updated
-`GET /spend` parameters. See `SPRINT.md` and `RUNBOOK.md` Section 17 for
-details.
 
 ## Quality defaults
 
