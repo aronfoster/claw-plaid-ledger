@@ -6,17 +6,35 @@ Use this sheet for deterministic analysis and reporting workflows.
 
 - Default to `view=canonical`.
 - Pair any `view=raw` call with an identical canonical query.
-- Always set explicit `start_date` + `end_date`.
+- Always set explicit `start_date` + `end_date`, or use a `range` shorthand.
 - Paginate `GET /transactions` deterministically.
 - Label partial coverage when pagination/calls fail.
+
+## Vocabulary discovery
+
+Before annotating, retrieve the current vocabulary:
+
+- `GET /categories` — returns sorted list of distinct category values.
+- `GET /tags` — returns sorted flat list of distinct tag values.
+
+Use these to avoid creating near-duplicate labels across runs.
 
 ## Intent playbooks
 
 ### 1) Period spend summary
 
-1. `GET /spend` with explicit date window + `view=canonical`.
+Option A — explicit window:
+
+1. `GET /spend` with `start_date`, `end_date`, `view=canonical`.
 2. `GET /transactions` with same window for evidence.
 3. Separate posted vs pending in conclusions.
+
+Option B — range shorthand (interactive / quick queries):
+
+1. `GET /spend?range=last_month` (or `this_month`, `last_30_days`,
+   `last_7_days`).
+2. Confirm the resolved `start_date`/`end_date` in the response.
+3. Run `GET /transactions` with matching window for evidence.
 
 ### 2) Owner-aware rollup
 

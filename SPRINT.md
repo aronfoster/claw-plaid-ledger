@@ -177,7 +177,7 @@ the HTTP wiring in `server.py`.
 
 ---
 
-## Task 3: BUG-010 — GET /spend relative date range shorthand
+## Task 3: BUG-010 — GET /spend relative date range shorthand ✅ DONE
 
 ### Background
 
@@ -376,6 +376,10 @@ as a new top-level section if one does not exist) covering:
 - Content outside the sentinel markers is untouched.
 - RUNBOOK.md documents the workflow and the manual fallback template.
 - Quality gate passes.
+- **Skill doc update:** if this task changes any agent-visible behavior
+  (e.g. new fields in SKILL.md frontmatter that agents must know about),
+  update `skills/athena-ledger/SKILL.md` and `skills/hestia-ledger/SKILL.md`
+  and their companion files accordingly.
 
 ---
 

@@ -182,6 +182,15 @@ and operators; allow spend to be scoped by account, category, and tag.
   parameters (AND-combined when both supplied, case-insensitive, consistent with
   the vocabulary from `GET /categories` and `GET /tags`).
 
+**Skill doc updates required:** Every new or changed endpoint that agents may
+call must be reflected in `skills/athena-ledger/` and `skills/hestia-ledger/`
+before the milestone is considered done. Specifically:
+
+- Add `GET /accounts` and `PUT /accounts/{account_id}` to the approved API
+  calls lists and any relevant playbooks in both skills.
+- Update `GET /spend` documentation in `athena-ledger` to describe the new
+  `account_id`, `category`, and `tag` filter parameters.
+
 ---
 
 ### M16 — Spend trends
@@ -199,6 +208,12 @@ replacing multiple `GET /spend` calls and client-side summation.
   parameter (default 6). Supports the same filter set as `GET /spend`
   (`owner`, `tags`, `category`, `account_id`, `view`, `include_pending`) for
   direct comparability.
+
+**Skill doc updates required:** Add `GET /spend/trends` to the approved API
+calls list in `skills/athena-ledger/SKILL.md` and document its usage in
+`skills/athena-ledger/checklists/query_playbooks.md` (e.g. as a new
+"Month-over-month trends" playbook entry). Update Hestia's skill docs if
+Hestia is ever permitted to call this endpoint.
 
 ---
 
@@ -219,6 +234,12 @@ errors without tailing logs directly, enabling proactive alerting to users.
 - Structured logging layer writes to the new table on WARN/ERROR so no manual
   instrumentation is required at each call site.
 - `doctor` reports whether error-log persistence is configured and healthy.
+
+**Skill doc updates required:** Add the new endpoint to the approved API calls
+lists in both `skills/athena-ledger/SKILL.md` and
+`skills/hestia-ledger/SKILL.md`. Document when each agent should poll it
+(e.g. Athena for proactive user-facing alerting; Hestia for pre-run health
+checks) and include a playbook entry in the relevant checklist files.
 
 ---
 

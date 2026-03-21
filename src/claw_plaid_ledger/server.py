@@ -571,11 +571,12 @@ class SpendListQuery(BaseModel):
 
     List-typed params (tags) and bool params (include_pending) are declared
     separately on the endpoint to satisfy FastAPI's multi-value and
-    FBT001/FBT002 constraints.
+    FBT001/FBT002 constraints.  ``start_date`` and ``end_date`` are optional
+    because they may be derived from the ``range`` shorthand parameter.
     """
 
-    start_date: date
-    end_date: date
+    start_date: date | None = None
+    end_date: date | None = None
     owner: str | None = None
     # bool | None avoids FBT001/FBT002; None is treated as False (conservative
     # default: exclude pending transactions unless caller opts in).
@@ -583,10 +584,66 @@ class SpendListQuery(BaseModel):
     view: Literal["canonical", "raw"] = "canonical"
 
 
+_SpendRange = Literal[
+    "last_month", "this_month", "last_30_days", "last_7_days"
+]
+
+
+def _today() -> date:
+    """Return the current local date. Extracted for testability."""
+    return datetime.now(tz=UTC).astimezone().date()
+
+
+def _resolve_spend_dates(
+    date_range: _SpendRange | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date, date]:
+    """
+    Resolve ``start_date`` and ``end_date`` from a range shorthand.
+
+    If *date_range* is supplied, derive both dates from it using server local
+    time, then apply any explicit ``start_date``/``end_date`` overrides.
+    If *date_range* is absent, both ``start_date`` and ``end_date`` must be
+    present; otherwise raises HTTP 422.
+    """
+    if date_range is not None:
+        today = _today()
+        if date_range == "this_month":
+            derived_start: date = today.replace(day=1)
+            derived_end: date = today
+        elif date_range == "last_month":
+            first_this_month = today.replace(day=1)
+            last_month_end = first_this_month - timedelta(days=1)
+            derived_start = last_month_end.replace(day=1)
+            derived_end = last_month_end
+        elif date_range == "last_30_days":
+            derived_start = today - timedelta(days=30)
+            derived_end = today
+        else:  # last_7_days
+            derived_start = today - timedelta(days=7)
+            derived_end = today
+        resolved_start = (
+            start_date if start_date is not None else derived_start
+        )
+        resolved_end = end_date if end_date is not None else derived_end
+        return resolved_start, resolved_end
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provide either 'range' or both 'start_date' and 'end_date'."
+            ),
+        )
+    return start_date, end_date
+
+
 @app.get("/spend", dependencies=[Depends(require_bearer_token)])
 def get_spend(
     params: Annotated[SpendListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
     """
     Return aggregate spend totals for a date window with optional filters.
@@ -595,13 +652,22 @@ def get_spend(
     are debits (money leaving the account); negative amounts are credits —
     the sum is returned as-is per Plaid conventions.  Pass ``tags`` multiple
     times to require all listed tags (AND semantics).
+
+    ``range`` is an optional shorthand for common date windows
+    (``this_month``, ``last_month``, ``last_30_days``, ``last_7_days``).
+    Explicit ``start_date`` / ``end_date`` override the range-derived dates
+    when both are provided together.  If ``range`` is absent, both
+    ``start_date`` and ``end_date`` are required.
     """
+    resolved_start, resolved_end = _resolve_spend_dates(
+        date_range, params.start_date, params.end_date
+    )
     resolved_tags: list[str] = tags or []
     include_pending = params.include_pending is True
     config = load_config()
     spend_query = SpendQuery(
-        start_date=params.start_date.isoformat(),
-        end_date=params.end_date.isoformat(),
+        start_date=resolved_start.isoformat(),
+        end_date=resolved_end.isoformat(),
         owner=params.owner,
         tags=tuple(resolved_tags),
         include_pending=include_pending,
@@ -610,8 +676,8 @@ def get_spend(
     with sqlite3.connect(config.db_path) as connection:
         total_spend, transaction_count = query_spend(connection, spend_query)
     return {
-        "start_date": params.start_date.isoformat(),
-        "end_date": params.end_date.isoformat(),
+        "start_date": resolved_start.isoformat(),
+        "end_date": resolved_end.isoformat(),
         "total_spend": total_spend,
         "transaction_count": transaction_count,
         "includes_pending": include_pending,

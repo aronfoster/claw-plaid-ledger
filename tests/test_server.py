@@ -10,7 +10,7 @@ import ipaddress
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -2327,6 +2327,204 @@ class TestGetSpendEndpoint:
         assert response.json()["total_spend"] == pytest.approx(
             _SPEND_JAN_CANONICAL_TOTAL
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /spend — range shorthand parameter (Task 3 / BUG-010)
+# ---------------------------------------------------------------------------
+
+# Fixed "today" used in all date-range tests: 2026-03-21 (a Saturday)
+_RANGE_TODAY = "2026-03-21"
+# Derived windows relative to _RANGE_TODAY:
+#   this_month:   2026-03-01 .. 2026-03-21
+#   last_month:   2026-02-01 .. 2026-02-28  (Feb 2026 is not a leap year)
+#   last_30_days: 2025-12-21 .. 2026-03-21  (30 days back from 2026-03-21)
+#   last_7_days:  2026-03-14 .. 2026-03-21
+
+
+def _patch_today(monkeypatch: pytest.MonkeyPatch, isodate: str) -> None:
+    """Patch claw_plaid_ledger.server._today to return *isodate*."""
+    fixed = date.fromisoformat(isodate)
+    monkeypatch.setattr("claw_plaid_ledger.server._today", lambda: fixed)
+
+
+class TestGetSpendRangeParam:
+    """Tests for the ``range`` shorthand query parameter on GET /spend."""
+
+    def _setup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        _patch_today(monkeypatch, _RANGE_TODAY)
+
+    def test_this_month_returns_correct_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=this_month resolves to first-of-month .. today."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "this_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-03-01"
+        assert body["end_date"] == _RANGE_TODAY
+
+    def test_last_month_returns_correct_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_month resolves to first..last day of prior month."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "last_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-02-01"
+        assert body["end_date"] == "2026-02-28"
+
+    def test_last_month_january_crosses_year_boundary(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_month in January resolves to December of prior year."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        _patch_today(monkeypatch, "2026-01-15")
+
+        response = client.get(
+            "/spend",
+            params={"range": "last_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2025-12-01"
+        assert body["end_date"] == "2025-12-31"
+
+    def test_last_30_days_returns_correct_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_30_days returns today-30 .. today."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "last_30_days"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-02-19"
+        assert body["end_date"] == _RANGE_TODAY
+
+    def test_last_7_days_returns_correct_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_7_days returns today-7 .. today."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "last_7_days"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-03-14"
+        assert body["end_date"] == _RANGE_TODAY
+
+    def test_explicit_start_date_overrides_range(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Explicit start_date overrides the range-derived start date."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "this_month", "start_date": "2026-03-10"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-03-10"
+        assert body["end_date"] == _RANGE_TODAY
+
+    def test_explicit_end_date_overrides_range(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Explicit end_date overrides the range-derived end date."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "this_month", "end_date": "2026-03-15"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2026-03-01"
+        assert body["end_date"] == "2026-03-15"
+
+    def test_no_range_no_dates_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Omitting both range and start_date/end_date returns HTTP 422."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_unrecognised_range_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """An unrecognised range value returns HTTP 422."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "last_year"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_explicit_dates_without_range_still_work(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Existing calls with explicit start_date+end_date are unaffected."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"start_date": "2025-01-01", "end_date": "2025-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["start_date"] == "2025-01-01"
+        assert body["end_date"] == "2025-01-31"
+        assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
+
+    def test_range_response_includes_resolved_dates(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Response always includes the resolved start_date and end_date."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"range": "last_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert "start_date" in body
+        assert "end_date" in body
+        assert body["start_date"] == "2026-02-01"
+        assert body["end_date"] == "2026-02-28"
 
 
 # ---------------------------------------------------------------------------

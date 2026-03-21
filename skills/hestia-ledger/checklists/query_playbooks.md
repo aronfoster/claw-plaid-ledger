@@ -10,6 +10,15 @@ Use this sheet for deterministic ingestion and escalation-only behavior.
 - Use deterministic pagination for `GET /transactions`.
 - Never recommend canonical precedence overrides.
 
+## Vocabulary setup (start of run)
+
+Before writing any annotations, load the current vocabulary:
+
+1. `GET /categories` — retrieve existing category values (sorted).
+2. `GET /tags` — retrieve existing tag values (sorted).
+
+Reuse these values; do not create near-duplicates.
+
 ## Ingestion playbooks
 
 ### 1) Sync intake and candidate detection
@@ -23,6 +32,8 @@ Use this sheet for deterministic ingestion and escalation-only behavior.
 1. `GET /transactions/{id}` to verify current details.
 2. Optional filtered `GET /transactions` to resolve conflicting context.
 3. `PUT /annotations/{transaction_id}` only if evidence is sufficient.
+4. The PUT response contains the full updated transaction record — use it
+   directly to confirm the written state (no follow-up GET needed).
 
 ### 3) Orphan/discrepancy triage with Athena escalation
 
