@@ -92,7 +92,7 @@ Update or add tests covering:
 
 ---
 
-## Task 2: BUG-007 — GET /categories and GET /tags vocabulary endpoints
+## Task 2: BUG-007 — GET /categories and GET /tags vocabulary endpoints ✅ DONE
 
 ### Background
 

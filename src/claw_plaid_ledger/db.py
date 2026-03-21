@@ -571,6 +571,31 @@ def query_spend(
     return total_spend, count
 
 
+def get_distinct_categories(connection: sqlite3.Connection) -> list[str]:
+    """Return distinct non-null category values sorted alphabetically."""
+    rows = connection.execute(
+        "SELECT DISTINCT category FROM annotations "
+        "WHERE category IS NOT NULL "
+        "ORDER BY category COLLATE NOCASE"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def get_distinct_tags(connection: sqlite3.Connection) -> list[str]:
+    """
+    Return distinct tag values unnested from all annotation rows.
+
+    Results are sorted alphabetically (case-insensitive).
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT j.value "
+        "FROM annotations a, json_each(a.tags) j "
+        "WHERE a.tags IS NOT NULL "
+        "ORDER BY j.value COLLATE NOCASE"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def get_sync_cursor(
     connection: sqlite3.Connection, item_id: str
 ) -> str | None:
