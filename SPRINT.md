@@ -1,403 +1,568 @@
-# Sprint 16 — M14: API Quality-of-Life & Skill Discovery
+# Sprint 17 — M15: Account Labels & Enriched Spend Queries
 
 ## Sprint goal
 
-Ship four focused improvements surfaced during the first production run of the
-two-agent household. No schema changes. Every task is independently releasable.
+Give account IDs human-readable identity and expand spend filtering so agents
+and operators no longer maintain manual ID-to-name mappings out of band.
 
 ## Why this sprint exists
 
-M0–M13 delivered a full, production-deployed ledger. Usage revealed a set of
-ergonomic gaps: annotation writes require a follow-up GET to confirm state,
-agents must guess at valid category/tag vocabulary, every `/spend` call requires
-manually computing dates, and newly pushed skills are invisible to agents until
-TOOLS.md is updated by hand. M14 closes all four gaps with minimal surface area.
+Post-M14 production use revealed three concrete gaps:
+
+1. Plaid account IDs are opaque numbers. Agents and operators must track a
+   mental (or TOOLS.md) mapping from ID to institution/purpose. (BUG-005)
+2. `GET /spend` cannot be scoped to a single account. Per-card breakdowns
+   require manual summation across filtered transaction pages. (BUG-008)
+3. `GET /spend` cannot be scoped by category or tag. Category/tag rollups
+   require full transaction pagination and client-side summing. (BUG-009)
 
 ## Working agreements
 
-- Each task ships as its own PR; no task blocks another.
+- Each task ships as its own PR; Tasks 1 and 2 are independent and can be
+  developed and merged in parallel. Task 3 (skill docs) can be written in
+  parallel but should be reviewed against the merged API before merging.
 - All Python changes must pass the quality gate before merge:
   - `uv run --locked ruff format . --check`
   - `uv run --locked ruff check .`
   - `uv run --locked mypy .`
   - `uv run --locked pytest -v`
-- Script-only tasks (Task 4) still run the gate to confirm no regressions.
+- Script/doc-only tasks (Task 3) still run the gate to confirm no regressions.
 - Mark completed tasks `✅ DONE` in this file before committing.
 
 ---
 
-## Task 1: BUG-006 — PUT /annotations returns the updated transaction record ✅ DONE
+## Task 1: BUG-005 — Account labels (GET /accounts + PUT /accounts/{account_id})
 
 ### Background
 
-`PUT /annotations/{transaction_id}` currently returns `{"status": "ok"}`.
-Callers must issue a follow-up `GET /transactions/{id}` to see the final merged
-state. Returning the full record in the PUT response eliminates that round trip.
+Agents and operators working with transaction data need to map Plaid account
+IDs (e.g. `acc_abc123`) to human context (e.g. "Alice Joint Checking — Chase").
+There is currently no endpoint or store for this. Agent docs explicitly call out
+this gap. This task adds the store and two endpoints.
+
+### Design decisions
+
+**Schema:** The project does not use Alembic. The existing pattern for schema
+is `CREATE TABLE IF NOT EXISTS` in `schema.sql` (idempotent) plus `ALTER TABLE`
+inline in `initialize_database()` for post-deployment column additions. A brand
+new table belongs in `schema.sql`. No `ALTER TABLE` or Alembic setup needed.
+
+**Column naming:** The new table is named `account_labels` with a `label`
+column (not `name`) to avoid confusion with `accounts.name` (the Plaid-sourced
+account name). Both columns exist simultaneously in joined responses.
+
+**`PUT` validation:** `PUT /accounts/{account_id}` returns HTTP 404 if the
+`account_id` does not exist in the `accounts` table. This enforces the
+invariant that only accounts the sync engine has seen can be labelled.
+Pre-labelling an unknown account is not supported.
+
+**`PUT` response:** Returns the full account record (same shape as one row
+from `GET /accounts`), consistent with the M14 pattern where `PUT
+/annotations/{transaction_id}` returns the full transaction record.
 
 ### Scope
 
-**`server.py` — `PUT /annotations/{transaction_id}`**
-
-After successfully upserting the annotation, fetch and return the full
-transaction record using the same logic as `GET /transactions/{id}`. The
-response body, status code (200), and error behaviour (404 when transaction
-does not exist) are otherwise unchanged.
-
-**Response shape** — identical to `GET /transactions/{id}`:
-
-```json
-{
-  "id": "txn_abc123",
-  "account_id": "acc_xyz",
-  "amount": 42.50,
-  "iso_currency_code": "USD",
-  "name": "COFFEE SHOP",
-  "merchant_name": "COFFEE SHOP",
-  "pending": false,
-  "date": "2026-03-01",
-  "raw_json": null,
-  "suppressed_by": null,
-  "annotation": {
-    "category": "food",
-    "note": "morning coffee",
-    "tags": ["discretionary"],
-    "updated_at": "2026-03-21T09:00:00+00:00"
-  }
-}
-```
-
-The `annotation` block reflects the values just written — it will never be
-`null` in a successful PUT response because the upsert just created it.
-
-**Implementation note:** avoid duplicating the fetch logic. If `GET
-/transactions/{id}` is implemented as a helper function or the fetch SQL is
-already factored out in `db.py`, reuse it. If it is currently inlined in the
-route handler, extract it into a shared helper as part of this task.
-
-**`tests/test_server.py`**
-
-Update or add tests covering:
-
-- Successful PUT returns HTTP 200 with the full transaction shape (not
-  `{"status": "ok"}`).
-- The returned annotation block contains the values that were just written.
-- PUT on a non-existent transaction still returns HTTP 404.
-- A second PUT (update, not create) returns the newly updated annotation fields.
-
-### Done when
-
-- Quality gate passes.
-- `PUT /annotations/{id}` response body matches `GET /transactions/{id}` shape.
-- No follow-up GET is needed to confirm the write.
-
----
-
-## Task 2: BUG-007 — GET /categories and GET /tags vocabulary endpoints ✅ DONE
-
-### Background
-
-Agents annotating transactions must infer valid category/tag values from
-sampled transaction data. This leads to duplicates (`groceries` vs `grocery`).
-Two read-only endpoints expose the vocabulary already present in annotations.
-
-### Scope
-
-**`server.py` — two new GET endpoints**
-
-Both endpoints require the standard bearer-token auth (same as all other
-endpoints). Both are read-only and require no request body or query parameters.
-
----
-
-**`GET /categories`**
-
-Returns the distinct set of non-null `category` values present across all rows
-in the `annotations` table, sorted alphabetically (case-insensitive).
-
-Response shape:
-
-```json
-{
-  "categories": ["food", "software", "transport", "utilities"]
-}
-```
-
-- Empty array if no annotations have a category set.
-- SQL: `SELECT DISTINCT category FROM annotations WHERE category IS NOT NULL ORDER BY category COLLATE NOCASE`
-
----
-
-**`GET /tags`**
-
-Returns the distinct set of tag values across all annotations. Because `tags`
-is stored as a JSON array string per row, the query must unnest using SQLite's
-`json_each`:
+#### `schema.sql` — new table
 
 ```sql
-SELECT DISTINCT j.value
-FROM annotations a, json_each(a.tags) j
-WHERE a.tags IS NOT NULL
-ORDER BY j.value COLLATE NOCASE
+CREATE TABLE IF NOT EXISTS account_labels (
+    id INTEGER PRIMARY KEY,
+    plaid_account_id TEXT NOT NULL UNIQUE,
+    label TEXT,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 ```
+
+No migration entry needed in `initialize_database()` because
+`CREATE TABLE IF NOT EXISTS` is already idempotent.
+
+#### `db.py` — new dataclass and query functions
+
+**`AccountLabelRow`** — frozen dataclass for SQL binding:
+
+```python
+@dataclass(frozen=True)
+class AccountLabelRow:
+    plaid_account_id: str
+    label: str | None
+    description: str | None
+    created_at: str
+    updated_at: str
+```
+
+**`get_all_accounts(conn) -> list[dict[str, object]]`**
+
+Returns all rows from `accounts` LEFT JOIN `account_labels` on
+`plaid_account_id`. Each row dict must include:
+
+| Key | Source |
+|-----|--------|
+| `account_id` | `accounts.plaid_account_id` |
+| `plaid_name` | `accounts.name` |
+| `mask` | `accounts.mask` |
+| `type` | `accounts.type` |
+| `subtype` | `accounts.subtype` |
+| `institution_name` | `accounts.institution_name` |
+| `owner` | `accounts.owner` |
+| `item_id` | `accounts.item_id` |
+| `canonical_account_id` | `accounts.canonical_account_id` |
+| `label` | `account_labels.label` (null if no label row) |
+| `description` | `account_labels.description` (null if no label row) |
+
+Order by `accounts.plaid_account_id ASC`.
+
+**`get_account(conn, plaid_account_id: str) -> dict[str, object] | None`**
+
+Same join and shape as `get_all_accounts()` but restricted to a single
+`plaid_account_id`. Returns `None` if the account does not exist in `accounts`.
+
+**`upsert_account_label(conn, row: AccountLabelRow) -> None`**
+
+Upserts into `account_labels` keyed on `plaid_account_id`. On conflict,
+updates `label`, `description`, and `updated_at`.
+
+#### `server.py` — two new endpoints
+
+Both require standard bearer-token auth (same as all other endpoints).
+
+---
+
+**`GET /accounts`**
+
+Returns all known accounts joined with any available label data.
 
 Response shape:
 
 ```json
 {
-  "tags": ["discretionary", "needs-athena-review", "recurring", "subscription"]
+  "accounts": [
+    {
+      "account_id": "acc_abc123",
+      "plaid_name": "Plaid Checking",
+      "mask": "1234",
+      "type": "depository",
+      "subtype": "checking",
+      "institution_name": "bank-alice",
+      "owner": "alice",
+      "item_id": "item-alice-001",
+      "canonical_account_id": null,
+      "label": "Alice Joint Checking",
+      "description": "Primary joint household account"
+    },
+    {
+      "account_id": "acc_def456",
+      "plaid_name": "Plaid Savings",
+      "mask": "5678",
+      "type": "depository",
+      "subtype": "savings",
+      "institution_name": "bank-alice",
+      "owner": "alice",
+      "item_id": "item-alice-001",
+      "canonical_account_id": null,
+      "label": null,
+      "description": null
+    }
+  ]
 }
 ```
 
-- Empty array if no annotations have tags set.
+- Empty array if no accounts have been synced yet.
+- `label` and `description` are `null` for unlabelled accounts (absent
+  `account_labels` row); this is not an error.
+- `canonical_account_id` is non-null only for suppressed accounts (M9
+  precedence feature); include it so callers can identify the canonical
+  account that takes precedence.
+- No pagination required — a household will have ≤ ~20 accounts.
 
 ---
 
-**`db.py` — two new query functions**
+**`PUT /accounts/{account_id}`**
 
-Add `get_distinct_categories(conn) -> list[str]` and
-`get_distinct_tags(conn) -> list[str]`. Keep the SQL in `db.py`; keep
-the HTTP wiring in `server.py`.
+Upserts label data for a given Plaid account ID.
 
-**`tests/test_server.py`**
+Request body:
 
-- `GET /categories` returns an alphabetically sorted list of distinct categories
-  from existing annotations; excludes null categories.
-- `GET /tags` returns an alphabetically sorted flat list of distinct tag values
-  unnested from all annotation rows; excludes null/empty tags arrays.
-- Both return `{"categories": []}` / `{"tags": []}` when the annotations
-  table has no relevant data.
-- Both require auth (unauthenticated request returns 401).
+```json
+{
+  "label": "Alice Joint Checking",
+  "description": "Primary joint household account"
+}
+```
+
+Both fields are optional (either or both may be null/omitted). Sending null
+for a field clears its value in the store.
+
+Response — HTTP 200 with the full account record:
+
+```json
+{
+  "account_id": "acc_abc123",
+  "plaid_name": "Plaid Checking",
+  "mask": "1234",
+  "type": "depository",
+  "subtype": "checking",
+  "institution_name": "bank-alice",
+  "owner": "alice",
+  "item_id": "item-alice-001",
+  "canonical_account_id": null,
+  "label": "Alice Joint Checking",
+  "description": "Primary joint household account"
+}
+```
+
+HTTP 404 if `account_id` does not exist in the `accounts` table.
+
+**Pydantic request model (`AccountLabelRequest`):**
+
+```python
+class AccountLabelRequest(BaseModel):
+    label: str | None = None
+    description: str | None = None
+```
+
+#### `tests/test_server.py` — new test class
+
+Add a `TestAccountsEndpoints` class covering:
+
+- `GET /accounts` returns HTTP 200 with the full accounts list when accounts
+  have been synced.
+- `GET /accounts` returns `{"accounts": []}` when the database is empty.
+- `GET /accounts` includes `label` and `description` as null for unlabelled
+  accounts.
+- `GET /accounts` includes `label` and `description` from `account_labels`
+  when a label row exists.
+- `GET /accounts` requires auth (unauthenticated request returns 401).
+- `PUT /accounts/{account_id}` returns HTTP 200 with the full account record
+  after writing label data.
+- The returned record from `PUT` contains the values just written.
+- A second `PUT` (update, not create) returns the newly updated label fields.
+- `PUT /accounts/{account_id}` returns HTTP 404 for an unknown account ID.
+- `PUT /accounts/{account_id}` requires auth (unauthenticated → 401).
+- `PUT /accounts/{account_id}` with null fields clears label/description.
+
+**Test data guidance:** Seed the database with at least two accounts (using
+`initialize_database()` + direct `sqlite3` inserts into `accounts`), and
+seed an `account_labels` row for one of them to test the mixed
+labelled/unlabelled case.
 
 ### Done when
 
 - Quality gate passes.
-- Both endpoints are listed in the auto-generated OpenAPI spec at `/openapi.json`.
-- An agent can call `GET /categories` immediately after startup to retrieve
-  the current vocabulary without sampling transactions.
+- `GET /accounts` and `PUT /accounts/{account_id}` appear in the
+  auto-generated OpenAPI spec at `/openapi.json`.
+- An agent can call `GET /accounts` to get the full household account list
+  with labels, then use the `account_id` values in subsequent API calls.
+- Labelling an account does not affect sync data in `accounts`.
 
 ---
 
-## Task 3: BUG-010 — GET /spend relative date range shorthand ✅ DONE
+## Task 2: BUG-008 + BUG-009 — GET /spend enriched filters (account_id, category, tag)
 
 ### Background
 
-Every `/spend` call requires `start_date` and `end_date` in ISO format. Common
-queries like "last month" force callers to compute and format both dates, which
-is tedious interactively and verbose in agent prompts.
+`GET /spend` aggregates across the entire ledger with no way to scope by
+account, category, or tag. Three separate bugs (BUG-008, BUG-009) cover these
+gaps. They are combined into one task because they modify the same dataclass
+(`SpendQuery`), the same query function (`query_spend()`), and the same
+endpoint handler (`get_spend()`) — implementing them separately would produce
+merge conflicts.
 
-### Scope
+### Design decisions
 
-**`server.py` — extend `GET /spend`**
+**`account_id` filter:** Applied directly as `t.plaid_account_id = ?` without
+requiring an additional JOIN (the `accounts` join is already conditional and
+should remain so).
 
-Add an optional `range` query parameter:
+**`category` filter:** Case-insensitive match against `ann.category`. The
+`annotations` LEFT JOIN is already present in `query_spend()`. Use
+`LOWER(ann.category) = LOWER(?)` or `ann.category = ? COLLATE NOCASE` —
+either is acceptable, but be consistent with how the `category` filter is
+implemented in `get_distinct_categories()` (which uses `COLLATE NOCASE` for
+ordering; either approach is fine).
 
+**`tag` filter (singular, new):** Case-insensitive match against individual
+tag values in the `ann.tags` JSON array. Use:
+
+```sql
+EXISTS (
+    SELECT 1 FROM json_each(ann.tags)
+    WHERE LOWER(value) = LOWER(?)
+)
 ```
-range: Literal["last_month", "this_month", "last_30_days", "last_7_days"] | None = None
-```
 
-**Resolution rules (applied server-side at request time):**
+This is a new singular `tag` parameter distinct from the existing plural
+`tags` multi-value parameter. Both coexist and are AND-combined.
 
-1. If `range` is supplied, compute `start_date` and `end_date` from it using
-   **server local time** (i.e. `datetime.now().date()`, not UTC).
-2. If `start_date` is also supplied explicitly, it overrides the range-derived
-   start date.
-3. If `end_date` is also supplied explicitly, it overrides the range-derived
-   end date.
-4. If `range` is absent and either `start_date` or `end_date` is missing,
-   return HTTP 422 with a clear message (existing behavior is unchanged).
+**Why singular `tag` instead of extending `tags`?** The ROADMAP explicitly
+specifies `category` and `tag` (singular) as new parameters for BUG-009.
+A singular `tag` is ergonomic for agents making simple one-tag scoped spend
+queries without list syntax. The existing `tags` multi-value parameter
+(AND semantics) remains unchanged.
 
-**Date computation definitions (server local time):**
-
-| `range` value  | `start_date`                          | `end_date`       |
-|----------------|---------------------------------------|------------------|
-| `this_month`   | First day of current month            | Today            |
-| `last_month`   | First day of previous calendar month  | Last day of previous calendar month |
-| `last_30_days` | Today − 30 days (inclusive)           | Today            |
-| `last_7_days`  | Today − 7 days (inclusive)            | Today            |
-
-"Previous calendar month" crosses year boundaries correctly (e.g. January →
-December of the prior year).
-
-**Response shape** — unchanged. Optionally surface the resolved dates in the
-response body so callers can see what window was used:
+**`filters` response field:** Extend the `filters` key in the `GET /spend`
+response to surface the new parameters, so callers can confirm what filters
+were applied:
 
 ```json
 {
-  "start_date": "2026-02-01",
-  "end_date": "2026-02-28",
-  "total_spend": 1842.00,
-  "transaction_count": 34,
-  "includes_pending": false,
   "filters": {
     "owner": null,
-    "tags": []
+    "tags": [],
+    "account_id": "acc_abc123",
+    "category": "software",
+    "tag": "recurring"
   }
 }
 ```
 
-The `start_date` and `end_date` fields should always reflect the resolved
-dates (whether derived from `range` or supplied explicitly) so callers can
-confirm what window was actually used.
+All four filter keys are always present in the response (null/empty when not
+supplied), matching the existing pattern for `owner` and `tags`.
 
-**Validation:**
+**AND semantics when multiple filters are combined:** When `account_id`,
+`category`, `tag`, and `tags` are all provided, they are all ANDed together
+(narrow to the intersection). This is consistent with the existing `tags`
+multi-value behavior.
 
-- `range` with an unrecognised value → HTTP 422 (FastAPI handles this
-  automatically via `Literal`).
-- `range` absent, `start_date` present, `end_date` absent → HTTP 422.
-- `range` absent, `end_date` present, `start_date` absent → HTTP 422.
-
-**`tests/test_server.py`**
-
-- `?range=this_month` returns a 200 with `start_date` set to the first of the
-  current month and `end_date` set to today.
-- `?range=last_month` returns the correct first/last day of the prior month,
-  including the January→December year-boundary case.
-- `?range=last_30_days` and `?range=last_7_days` return the correct computed
-  window.
-- Explicit `start_date` overrides the range-derived start; explicit `end_date`
-  overrides the range-derived end.
-- Omitting both `range` and `start_date`/`end_date` returns HTTP 422.
-- An unrecognised `range` value returns HTTP 422.
-- Existing calls with explicit `start_date` + `end_date` (no `range`) are
-  unaffected.
-
-**Tip:** freeze `datetime.now()` in tests (e.g. via `freezegun` or
-`unittest.mock.patch`) so date-window assertions are deterministic.
-
-### Done when
-
-- Quality gate passes.
-- `GET /spend?range=last_month` works end-to-end with no explicit dates.
-- Explicit dates still work unchanged.
-- Resolved `start_date` / `end_date` are visible in the response.
-
----
-
-## Task 4: BUG-004 — Agent skill auto-discovery via sync-skills.sh ✅ DONE
-
-### Background
-
-After `sync-skills.sh push` copies a skill bundle into an agent's skills
-directory, the agent has no awareness of it. The agent's `TOOLS.md` must be
-updated manually. Agents have no skills registered in their `TOOLS.md` today.
-
-This task extends `sync-skills.sh push` to automatically inject (or update)
-a `## Skills` section in each target agent's `TOOLS.md`, and adds a RUNBOOK
-section documenting the workflow.
+**`S608` noqa note:** `query_spend()` already carries a `# noqa: S608`
+comment explaining why fragment interpolation is unavoidable there. The same
+rationale applies to any new fragments added in this task — extend the
+existing comment to cover them rather than adding new noqa lines.
 
 ### Scope
 
-**`scripts/sync-skills.sh` — extend `push`**
+#### `db.py` — extend `SpendQuery` and `query_spend()`
 
-After the `rsync` copy step for each skill, upsert a skills entry in the target
-agent's `TOOLS.md`.
+**Extend `SpendQuery`:**
 
-The injected block must be:
-
-- **Idempotent:** running `push` twice produces the same result. Use sentinel
-  comments to identify the auto-generated block so it can be replaced, not
-  appended. Recommended markers:
-  ```
-  <!-- sync-skills-start -->
-  ...
-  <!-- sync-skills-end -->
-  ```
-- **Derived from `SKILL.md` frontmatter only.** Read the following fields from
-  the skill's `SKILL.md` YAML frontmatter block:
-  - `name` — used as the section heading
-  - `description` — one-line description
-  - `metadata.openclaw.requires.env` — list of required environment variable
-    names
-
-The injected entry format (one entry per skill under the sentinel block):
-
-```markdown
-## Skills (managed by sync-skills.sh — do not edit between markers)
-
-<!-- sync-skills-start -->
-### hestia-ledger
-- **Description:** Ingest and annotate claw-plaid-ledger transactions. Use after a Plaid sync to process new transactions, apply deterministic annotations, and escalate uncertain items to Athena via needs-athena-review tags. Reads and writes via the ledger HTTP API using bearer-token auth.
-- **Skill path:** ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger/SKILL.md
-- **Required env:** `CLAW_API_SECRET`, `CLAW_LEDGER_URL`
-<!-- sync-skills-end -->
+```python
+@dataclass(frozen=True)
+class SpendQuery:
+    start_date: str
+    end_date: str
+    owner: str | None = None
+    tags: tuple[str, ...] = ()
+    include_pending: bool = False
+    canonical_only: bool = True
+    account_id: str | None = None   # new — BUG-008
+    category: str | None = None     # new — BUG-009
+    tag: str | None = None          # new — BUG-009 (singular, case-insensitive)
 ```
 
-If an agent has multiple skills, all entries appear between the same pair of
-sentinels.
+**Extend `query_spend()`:**
 
-- **Non-destructive toward content outside the sentinel block.** The operator's
-  hand-written TOOLS.md notes (cameras, SSH hosts, etc.) must be preserved.
-- **Creates `TOOLS.md` if absent.** If the target agent directory exists but
-  has no `TOOLS.md`, create one containing only the injected block (no default
-  boilerplate).
-- **`pull` behaviour:** leave the injected block in place on pull. The script
-  does not strip or modify TOOLS.md on pull.
+Add three new conditional WHERE clauses:
 
-**Frontmatter parsing:** The SKILL.md files use YAML frontmatter delimited by
-`---`. The script may use Python (`python3 -c "..."`) for parsing rather than
-trying to wrangle YAML in pure bash — this is the recommended approach given
-the nested structure of `metadata.openclaw.requires.env`.
+1. `account_id` filter (no additional JOIN required):
 
-**RUNBOOK.md — new section: Skill registration**
+   ```python
+   if query.account_id is not None:
+       where_parts.append("t.plaid_account_id = ?")
+       params.append(query.account_id)
+   ```
 
-Add a section (placement: after the existing skills/sync-skills content, or
-as a new top-level section if one does not exist) covering:
+2. `category` filter (case-insensitive; `annotations_join` is already present):
 
-- What `sync-skills.sh push` now does end-to-end: copies skill files AND
-  updates the agent's TOOLS.md.
-- How to verify the injection worked: inspect
-  `~/.openclaw/workspace/agents/<agent>/TOOLS.md` and confirm the `## Skills`
-  section is present.
-- How to re-run push after updating a skill definition (idempotent; safe to
-  re-run at any time).
-- Manual fallback: if `sync-skills.sh` is unavailable, the operator can
-  copy the template below into the agent's TOOLS.md and fill in the fields
-  from SKILL.md frontmatter.
+   ```python
+   if query.category is not None:
+       where_parts.append("LOWER(ann.category) = LOWER(?)")
+       params.append(query.category)
+   ```
 
-  ```markdown
-  ## Skills (managed by sync-skills.sh — do not edit between markers)
+3. `tag` filter (singular, case-insensitive; `annotations_join` already present):
 
-  <!-- sync-skills-start -->
-  ### <name>
-  - **Description:** <description from SKILL.md>
-  - **Skill path:** ~/.openclaw/workspace/agents/<agent>/skills/<name>/SKILL.md
-  - **Required env:** `VAR1`, `VAR2`
-  <!-- sync-skills-end -->
-  ```
+   ```python
+   if query.tag is not None:
+       where_parts.append(
+           "EXISTS ("
+           "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
+           ")"
+       )
+       params.append(query.tag)
+   ```
 
-**No Python source changes.** This task is entirely in `scripts/` and
-`RUNBOOK.md`. The quality gate still runs to confirm no regressions.
+#### `server.py` — extend `SpendListQuery` and `get_spend()`
+
+**Extend `SpendListQuery`:**
+
+```python
+class SpendListQuery(BaseModel):
+    start_date: date | None = None
+    end_date: date | None = None
+    owner: str | None = None
+    include_pending: bool | None = None
+    view: Literal["canonical", "raw"] = "canonical"
+    account_id: str | None = None   # new — BUG-008
+    category: str | None = None     # new — BUG-009
+    tag: str | None = None          # new — BUG-009
+```
+
+**Extend `get_spend()` — wire up new filters and update `filters` response:**
+
+Pass `account_id`, `category`, and `tag` to `SpendQuery`. Extend the returned
+`filters` dict:
+
+```python
+return {
+    "start_date": resolved_start.isoformat(),
+    "end_date": resolved_end.isoformat(),
+    "total_spend": total_spend,
+    "transaction_count": transaction_count,
+    "includes_pending": include_pending,
+    "filters": {
+        "owner": params.owner,
+        "tags": resolved_tags,
+        "account_id": params.account_id,
+        "category": params.category,
+        "tag": params.tag,
+    },
+}
+```
+
+#### `tests/test_server.py` — additions to `TestGetSpendEndpoint`
+
+Add tests to the existing `TestGetSpendEndpoint` class (or a new
+`TestGetSpendEnrichedFilters` class if the existing class is already long).
+Test data must include accounts and annotations to exercise the new filters.
+
+Minimum required tests:
+
+- `?account_id=<id>` restricts spend to transactions for that account.
+- `?account_id=<unknown_id>` returns zero spend (no error).
+- `?category=software` restricts spend to transactions annotated with that
+  category (case-insensitive: `Software` and `software` both match).
+- `?tag=recurring` restricts spend to transactions tagged with that value
+  (case-insensitive: `Recurring` and `recurring` both match).
+- `?category=software&tag=recurring` applies both filters (AND semantics);
+  only transactions matching both are counted.
+- `?account_id=<id>&category=software` applies both (AND semantics).
+- All three filters absent → unchanged behavior (existing tests must still
+  pass unchanged).
+- Response `filters` field always includes `account_id`, `category`, and `tag`
+  keys, even when null/not supplied.
 
 ### Done when
 
-- `./scripts/sync-skills.sh push` copies skill files and upserts the `##
-  Skills` block in each agent's TOOLS.md.
-- Running push a second time produces no diff in TOOLS.md (idempotent).
-- Content outside the sentinel markers is untouched.
-- RUNBOOK.md documents the workflow and the manual fallback template.
 - Quality gate passes.
-- **Skill doc update:** if this task changes any agent-visible behavior
-  (e.g. new fields in SKILL.md frontmatter that agents must know about),
-  update `skills/athena-ledger/SKILL.md` and `skills/hestia-ledger/SKILL.md`
-  and their companion files accordingly.
+- `GET /spend?account_id=<id>` returns spend scoped to that account.
+- `GET /spend?category=software` returns spend scoped to that category
+  (case-insensitive).
+- `GET /spend?tag=recurring` returns spend scoped to that tag
+  (case-insensitive).
+- All three filters are AND-combinable with each other and with the existing
+  `owner`, `tags`, and `range` parameters.
+- Response `filters` field includes `account_id`, `category`, and `tag`.
 
 ---
 
-## Acceptance criteria for Sprint 16
+## Task 3: Skill doc updates for M15
 
-- `PUT /annotations/{id}` returns the full transaction record; no follow-up
-  GET required.
-- `GET /categories` and `GET /tags` return sorted, deduplicated vocabulary
-  arrays from existing annotations.
-- `GET /spend?range=last_month` (and the other three shorthands) works without
-  explicit dates; resolved dates appear in the response.
-- `sync-skills.sh push` idempotently registers skills in each agent's TOOLS.md.
+### Background
+
+Per the ROADMAP, every new or changed endpoint that agents may call must be
+reflected in both skill bundles before the milestone is considered done.
+
+### Scope
+
+**`skills/hestia-ledger/SKILL.md`**
+
+1. Add `GET /accounts` and `PUT /accounts/{account_id}` to the
+   **Approved API calls** list:
+
+   ```
+   6. `GET /accounts` — retrieve all known accounts with human-readable labels
+   7. `PUT /accounts/{account_id}` — write or update a label for an account
+   ```
+
+2. Add a note under the **API guardrails** section (or as a new
+   "Account identity" guardrail) that Hestia should call `GET /accounts` when
+   it needs to identify an account by name, and `PUT /accounts/{account_id}`
+   to apply a label when the operator has provided one.
+
+**`skills/athena-ledger/SKILL.md`**
+
+1. Add `GET /accounts` and `PUT /accounts/{account_id}` to the
+   **Approved API calls** list:
+
+   ```
+   7. `GET /accounts` — retrieve all known accounts with human-readable labels
+   8. `PUT /accounts/{account_id}` — write or update a label for an account
+   ```
+
+2. Update the description of `GET /spend` under **Core analysis workflows → 2)
+   Spend rollups** to document the three new optional filters:
+
+   ```
+   Optional narrowing filters (AND-combined with each other and with owner/tags):
+   - `account_id` — restrict to one account (use `GET /accounts` to discover IDs)
+   - `category` — restrict to one annotation category (case-insensitive;
+     use `GET /categories` for vocabulary)
+   - `tag` — restrict to one annotation tag (case-insensitive, singular;
+     use `GET /tags` for vocabulary)
+   ```
+
+**`skills/athena-ledger/checklists/query_playbooks.md`**
+
+1. Add a new playbook entry after the existing "Period spend summary" playbook:
+
+   ```markdown
+   ### 6) Account-scoped spend
+
+   1. `GET /accounts` to list all known accounts with labels.
+   2. Identify the target `account_id` from the response.
+   3. `GET /spend` with `account_id=<id>` and desired date window.
+   4. Optionally narrow further with `category` or `tag` filters.
+   ```
+
+2. In the **"Period spend summary"** playbook (playbook 1), add a note that
+   spend can be narrowed with `account_id`, `category`, or `tag`:
+
+   ```
+   Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
+   ```
+
+**`skills/hestia-ledger/checklists/query_playbooks.md`**
+
+1. Add a brief note to the **Vocabulary setup (start of run)** section:
+
+   ```
+   3. `GET /accounts` — retrieve account ID-to-label mapping for any
+      account-specific annotation context.
+   ```
+
+### Done when
+
+- Quality gate passes.
+- Both `SKILL.md` files list `GET /accounts` and `PUT /accounts/{account_id}`
+  in their approved API calls sections.
+- Athena's `SKILL.md` documents `account_id`, `category`, and `tag` as new
+  `GET /spend` filter parameters.
+- Athena's `query_playbooks.md` includes the account-scoped spend playbook.
+- Hestia's `query_playbooks.md` includes `GET /accounts` in vocabulary setup.
+
+---
+
+## Acceptance criteria for Sprint 17
+
+- `GET /accounts` returns all synced accounts with label data where available.
+- `PUT /accounts/{account_id}` upserts a label and returns the full account
+  record; returns 404 for unknown account IDs.
+- `GET /spend?account_id=<id>` restricts aggregation to a single account.
+- `GET /spend?category=<value>` restricts aggregation to one category
+  (case-insensitive).
+- `GET /spend?tag=<value>` restricts aggregation to one tag (case-insensitive).
+- All new filters are AND-combinable with each other and with existing filters.
+- Response `filters` field in `GET /spend` includes all new parameters.
+- Both skill bundles document the new endpoints and updated `GET /spend` params.
 - All quality-gate commands pass on every merged PR.
 
-## Explicitly deferred (out of scope for Sprint 16)
+## Explicitly deferred (out of scope for Sprint 17)
 
-- `GET /spend` filters by `account_id`, `category`, or `tag` (M15 scope;
-  depends on BUG-005 account labels).
 - `GET /spend/trends` month-over-month endpoint (M16 scope).
 - `ledger doctor --fix` auto-remediation (M18 scope).
-- Automated TLS provisioning within `ledger serve`.
+- Inlining `account_name` into `GET /transactions` or `GET /spend` responses
+  (BUGS.md notes this as TBD; keeping it join-only on `GET /accounts` for now
+  to avoid response bloat).
+- Pagination for `GET /accounts` (household account counts are small; revisit
+  if a multi-institution setup exceeds ~50 accounts).
