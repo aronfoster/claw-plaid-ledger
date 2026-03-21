@@ -1,10 +1,5 @@
 # Roadmap
 
-## Human Questions / Goals
-
-### Errors Visible to OpenClaw
-When claw-plaid-ledger logs warnings or errors, make the existence of those clear to OpenClaw so OpenClaw can alert users.
-
 ## Completed Milestones
 
 ### M0 — Project skeleton
@@ -144,7 +139,90 @@ for home-server operators:
 
 ## Upcoming Milestones
 
-### M14 — `doctor` auto-remediation
+### M14 — API quality-of-life & skill discovery
+
+**Focus:** Ship quick wins from real-world OpenClaw usage with no schema changes.
+
+**Goal:** Tighten API ergonomics and fix agent skill visibility gaps surfaced
+during the first production run.
+
+**Scope**
+
+- **BUG-006** — `PUT /annotations/{transaction_id}` returns the full updated
+  transaction record instead of `{"status": "ok"}`, eliminating the need for a
+  follow-up GET.
+- **BUG-007** — `GET /categories` and `GET /tags` enumerate distinct values
+  already present in annotations, giving agents a consistent vocabulary to
+  annotate against.
+- **BUG-010** — `GET /spend` accepts an optional `range` parameter
+  (`last_month`, `this_month`, `last_30_days`, `last_7_days`) so callers do not
+  have to compute and format date pairs for common queries.
+- **BUG-004** — Agent skill auto-discovery: add a RUNBOOK step (and optionally
+  extend `sync-skills.sh`) so skills pushed to an agent's skills directory are
+  registered in that agent's `TOOLS.md` automatically.
+
+---
+
+### M15 — Account labels & enriched spend queries
+
+**Focus:** Give account IDs human-readable identity and expand spend filtering.
+
+**Goal:** Eliminate manual ID-to-name mapping maintained out of band by agents
+and operators; allow spend to be scoped by account, category, and tag.
+
+**Scope**
+
+- **BUG-005** — `account_labels` table (Alembic migration) with `name` and
+  `description` columns keyed on Plaid account ID. `GET /accounts` returns all
+  known account IDs joined with labels. `PUT /accounts/{account_id}` upserts
+  label data.
+- **BUG-008** — `GET /spend` accepts an optional `account_id` query parameter
+  to restrict aggregation to a single account. Pairs with `GET /accounts`.
+- **BUG-009** — `GET /spend` accepts optional `category` and `tag` query
+  parameters (AND-combined when both supplied, case-insensitive, consistent with
+  the vocabulary from `GET /categories` and `GET /tags`).
+
+---
+
+### M16 — Spend trends
+
+**Focus:** Month-over-month analysis without manual stitching.
+
+**Goal:** A single endpoint returns spend aggregated by calendar month,
+replacing multiple `GET /spend` calls and client-side summation.
+
+**Scope**
+
+- **BUG-011** — `GET /spend/trends` returns an array of monthly buckets
+  (oldest → newest) each with `month`, `total_spend`, `transaction_count`, and
+  `partial` flag for the current in-progress month. Accepts a `months` lookback
+  parameter (default 6). Supports the same filter set as `GET /spend`
+  (`owner`, `tags`, `category`, `account_id`, `view`, `include_pending`) for
+  direct comparability.
+
+---
+
+### M17 — Errors visible to OpenClaw
+
+**Focus:** Surface ledger warnings and errors to OpenClaw agents for
+user-facing alerting.
+
+**Goal:** Agents can poll a ledger endpoint to discover recent warnings and
+errors without tailing logs directly, enabling proactive alerting to users.
+
+**Scope**
+
+- New table to persist warnings and errors emitted by the ledger (schema and
+  retention policy TBD at sprint time).
+- `GET /errors` (or equivalent) endpoint returning recent entries, filterable
+  by severity and time window.
+- Structured logging layer writes to the new table on WARN/ERROR so no manual
+  instrumentation is required at each call site.
+- `doctor` reports whether error-log persistence is configured and healthy.
+
+---
+
+### M18 — `doctor` auto-remediation
 
 **Focus:** Reduce manual maintenance and recovery toil.
 
