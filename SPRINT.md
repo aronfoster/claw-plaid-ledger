@@ -1,568 +1,395 @@
-# Sprint 17 — M15: Account Labels & Enriched Spend Queries
+# Sprint 18 — M16: Spend Trends
 
 ## Sprint goal
 
-Give account IDs human-readable identity and expand spend filtering so agents
-and operators no longer maintain manual ID-to-name mappings out of band.
+Replace multiple `GET /spend` calls and manual stitching with a single
+`GET /spend/trends` endpoint that returns spend aggregated by calendar month,
+oldest to newest, for any lookback window.
 
 ## Why this sprint exists
 
-Post-M14 production use revealed three concrete gaps:
-
-1. Plaid account IDs are opaque numbers. Agents and operators must track a
-   mental (or TOOLS.md) mapping from ID to institution/purpose. (BUG-005)
-2. `GET /spend` cannot be scoped to a single account. Per-card breakdowns
-   require manual summation across filtered transaction pages. (BUG-008)
-3. `GET /spend` cannot be scoped by category or tag. Category/tag rollups
-   require full transaction pagination and client-side summing. (BUG-009)
+Post-M15 trend analysis requires one `GET /spend` call per month plus
+client-side aggregation. For a six-month view that is six round-trips and
+bespoke date arithmetic — tedious for agents and operators alike. (BUG-011)
 
 ## Working agreements
 
-- Each task ships as its own PR; Tasks 1 and 2 are independent and can be
-  developed and merged in parallel. Task 3 (skill docs) can be written in
-  parallel but should be reviewed against the merged API before merging.
+- Single task; ships as one PR.
 - All Python changes must pass the quality gate before merge:
   - `uv run --locked ruff format . --check`
   - `uv run --locked ruff check .`
   - `uv run --locked mypy .`
   - `uv run --locked pytest -v`
-- Script/doc-only tasks (Task 3) still run the gate to confirm no regressions.
-- Mark completed tasks `✅ DONE` in this file before committing.
+- Doc-only changes (skill files) still run the gate to confirm no regressions.
+- Mark completed task `✅ DONE` in this file before committing.
 
 ---
 
-## Task 1: BUG-005 — Account labels (GET /accounts + PUT /accounts/{account_id}) ✅ DONE
+## Task 1: BUG-011 — GET /spend/trends + skill doc updates
 
 ### Background
 
-Agents and operators working with transaction data need to map Plaid account
-IDs (e.g. `acc_abc123`) to human context (e.g. "Alice Joint Checking — Chase").
-There is currently no endpoint or store for this. Agent docs explicitly call out
-this gap. This task adds the store and two endpoints.
+There is no endpoint that returns spend aggregated by calendar month.
+Producing a month-over-month view currently requires one `GET /spend` call
+per month, then manually stitching results. This task adds `GET /spend/trends`
+and documents it in Athena's skill bundle.
 
 ### Design decisions
 
-**Schema:** The project does not use Alembic. The existing pattern for schema
-is `CREATE TABLE IF NOT EXISTS` in `schema.sql` (idempotent) plus `ALTER TABLE`
-inline in `initialize_database()` for post-deployment column additions. A brand
-new table belongs in `schema.sql`. No `ALTER TABLE` or Alembic setup needed.
+**Response shape — plain array.** The response is a JSON array of bucket
+objects, oldest first. No wrapper object. Agents know which filters they
+applied; echoing them back is unnecessary.
 
-**Column naming:** The new table is named `account_labels` with a `label`
-column (not `name`) to avoid confusion with `accounts.name` (the Plaid-sourced
-account name). Both columns exist simultaneously in joined responses.
+```json
+[
+  {"month": "2025-10", "total_spend": 3241.50, "transaction_count": 47, "partial": false},
+  {"month": "2025-11", "total_spend": 2150.00, "transaction_count": 38, "partial": false},
+  {"month": "2025-12", "total_spend": 4010.75, "transaction_count": 55, "partial": false},
+  {"month": "2026-01", "total_spend": 2980.00, "transaction_count": 41, "partial": false},
+  {"month": "2026-02", "total_spend": 3100.25, "transaction_count": 44, "partial": false},
+  {"month": "2026-03", "total_spend":  850.00, "transaction_count": 12, "partial": true}
+]
+```
 
-**`PUT` validation:** `PUT /accounts/{account_id}` returns HTTP 404 if the
-`account_id` does not exist in the `accounts` table. This enforces the
-invariant that only accounts the sync engine has seen can be labelled.
-Pre-labelling an unknown account is not supported.
+**Zero-fill.** Months with no qualifying transactions always appear in the
+response with `total_spend: 0.0` and `transaction_count: 0`. The caller
+always receives exactly `months` buckets.
 
-**`PUT` response:** Returns the full account record (same shape as one row
-from `GET /accounts`), consistent with the M14 pattern where `PUT
-/annotations/{transaction_id}` returns the full transaction record.
+**`partial` flag.** The current calendar month (i.e. the month containing
+`_today()`) is marked `partial: true`. All prior months are `partial: false`.
+
+**`months` parameter.** Integer lookback window, default `6`, minimum `1`.
+No upper bound — SQLite GROUP BY queries are cheap. Enforce minimum with
+`Field(ge=1)` on the Pydantic model.
+
+**`range` not supported.** `months` already defines the time window for
+trends. The `range` shorthand from `GET /spend` does not apply here.
+
+**Filter parity with `GET /spend`.** Supports `owner`, `tags` (multi-value),
+`category`, `tag` (singular), `account_id`, `view`, and `include_pending` —
+all with identical semantics. A trend query and a point-in-time spend query
+over the same filters are directly comparable.
+
+**`_today()` is the date anchor.** The DB function receives `today: date`
+explicitly (not via `date.today()` internally) so tests can control it with
+the existing `_patch_today` helper. The server layer passes `_today()`.
+
+**`noqa: S608` applies.** `query_spend_trends()` builds SQL from hard-coded
+fragments with all user-supplied values bound via `?` placeholders, identical
+to `query_spend()`. The same S608 rationale applies; extend the inline comment
+to cover the new function rather than adding a second noqa block.
 
 ### Scope
 
-#### `schema.sql` — new table
+#### `db.py` — new dataclass and function
 
-```sql
-CREATE TABLE IF NOT EXISTS account_labels (
-    id INTEGER PRIMARY KEY,
-    plaid_account_id TEXT NOT NULL UNIQUE,
-    label TEXT,
-    description TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-```
-
-No migration entry needed in `initialize_database()` because
-`CREATE TABLE IF NOT EXISTS` is already idempotent.
-
-#### `db.py` — new dataclass and query functions
-
-**`AccountLabelRow`** — frozen dataclass for SQL binding:
+**New `SpendTrendsQuery` dataclass** (after `SpendQuery`):
 
 ```python
 @dataclass(frozen=True)
-class AccountLabelRow:
-    plaid_account_id: str
-    label: str | None
-    description: str | None
-    created_at: str
-    updated_at: str
-```
+class SpendTrendsQuery:
+    """Filters for the monthly spend trends query."""
 
-**`get_all_accounts(conn) -> list[dict[str, object]]`**
-
-Returns all rows from `accounts` LEFT JOIN `account_labels` on
-`plaid_account_id`. Each row dict must include:
-
-| Key | Source |
-|-----|--------|
-| `account_id` | `accounts.plaid_account_id` |
-| `plaid_name` | `accounts.name` |
-| `mask` | `accounts.mask` |
-| `type` | `accounts.type` |
-| `subtype` | `accounts.subtype` |
-| `institution_name` | `accounts.institution_name` |
-| `owner` | `accounts.owner` |
-| `item_id` | `accounts.item_id` |
-| `canonical_account_id` | `accounts.canonical_account_id` |
-| `label` | `account_labels.label` (null if no label row) |
-| `description` | `account_labels.description` (null if no label row) |
-
-Order by `accounts.plaid_account_id ASC`.
-
-**`get_account(conn, plaid_account_id: str) -> dict[str, object] | None`**
-
-Same join and shape as `get_all_accounts()` but restricted to a single
-`plaid_account_id`. Returns `None` if the account does not exist in `accounts`.
-
-**`upsert_account_label(conn, row: AccountLabelRow) -> None`**
-
-Upserts into `account_labels` keyed on `plaid_account_id`. On conflict,
-updates `label`, `description`, and `updated_at`.
-
-#### `server.py` — two new endpoints
-
-Both require standard bearer-token auth (same as all other endpoints).
-
----
-
-**`GET /accounts`**
-
-Returns all known accounts joined with any available label data.
-
-Response shape:
-
-```json
-{
-  "accounts": [
-    {
-      "account_id": "acc_abc123",
-      "plaid_name": "Plaid Checking",
-      "mask": "1234",
-      "type": "depository",
-      "subtype": "checking",
-      "institution_name": "bank-alice",
-      "owner": "alice",
-      "item_id": "item-alice-001",
-      "canonical_account_id": null,
-      "label": "Alice Joint Checking",
-      "description": "Primary joint household account"
-    },
-    {
-      "account_id": "acc_def456",
-      "plaid_name": "Plaid Savings",
-      "mask": "5678",
-      "type": "depository",
-      "subtype": "savings",
-      "institution_name": "bank-alice",
-      "owner": "alice",
-      "item_id": "item-alice-001",
-      "canonical_account_id": null,
-      "label": null,
-      "description": null
-    }
-  ]
-}
-```
-
-- Empty array if no accounts have been synced yet.
-- `label` and `description` are `null` for unlabelled accounts (absent
-  `account_labels` row); this is not an error.
-- `canonical_account_id` is non-null only for suppressed accounts (M9
-  precedence feature); include it so callers can identify the canonical
-  account that takes precedence.
-- No pagination required — a household will have ≤ ~20 accounts.
-
----
-
-**`PUT /accounts/{account_id}`**
-
-Upserts label data for a given Plaid account ID.
-
-Request body:
-
-```json
-{
-  "label": "Alice Joint Checking",
-  "description": "Primary joint household account"
-}
-```
-
-Both fields are optional (either or both may be null/omitted). Sending null
-for a field clears its value in the store.
-
-Response — HTTP 200 with the full account record:
-
-```json
-{
-  "account_id": "acc_abc123",
-  "plaid_name": "Plaid Checking",
-  "mask": "1234",
-  "type": "depository",
-  "subtype": "checking",
-  "institution_name": "bank-alice",
-  "owner": "alice",
-  "item_id": "item-alice-001",
-  "canonical_account_id": null,
-  "label": "Alice Joint Checking",
-  "description": "Primary joint household account"
-}
-```
-
-HTTP 404 if `account_id` does not exist in the `accounts` table.
-
-**Pydantic request model (`AccountLabelRequest`):**
-
-```python
-class AccountLabelRequest(BaseModel):
-    label: str | None = None
-    description: str | None = None
-```
-
-#### `tests/test_server.py` — new test class
-
-Add a `TestAccountsEndpoints` class covering:
-
-- `GET /accounts` returns HTTP 200 with the full accounts list when accounts
-  have been synced.
-- `GET /accounts` returns `{"accounts": []}` when the database is empty.
-- `GET /accounts` includes `label` and `description` as null for unlabelled
-  accounts.
-- `GET /accounts` includes `label` and `description` from `account_labels`
-  when a label row exists.
-- `GET /accounts` requires auth (unauthenticated request returns 401).
-- `PUT /accounts/{account_id}` returns HTTP 200 with the full account record
-  after writing label data.
-- The returned record from `PUT` contains the values just written.
-- A second `PUT` (update, not create) returns the newly updated label fields.
-- `PUT /accounts/{account_id}` returns HTTP 404 for an unknown account ID.
-- `PUT /accounts/{account_id}` requires auth (unauthenticated → 401).
-- `PUT /accounts/{account_id}` with null fields clears label/description.
-
-**Test data guidance:** Seed the database with at least two accounts (using
-`initialize_database()` + direct `sqlite3` inserts into `accounts`), and
-seed an `account_labels` row for one of them to test the mixed
-labelled/unlabelled case.
-
-### Done when
-
-- Quality gate passes.
-- `GET /accounts` and `PUT /accounts/{account_id}` appear in the
-  auto-generated OpenAPI spec at `/openapi.json`.
-- An agent can call `GET /accounts` to get the full household account list
-  with labels, then use the `account_id` values in subsequent API calls.
-- Labelling an account does not affect sync data in `accounts`.
-
----
-
-## Task 2: BUG-008 + BUG-009 — GET /spend enriched filters (account_id, category, tag) ✅ DONE
-
-### Background
-
-`GET /spend` aggregates across the entire ledger with no way to scope by
-account, category, or tag. Three separate bugs (BUG-008, BUG-009) cover these
-gaps. They are combined into one task because they modify the same dataclass
-(`SpendQuery`), the same query function (`query_spend()`), and the same
-endpoint handler (`get_spend()`) — implementing them separately would produce
-merge conflicts.
-
-### Design decisions
-
-**`account_id` filter:** Applied directly as `t.plaid_account_id = ?` without
-requiring an additional JOIN (the `accounts` join is already conditional and
-should remain so).
-
-**`category` filter:** Case-insensitive match against `ann.category`. The
-`annotations` LEFT JOIN is already present in `query_spend()`. Use
-`LOWER(ann.category) = LOWER(?)` or `ann.category = ? COLLATE NOCASE` —
-either is acceptable, but be consistent with how the `category` filter is
-implemented in `get_distinct_categories()` (which uses `COLLATE NOCASE` for
-ordering; either approach is fine).
-
-**`tag` filter (singular, new):** Case-insensitive match against individual
-tag values in the `ann.tags` JSON array. Use:
-
-```sql
-EXISTS (
-    SELECT 1 FROM json_each(ann.tags)
-    WHERE LOWER(value) = LOWER(?)
-)
-```
-
-This is a new singular `tag` parameter distinct from the existing plural
-`tags` multi-value parameter. Both coexist and are AND-combined.
-
-**Why singular `tag` instead of extending `tags`?** The ROADMAP explicitly
-specifies `category` and `tag` (singular) as new parameters for BUG-009.
-A singular `tag` is ergonomic for agents making simple one-tag scoped spend
-queries without list syntax. The existing `tags` multi-value parameter
-(AND semantics) remains unchanged.
-
-**`filters` response field:** Extend the `filters` key in the `GET /spend`
-response to surface the new parameters, so callers can confirm what filters
-were applied:
-
-```json
-{
-  "filters": {
-    "owner": null,
-    "tags": [],
-    "account_id": "acc_abc123",
-    "category": "software",
-    "tag": "recurring"
-  }
-}
-```
-
-All four filter keys are always present in the response (null/empty when not
-supplied), matching the existing pattern for `owner` and `tags`.
-
-**AND semantics when multiple filters are combined:** When `account_id`,
-`category`, `tag`, and `tags` are all provided, they are all ANDed together
-(narrow to the intersection). This is consistent with the existing `tags`
-multi-value behavior.
-
-**`S608` noqa note:** `query_spend()` already carries a `# noqa: S608`
-comment explaining why fragment interpolation is unavoidable there. The same
-rationale applies to any new fragments added in this task — extend the
-existing comment to cover them rather than adding new noqa lines.
-
-### Scope
-
-#### `db.py` — extend `SpendQuery` and `query_spend()`
-
-**Extend `SpendQuery`:**
-
-```python
-@dataclass(frozen=True)
-class SpendQuery:
-    start_date: str
-    end_date: str
+    months: int
     owner: str | None = None
     tags: tuple[str, ...] = ()
     include_pending: bool = False
     canonical_only: bool = True
-    account_id: str | None = None   # new — BUG-008
-    category: str | None = None     # new — BUG-009
-    tag: str | None = None          # new — BUG-009 (singular, case-insensitive)
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
 ```
 
-**Extend `query_spend()`:**
-
-Add three new conditional WHERE clauses:
-
-1. `account_id` filter (no additional JOIN required):
-
-   ```python
-   if query.account_id is not None:
-       where_parts.append("t.plaid_account_id = ?")
-       params.append(query.account_id)
-   ```
-
-2. `category` filter (case-insensitive; `annotations_join` is already present):
-
-   ```python
-   if query.category is not None:
-       where_parts.append("LOWER(ann.category) = LOWER(?)")
-       params.append(query.category)
-   ```
-
-3. `tag` filter (singular, case-insensitive; `annotations_join` already present):
-
-   ```python
-   if query.tag is not None:
-       where_parts.append(
-           "EXISTS ("
-           "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
-           ")"
-       )
-       params.append(query.tag)
-   ```
-
-#### `server.py` — extend `SpendListQuery` and `get_spend()`
-
-**Extend `SpendListQuery`:**
+**New `query_spend_trends()` function:**
 
 ```python
-class SpendListQuery(BaseModel):
-    start_date: date | None = None
-    end_date: date | None = None
+def query_spend_trends(
+    connection: sqlite3.Connection,
+    query: SpendTrendsQuery,
+    today: date,
+) -> list[dict[str, object]]:
+    """Return monthly spend buckets, oldest → newest, zero-filled."""
+```
+
+Implementation steps:
+
+1. **Generate month labels.** Produce a list of `YYYY-MM` strings of length
+   `query.months`, ending with the current month and going backwards. Example
+   for `today=2026-03-15`, `months=3`: `["2026-01", "2026-02", "2026-03"]`.
+
+   ```python
+   labels: list[str] = []
+   year, month = today.year, today.month
+   for _ in range(query.months):
+       labels.append(f"{year}-{month:02d}")
+       month -= 1
+       if month == 0:
+           month = 12
+           year -= 1
+   labels.reverse()
+   ```
+
+2. **Derive date window.**
+   - `start_date = f"{labels[0]}-01"` — first day of the oldest month.
+   - `end_date = today.isoformat()` — today (inclusive).
+
+3. **Build WHERE clause.** Mirror `query_spend()` exactly:
+   - Date range on `COALESCE(t.posted_date, t.authorized_date)`.
+   - `a.canonical_account_id IS NULL` when `canonical_only=True`.
+   - `t.pending = 0` unless `include_pending=True`.
+   - `a.owner = ?` when owner is set (requires accounts join).
+   - Per-tag `EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)` for
+     each entry in `query.tags`.
+   - `t.plaid_account_id = ?` when `account_id` is set.
+   - `LOWER(ann.category) = LOWER(?)` when `category` is set.
+   - `EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?))`
+     when singular `tag` is set.
+
+   The `need_accounts_join` and join strings follow the same conditional logic
+   as `query_spend()`.
+
+4. **Run GROUP BY query.**
+
+   ```python
+   month_expr = f"strftime('%Y-%m', {effective_date_sql})"
+   rows = connection.execute(
+       (
+           f"SELECT {month_expr} AS month, "  # noqa: S608
+           "COALESCE(SUM(t.amount), 0.0), COUNT(*) "
+           "FROM transactions t "
+           f"{accounts_join}"
+           f"{annotations_join}"
+           f"WHERE {where_sql} "
+           "GROUP BY month "
+           "ORDER BY month ASC"
+       ),
+       params,
+   ).fetchall()
+   ```
+
+   S608 rationale: identical to `query_spend()` — all fragments are
+   hard-coded SQL; all user-supplied values are `?`-bound. Extend the existing
+   S608 comment in `query_spend()` to reference `query_spend_trends()` as
+   well, or add an equivalent inline comment here.
+
+5. **Merge and zero-fill.** Build a lookup dict from the SQL results, then
+   map over `labels`:
+
+   ```python
+   current_month = f"{today.year}-{today.month:02d}"
+   results: dict[str, tuple[float, int]] = {
+       str(row[0]): (float(row[1]), int(row[2])) for row in rows
+   }
+   return [
+       {
+           "month": label,
+           "total_spend": results.get(label, (0.0, 0))[0],
+           "transaction_count": results.get(label, (0.0, 0))[1],
+           "partial": label == current_month,
+       }
+       for label in labels
+   ]
+   ```
+
+#### `server.py` — new Pydantic model and endpoint
+
+**New `SpendTrendsListQuery` model** (after `SpendListQuery`):
+
+```python
+class SpendTrendsListQuery(BaseModel):
+    """Scalar query parameters for GET /spend/trends."""
+
+    months: int = Field(default=6, ge=1)
     owner: str | None = None
     include_pending: bool | None = None
     view: Literal["canonical", "raw"] = "canonical"
-    account_id: str | None = None   # new — BUG-008
-    category: str | None = None     # new — BUG-009
-    tag: str | None = None          # new — BUG-009
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
 ```
 
-**Extend `get_spend()` — wire up new filters and update `filters` response:**
+`Field` must be imported from `pydantic`. `bool | None` avoids FBT001/FBT002
+(same pattern as `SpendListQuery.include_pending`).
 
-Pass `account_id`, `category`, and `tag` to `SpendQuery`. Extend the returned
-`filters` dict:
+**New endpoint:**
 
 ```python
-return {
-    "start_date": resolved_start.isoformat(),
-    "end_date": resolved_end.isoformat(),
-    "total_spend": total_spend,
-    "transaction_count": transaction_count,
-    "includes_pending": include_pending,
-    "filters": {
-        "owner": params.owner,
-        "tags": resolved_tags,
-        "account_id": params.account_id,
-        "category": params.category,
-        "tag": params.tag,
-    },
-}
+@app.get("/spend/trends", dependencies=[Depends(require_bearer_token)])
+def get_spend_trends(
+    params: Annotated[SpendTrendsListQuery, Depends()],
+    tags: Annotated[list[str] | None, Query()] = None,
+) -> list[dict[str, object]]:
+    """
+    Return spend aggregated by calendar month for a lookback window.
+
+    Returns exactly ``months`` buckets ordered oldest → newest. The
+    current (in-progress) calendar month is flagged ``partial: true``
+    so callers know not to compare it directly against complete months.
+    Months with no qualifying transactions appear as zero-filled buckets.
+
+    Supports the same filters as ``GET /spend`` (``owner``, ``tags``,
+    ``category``, ``tag``, ``account_id``, ``view``,
+    ``include_pending``) for direct comparability.
+    """
+    resolved_tags: list[str] = tags or []
+    include_pending = params.include_pending is True
+    config = load_config()
+    trends_query = SpendTrendsQuery(
+        months=params.months,
+        owner=params.owner,
+        tags=tuple(resolved_tags),
+        include_pending=include_pending,
+        canonical_only=params.view == "canonical",
+        account_id=params.account_id,
+        category=params.category,
+        tag=params.tag,
+    )
+    with sqlite3.connect(config.db_path) as connection:
+        return query_spend_trends(connection, trends_query, _today())
 ```
 
-#### `tests/test_server.py` — additions to `TestGetSpendEndpoint`
+#### `tests/test_server.py` — new test class
 
-Add tests to the existing `TestGetSpendEndpoint` class (or a new
-`TestGetSpendEnrichedFilters` class if the existing class is already long).
-Test data must include accounts and annotations to exercise the new filters.
+Add a `TestGetSpendTrendsEndpoint` class. All tests in this class must call
+`_patch_today(monkeypatch, "2026-03-15")` (or another fixed date) so bucket
+counts and month labels are deterministic.
 
-Minimum required tests:
+**Seed data helper.** Add a `_seed_trends_data(db_path)` function (or reuse
+existing helpers if they already provide multi-month coverage). The seed must
+include:
 
-- `?account_id=<id>` restricts spend to transactions for that account.
-- `?account_id=<unknown_id>` returns zero spend (no error).
-- `?category=software` restricts spend to transactions annotated with that
-  category (case-insensitive: `Software` and `software` both match).
-- `?tag=recurring` restricts spend to transactions tagged with that value
-  (case-insensitive: `Recurring` and `recurring` both match).
-- `?category=software&tag=recurring` applies both filters (AND semantics);
-  only transactions matching both are counted.
-- `?account_id=<id>&category=software` applies both (AND semantics).
-- All three filters absent → unchanged behavior (existing tests must still
-  pass unchanged).
-- Response `filters` field always includes `account_id`, `category`, and `tag`
-  keys, even when null/not supplied.
+- Transactions in at least three distinct calendar months prior to the fixed
+  "today" month (e.g. 2025-12, 2026-01, 2026-02, 2026-03 with `today` fixed
+  to 2026-03-15).
+- Transactions belonging to two different owners (`alice`, `bob`).
+- Transactions on two different account IDs.
+- At least one transaction with an annotation (`category`, `tags`) to support
+  filter parity tests.
+- At least one pending transaction to support `include_pending` tests.
+- At least one month in the lookback window with no transactions so the
+  zero-fill path is exercised.
 
-### Done when
+**Minimum required tests:**
 
-- Quality gate passes.
-- `GET /spend?account_id=<id>` returns spend scoped to that account.
-- `GET /spend?category=software` returns spend scoped to that category
+*Shape and ordering:*
+- Default `?months=6` returns exactly 6 buckets.
+- Buckets are ordered oldest → newest (ascending `month` strings).
+- Only the last bucket (`2026-03`) has `partial: true`; all others have
+  `partial: false`.
+- `?months=1` returns a single bucket with `partial: true`.
+- `?months=3` returns exactly 3 buckets.
+
+*Zero-fill:*
+- A month in the window with no transactions appears with
+  `total_spend: 0.0` and `transaction_count: 0`.
+
+*Totals sanity:*
+- The sum of `total_spend` across all buckets equals what a single
+  `GET /spend` call over the same window (with matching filters) returns.
+
+*Filter parity:*
+- `?owner=alice` — only Alice's transactions contribute to each bucket.
+- `?account_id=<id>` — only that account's transactions are counted.
+- `?category=<value>` — only annotated transactions with that category count
+  (case-insensitive: `Software` and `software` both match).
+- `?tag=<value>` — only transactions with that singular tag count
   (case-insensitive).
-- `GET /spend?tag=recurring` returns spend scoped to that tag
-  (case-insensitive).
-- All three filters are AND-combinable with each other and with the existing
-  `owner`, `tags`, and `range` parameters.
-- Response `filters` field includes `account_id`, `category`, and `tag`.
+- `?tags=a&tags=b` — AND semantics; only transactions tagged with both count.
+- `?view=raw` — suppressed accounts are included (raw view, no canonical
+  filtering).
+- `?include_pending=true` — pending transactions are counted; without the
+  flag they are excluded.
 
----
+*Validation:*
+- `?months=0` returns HTTP 422 (below minimum).
+- `?months=-1` returns HTTP 422.
 
-## Task 3: Skill doc updates for M15 ✅ DONE
+*Auth:*
+- Request without `Authorization` header returns HTTP 401.
 
-### Background
+### Skill doc updates
 
-Per the ROADMAP, every new or changed endpoint that agents may call must be
-reflected in both skill bundles before the milestone is considered done.
+Only Athena's skill bundle is updated. Hestia is not permitted to call
+`GET /spend/trends` and her docs remain unchanged.
 
-### Scope
+#### `skills/athena-ledger/SKILL.md`
 
-**`skills/hestia-ledger/SKILL.md`**
-
-1. Add `GET /accounts` and `PUT /accounts/{account_id}` to the
-   **Approved API calls** list:
-
-   ```
-   6. `GET /accounts` — retrieve all known accounts with human-readable labels
-   7. `PUT /accounts/{account_id}` — write or update a label for an account
-   ```
-
-2. Add a note under the **API guardrails** section (or as a new
-   "Account identity" guardrail) that Hestia should call `GET /accounts` when
-   it needs to identify an account by name, and `PUT /accounts/{account_id}`
-   to apply a label when the operator has provided one.
-
-**`skills/athena-ledger/SKILL.md`**
-
-1. Add `GET /accounts` and `PUT /accounts/{account_id}` to the
-   **Approved API calls** list:
+1. Add to the **Approved API calls** list:
 
    ```
-   7. `GET /accounts` — retrieve all known accounts with human-readable labels
-   8. `PUT /accounts/{account_id}` — write or update a label for an account
+   9. `GET /spend/trends` — monthly spend buckets for a lookback window;
+      supports the same filters as `GET /spend`
    ```
 
-2. Update the description of `GET /spend` under **Core analysis workflows → 2)
-   Spend rollups** to document the three new optional filters:
-
-   ```
-   Optional narrowing filters (AND-combined with each other and with owner/tags):
-   - `account_id` — restrict to one account (use `GET /accounts` to discover IDs)
-   - `category` — restrict to one annotation category (case-insensitive;
-     use `GET /categories` for vocabulary)
-   - `tag` — restrict to one annotation tag (case-insensitive, singular;
-     use `GET /tags` for vocabulary)
-   ```
-
-**`skills/athena-ledger/checklists/query_playbooks.md`**
-
-1. Add a new playbook entry after the existing "Period spend summary" playbook:
+2. Under **Core analysis workflows**, add a new section after the existing
+   workflow entries:
 
    ```markdown
-   ### 6) Account-scoped spend
+   ### 4) Month-over-month trends
 
-   1. `GET /accounts` to list all known accounts with labels.
-   2. Identify the target `account_id` from the response.
-   3. `GET /spend` with `account_id=<id>` and desired date window.
-   4. Optionally narrow further with `category` or `tag` filters.
+   Use `GET /spend/trends` when the question involves change over time
+   (e.g. "is spending increasing?", "which month was the most expensive?").
+
+   - `?months=<n>` controls the lookback window (default 6, no upper bound).
+   - The current month is flagged `partial: true` — treat it as incomplete
+     and avoid direct comparison against prior complete months.
+   - Supports the same filters as `GET /spend`: `owner`, `account_id`,
+     `category`, `tag`, `tags`, `view`, `include_pending`.
    ```
 
-2. In the **"Period spend summary"** playbook (playbook 1), add a note that
-   spend can be narrowed with `account_id`, `category`, or `tag`:
+#### `skills/athena-ledger/checklists/query_playbooks.md`
 
-   ```
-   Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
-   ```
+Add a new playbook entry after the existing **Account-scoped spend** section:
 
-**`skills/hestia-ledger/checklists/query_playbooks.md`**
+```markdown
+### 7) Month-over-month trends
 
-1. Add a brief note to the **Vocabulary setup (start of run)** section:
-
-   ```
-   3. `GET /accounts` — retrieve account ID-to-label mapping for any
-      account-specific annotation context.
-   ```
+1. `GET /spend/trends` with `?months=<n>` (default 6).
+2. Note which buckets have `partial: true` (current month) — exclude from
+   comparisons or call out explicitly.
+3. To narrow the trend to a subset, add the same filters used in
+   `GET /spend`: `owner`, `account_id`, `category`, `tag`.
+4. To validate a specific month's total, cross-check with
+   `GET /spend?start_date=<YYYY-MM-01>&end_date=<YYYY-MM-last-day>`
+   using matching filters — the numbers must agree.
+```
 
 ### Done when
 
 - Quality gate passes.
-- Both `SKILL.md` files list `GET /accounts` and `PUT /accounts/{account_id}`
-  in their approved API calls sections.
-- Athena's `SKILL.md` documents `account_id`, `category`, and `tag` as new
-  `GET /spend` filter parameters.
-- Athena's `query_playbooks.md` includes the account-scoped spend playbook.
-- Hestia's `query_playbooks.md` includes `GET /accounts` in vocabulary setup.
+- `GET /spend/trends` appears in the auto-generated OpenAPI spec at
+  `/openapi.json`.
+- `GET /spend/trends?months=6` returns exactly 6 buckets, oldest first,
+  with `partial: true` on the current month.
+- All filter parameters (`owner`, `tags`, `category`, `tag`, `account_id`,
+  `view`, `include_pending`) narrow results consistently with `GET /spend`.
+- Months with no qualifying transactions appear as zero-filled buckets.
+- `?months=0` and `?months=-1` return HTTP 422.
+- Athena's `SKILL.md` lists `GET /spend/trends` in the approved API calls
+  and documents it under Core analysis workflows.
+- Athena's `query_playbooks.md` includes the month-over-month trends playbook.
+- Hestia's skill docs are unchanged.
 
 ---
 
-## Acceptance criteria for Sprint 17
+## Acceptance criteria for Sprint 18
 
-- `GET /accounts` returns all synced accounts with label data where available.
-- `PUT /accounts/{account_id}` upserts a label and returns the full account
-  record; returns 404 for unknown account IDs.
-- `GET /spend?account_id=<id>` restricts aggregation to a single account.
-- `GET /spend?category=<value>` restricts aggregation to one category
-  (case-insensitive).
-- `GET /spend?tag=<value>` restricts aggregation to one tag (case-insensitive).
-- All new filters are AND-combinable with each other and with existing filters.
-- Response `filters` field in `GET /spend` includes all new parameters.
-- Both skill bundles document the new endpoints and updated `GET /spend` params.
-- All quality-gate commands pass on every merged PR.
+- `GET /spend/trends` returns a plain JSON array of monthly bucket objects,
+  oldest first, exactly `months` entries.
+- Each bucket: `month` (YYYY-MM), `total_spend` (float), `transaction_count`
+  (int), `partial` (bool).
+- Current month always has `partial: true`; all prior months `partial: false`.
+- Months with no matching transactions appear with zeroes (never omitted).
+- All seven filter parameters from `GET /spend` are supported and produce
+  results directly comparable to a matching point-in-time `GET /spend` call.
+- `months` minimum is 1; no upper bound; default is 6.
+- Endpoint requires bearer-token auth; unauthenticated requests return 401.
+- All quality-gate commands pass.
 
-## Explicitly deferred (out of scope for Sprint 17)
+## Explicitly deferred (out of scope for Sprint 18)
 
-- `GET /spend/trends` month-over-month endpoint (M16 scope).
+- Hestia skill doc updates (`GET /spend/trends` is not in Hestia's approved
+  call list).
 - `ledger doctor --fix` auto-remediation (M18 scope).
-- Inlining `account_name` into `GET /transactions` or `GET /spend` responses
-  (BUGS.md notes this as TBD; keeping it join-only on `GET /accounts` for now
-  to avoid response bloat).
-- Pagination for `GET /accounts` (household account counts are small; revisit
-  if a multi-institution setup exceeds ~50 accounts).
+- Splitting `tests/test_server.py` into focused modules (deferred per ROADMAP
+  until file exceeds ~2 000 lines or agent context pressure recurs).
