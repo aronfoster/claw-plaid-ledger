@@ -586,9 +586,9 @@ class SpendListQuery(BaseModel):
     # default: exclude pending transactions unless caller opts in).
     include_pending: bool | None = None
     view: Literal["canonical", "raw"] = "canonical"
-    account_id: str | None = None  # BUG-008
-    category: str | None = None  # BUG-009
-    tag: str | None = None  # BUG-009 (singular, case-insensitive)
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
 
 
 _SpendRange = Literal[

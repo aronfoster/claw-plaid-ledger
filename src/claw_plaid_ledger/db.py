@@ -506,9 +506,9 @@ class SpendQuery:
     tags: tuple[str, ...] = ()
     include_pending: bool = False
     canonical_only: bool = True
-    account_id: str | None = None  # BUG-008
-    category: str | None = None  # BUG-009
-    tag: str | None = None  # BUG-009 (singular, case-insensitive)
+    account_id: str | None = None
+    category: str | None = None
+    tag: str | None = None
 
 
 def query_spend(
