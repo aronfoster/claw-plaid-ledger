@@ -65,7 +65,10 @@ Hestia may call only:
 
 1. `GET /transactions`
 2. `GET /transactions/{id}`
-3. `PUT /annotations/{transaction_id}`
+3. `GET /categories` — discover existing category vocabulary before writing
+4. `GET /tags` — discover existing tag vocabulary before writing
+5. `PUT /annotations/{transaction_id}` — returns the full transaction record
+   (no follow-up `GET /transactions/{id}` needed to confirm the written state)
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
@@ -83,6 +86,12 @@ For each run:
 6. If confidence is low, annotate with `needs-athena-review` and continue.
 
 ## API guardrails
+
+### Vocabulary hygiene
+
+- Call `GET /categories` and `GET /tags` at the start of each ingestion run
+  to load the current vocabulary before writing any annotations.
+- Reuse existing category and tag values; do not invent near-duplicates.
 
 ### Required filter hygiene
 
@@ -118,6 +127,8 @@ For each run:
    annotation.
 3. If conflicting context remains, run a filtered `GET /transactions` query.
 4. Write annotation only when evidence is sufficient.
+5. `PUT /annotations/{transaction_id}` returns the full transaction record
+   including the updated annotation block — no follow-up GET required.
 
 ### 3) Orphaned/discrepancy triage
 

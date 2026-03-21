@@ -177,7 +177,7 @@ the HTTP wiring in `server.py`.
 
 ---
 
-## Task 3: BUG-010 — GET /spend relative date range shorthand
+## Task 3: BUG-010 — GET /spend relative date range shorthand ✅ DONE
 
 ### Background
 

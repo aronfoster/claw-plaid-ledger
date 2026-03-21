@@ -64,9 +64,17 @@ Athena must not:
 1. `GET /transactions`
 2. `GET /transactions/{id}`
 3. `GET /spend`
-4. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
+4. `GET /categories` — discover the current annotation category vocabulary
+5. `GET /tags` — discover the current annotation tag vocabulary
+6. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
 
 ## Core analysis workflows
+
+### 0) Vocabulary discovery
+
+Before annotating, call `GET /categories` and `GET /tags` to retrieve the
+current vocabulary already present in the ledger. This avoids creating
+near-duplicate labels (e.g. `groceries` vs `grocery`).
 
 ### 1) Review `needs-athena-review` queue
 
@@ -79,10 +87,18 @@ Athena must not:
 
 ### 2) Spend rollups for defined windows
 
-1. Run `GET /spend` with explicit `start_date`, `end_date`, `view=canonical`.
-2. Run matching `GET /transactions` for representative evidence.
-3. Separate posted vs pending observations.
-4. Report totals only for the exact queried window.
+Use `GET /spend` with either:
+
+- An explicit window: `start_date` + `end_date` + `view=canonical`.
+- A range shorthand: `range=this_month`, `range=last_month`,
+  `range=last_30_days`, or `range=last_7_days` (server resolves dates
+  automatically; resolved `start_date`/`end_date` are echoed in the
+  response).
+
+Then run matching `GET /transactions` for representative evidence.
+Separate posted vs pending observations.  Report totals only for the exact
+queried window (use the `start_date`/`end_date` fields in the response to
+confirm the resolved window).
 
 ### 3) Owner-aware summaries
 
