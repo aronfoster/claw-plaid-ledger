@@ -157,6 +157,10 @@ Zero-change syncs skip the notification entirely.
 - Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) are immutable
   from the agent's perspective.
 
+> We are separating imported financial events from budgeting semantics. Plaid
+> transactions remain immutable settlement records, while allocations represent
+> how spending is categorized for budgeting and analysis.
+
 ## Key entities
 
 - `account`
