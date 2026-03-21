@@ -16,6 +16,8 @@ Before writing any annotations, load the current vocabulary:
 
 1. `GET /categories` — retrieve existing category values (sorted).
 2. `GET /tags` — retrieve existing tag values (sorted).
+3. `GET /accounts` — retrieve account ID-to-label mapping for any
+   account-specific annotation context.
 
 Reuse these values; do not create near-duplicates.
 

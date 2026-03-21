@@ -67,6 +67,8 @@ Athena must not:
 4. `GET /categories` — discover the current annotation category vocabulary
 5. `GET /tags` — discover the current annotation tag vocabulary
 6. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
+7. `GET /accounts` — retrieve all known accounts with human-readable labels
+8. `PUT /accounts/{account_id}` — write or update a label for an account
 
 ## Core analysis workflows
 
@@ -94,6 +96,13 @@ Use `GET /spend` with either:
   `range=last_30_days`, or `range=last_7_days` (server resolves dates
   automatically; resolved `start_date`/`end_date` are echoed in the
   response).
+
+Optional narrowing filters (AND-combined with each other and with owner/tags):
+- `account_id` — restrict to one account (use `GET /accounts` to discover IDs)
+- `category` — restrict to one annotation category (case-insensitive;
+  use `GET /categories` for vocabulary)
+- `tag` — restrict to one annotation tag (case-insensitive, singular;
+  use `GET /tags` for vocabulary)
 
 Then run matching `GET /transactions` for representative evidence.
 Separate posted vs pending observations.  Report totals only for the exact
