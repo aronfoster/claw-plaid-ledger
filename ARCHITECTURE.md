@@ -1,165 +1,10 @@
 # Architecture
 
-## Current milestone focus
-
-M13 (hardened deployment & local security) is complete. Sprint 15 shipped
-production-grade deployment primitives for home-server operators:
-
-- `deploy/systemd/` — systemd unit files for `ledger serve`, scheduled sync,
-  and DuckDNS update timers (Task 1)
-- `deploy/docker/` — multi-stage Dockerfile, `docker-compose.yml`, and
-  quickstart README for containerised deployments (Task 2)
-- `CLAW_WEBHOOK_ALLOWED_IPS` / `CLAW_TRUSTED_PROXIES` — server-side webhook
-  IP allowlisting with `X-Forwarded-For` resolution and `doctor` reporting
-  (Task 3)
-- `deploy/proxy/` — Caddy mTLS, nginx mTLS, and Authelia OIDC/SSO
-  configuration examples; RUNBOOK.md Section 14 auth-hardening walkthrough
-  (Task 4)
-- RUNBOOK.md Section 15 — deployment selection guide with decision tables
-  for deployment method (bare/systemd/Docker/LXC) and auth hardening
-  pattern (no proxy/Caddy mTLS/Authelia OIDC); sprint closeout (Task 5)
-
-M11 (advanced agent API & logging) is complete. Sprint 12 adds a spend
-summary endpoint, richer transaction filtering, and correlation-ID logging
-with secret-safe redaction.
-
-Sprint 12 added:
-
-- `GET /spend` — aggregate spend totals with required date window, optional
-  owner filter, AND-semantics tag filters, pending include/exclude control,
-  and `view=canonical|raw` support
-- `GET /transactions` filter enhancements — optional AND-semantics `tags` and
-  `search_notes=true` to include annotation notes in keyword search
-- Request correlation middleware — per-request `request_id` appears in log
-  lines and response header `X-Request-Id`
-- Sync correlation IDs — each sync run carries `sync_run_id`, including CLI
-  syncs, scheduled syncs, and webhook-triggered background syncs
-- Secret-safe debug logging — webhook payload logging uses redaction; bearer
-  tokens, Plaid secrets, and access tokens are never logged
-
-M10 (automation & connectivity) is complete. Sprint 11 adds webhook-first
-multi-item routing, an opt-in scheduled sync fallback, and DuckDNS setup
-guidance so operators can maintain a stable public webhook URL.
-
-Sprint 11 added:
-
-- Multi-item webhook routing — `POST /webhooks/plaid` now extracts `item_id`
-  from the payload, looks up the matching `ItemConfig` in `items.toml`, and
-  passes the correct access token to `_background_sync()`.  Unknown item IDs
-  log a WARNING and fall back to the `PLAID_ACCESS_TOKEN` single-item path.
-- `_background_sync()` refactored — optional `access_token`, `item_id`, and
-  `owner` parameters allow per-item context injection; calling with no
-  arguments preserves the existing single-item behavior.
-- `CLAW_SCHEDULED_SYNC_ENABLED` / `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` —
-  opt-in background loop that syncs items silent for longer than the fallback
-  window (default 24 h); validated at startup; minimum value is 1.
-- FastAPI `lifespan` context manager — starts `_scheduled_sync_loop()` on
-  server startup when the scheduled sync is enabled; cancels it cleanly on
-  shutdown.
-- `_scheduled_sync_loop()` / `_check_and_sync_overdue_items()` /
-  `_sync_item_if_overdue()` — helpers that check `sync_state.last_synced_at`
-  per item and call `_background_sync()` for overdue items.
-- `doctor` scheduled-sync report — new entry reports ENABLED/DISABLED state
-  and configuration.
-- `scripts/duckdns-update.sh` — POSIX shell script for keeping a DuckDNS
-  dynamic DNS record current; suitable for cron or a systemd timer.
-- `RUNBOOK.md` sections 10 and 11 — DuckDNS setup walkthrough and scheduled
-  sync operations note.
-
-M9 (canonical household views / source precedence) is complete. Sprint 10
-adds config-driven suppression metadata (`suppressed_accounts`),
-`ledger apply-precedence`, `ledger overlaps`, and a canonical transaction view
-that the API now uses by default.
-
-Sprint 10 added:
-
-- `accounts.canonical_account_id` — persisted source-precedence mapping for
-  suppressed account rows
-- `ledger apply-precedence` — writes configured source-precedence mappings
-  into the DB and clears stale suppressions removed from config
-- `ledger overlaps` — reports configured suppression status and highlights
-  likely unconfigured overlaps
-- Canonical query layer in `query_transactions` — default view excludes
-  transactions from suppressed accounts while preserving raw records
-- `GET /transactions?view=canonical|raw` — canonical-by-default API with
-  explicit raw opt-out
-- `GET /transactions/{id}` `suppressed_by` field — provenance for source-
-  precedence decisions
-
-M8 (multi-item management) is complete. Sprint 9 adds `ledger link` for
-browser-based Plaid Link token exchange and `ledger items` for at-a-glance
-item health checks across all configured household items.
-
-Sprint 9 added:
-
-- `link_server.py` — local HTTP server for the Plaid Link browser flow
-- `ledger link` CLI command — guides the operator through Plaid Link and
-  prints the resulting `access_token` and `items.toml` snippet
-- `ledger items` CLI command — shows per-item health (token presence,
-  account count, last sync timestamp) for all entries in `items.toml`
-- `items.toml.example` — committed example file with alice/bob/card-bob
-  household structure
-- `accounts.item_id` column — associates each account row with the
-  originating Plaid item for accurate per-item account counts
-
-M7 (production operations and runbook) is complete. Sprint 8 adds a
-committed production runbook and a `ledger doctor --production-preflight`
-command that validates live-readiness configuration without contacting any
-external service.
-
-Sprint 8 added:
-
-- `preflight.py` — typed, unit-testable production preflight check module
-- `ledger doctor --production-preflight` CLI flag that runs preflight
-  checks and exits non-zero if any required check fails
-- `RUNBOOK.md` — operator runbook covering production prerequisites, cost
-  model, access-token lifecycle, sandbox/production isolation, migration
-  checklist, backup/recovery, and incident triage
-
-See `RUNBOOK.md` for the step-by-step production onboarding guide.
-
-M6 (multi-institution management) is complete. Sprint 7 adds first-class
-household sync support via `items.toml`, `ledger sync --all`, and
-`ledger sync --item <id>`. Each configured Plaid item can carry an optional
-`owner` tag (for example `alice`, `bob`, or `shared`) that is written to
-`sync_state.owner` and `accounts.owner`.
-
-Sprint 7 added:
-
-- `items_config.py` — typed loader for `~/.config/claw-plaid-ledger/items.toml`
-- `sync --all` and `sync --item <id>` command paths that resolve per-item
-  access tokens from environment-variable names in `items.toml`
-- Sequential per-item sync output and partial-failure handling (`--all`
-  continues, then exits non-zero if any item failed)
-- Owner propagation through sync writes (`sync_state.owner`, `accounts.owner`)
-- `doctor` extension: per-item sync-state reporting when `items.toml` is
-  present
-
-M5 (OpenClaw notification) is complete. After a webhook-triggered sync that
-adds, modifies, or removes at least one transaction, the server sends a `POST`
-to OpenClaw's `/hooks/agent` endpoint to wake Hestia as the ingestion worker
-by default. Zero-change syncs remain silent. Athena analysis is intentionally
-decoupled (scheduled cadence or anomaly-driven). Operators can opt out by
-leaving `OPENCLAW_HOOKS_TOKEN` unset — a warning is logged but nothing
-crashes.
-
-Sprint 6 added:
-
-- `notifier.py` — sends `POST /hooks/agent` to OpenClaw after a non-empty sync
-- Four new configuration variables for the notification endpoint (see Configuration below)
-- `doctor` extension: reports `[OK]` or `[WARN]` for OpenClaw notification config
-
-M4 (Agent API and annotation layer) is complete. The server exposes a typed
-REST API so OpenClaw agents can query the transaction ledger and write durable
-annotations — without ever touching SQLite directly.
-
-Sprint 5 added:
-
-- `GET /transactions` — paginated, filterable transaction list
-- `GET /transactions/{transaction_id}` — single transaction with merged annotation
-- `PUT /annotations/{transaction_id}` — upsert annotation for a transaction
-- `annotations` table — agent-owned annotation storage (sync engine never reads from or writes to it)
-- Auto-generated OpenAPI spec at `/openapi.json` and Swagger UI at `/docs`
+> **Scope note:** This file describes the active, current architecture of
+> `claw-plaid-ledger` — components, data flows, interfaces, and design
+> decisions as they stand today. It is not a changelog or sprint history.
+> For the project's milestone history and upcoming work, see `ROADMAP.md`.
+> For operational procedures, see `RUNBOOK.md`.
 
 ## Components
 
@@ -432,9 +277,11 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/health` | None | Service liveness check; returns `{"status": "ok"}` |
 | `POST` | `/webhooks/plaid` | Bearer | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list (supports tags and optional note search) |
-| `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window with optional owner/tag filters |
+| `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window or named range shorthand with optional owner/tag filters |
+| `GET` | `/categories` | Bearer | Distinct sorted category values from all annotations |
+| `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all annotations |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
-| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation for a transaction |
+| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation; returns the full updated transaction record |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
 
@@ -528,20 +375,59 @@ Returns a paginated, filtered list of transactions.
 - Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
 - `date` is `COALESCE(posted_date, authorized_date)`.
 
+### `GET /categories`
+
+Returns the distinct set of non-null `category` values present across all
+annotation rows, sorted alphabetically (case-insensitive).
+
+**Response** (HTTP 200):
+
+```json
+{"categories": ["food", "software", "transport", "utilities"]}
+```
+
+- Empty array when no annotations have a category set.
+- Requires bearer token auth.
+
+### `GET /tags`
+
+Returns the distinct set of tag values unnested from all annotation rows,
+sorted alphabetically (case-insensitive).
+
+**Response** (HTTP 200):
+
+```json
+{"tags": ["discretionary", "needs-athena-review", "recurring", "subscription"]}
+```
+
+- Empty array when no annotations have tags set.
+- Requires bearer token auth.
+
 ### `GET /spend`
 
-Returns aggregate spend totals for a required date window.
+Returns aggregate spend totals for a date window.  The window can be
+supplied either as explicit ISO dates or as a named range shorthand.
 
 **Query parameters:**
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `start_date` | `YYYY-MM-DD` | required | Window start (inclusive). Missing or invalid values return HTTP 422. |
-| `end_date` | `YYYY-MM-DD` | required | Window end (inclusive). Missing or invalid values return HTTP 422. |
+| `range` | `last_month` \| `this_month` \| `last_30_days` \| `last_7_days` | — | Named range shorthand; derives `start_date`/`end_date` from server local time. |
+| `start_date` | `YYYY-MM-DD` | required if `range` absent | Window start (inclusive); overrides range-derived start when both supplied. |
+| `end_date` | `YYYY-MM-DD` | required if `range` absent | Window end (inclusive); overrides range-derived end when both supplied. |
 | `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
 | `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
+
+**Range shorthand date resolution (server local time):**
+
+| `range` value | `start_date` | `end_date` |
+|---|---|---|
+| `this_month` | First day of current month | Today |
+| `last_month` | First day of previous calendar month | Last day of previous calendar month |
+| `last_30_days` | Today − 30 days (inclusive) | Today |
+| `last_7_days` | Today − 7 days (inclusive) | Today |
 
 **Response** (HTTP 200):
 
@@ -619,8 +505,12 @@ the annotation row. Omitted fields are stored as `null`.
 - `tags` must be a JSON array of strings or `null`.
 - Returns HTTP 404 if `transaction_id` does not exist in `transactions`.
   Agents cannot annotate phantom transactions.
-- Returns HTTP 200 `{"status": "ok"}` on successful create or update.
+- Returns HTTP 200 with the full transaction record (same shape as
+  `GET /transactions/{transaction_id}`) on successful create or update.
+  The `annotation` block in the response always reflects the values just
+  written — it is never `null` in a successful PUT response.
 - `created_at` is preserved on updates; `updated_at` is refreshed.
+- No follow-up GET is needed to confirm the write.
 
 ## OpenAPI / SKILL definition
 

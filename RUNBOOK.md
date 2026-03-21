@@ -1,4 +1,4 @@
-# Production Operations Runbook — M13 (Sprint 15 closeout)
+# Production Operations Runbook — M14 (Sprint 16 closeout)
 
 ## 1. Purpose and scope
 
@@ -7,7 +7,7 @@ This runbook covers the steps an operator needs to move
 validate the setup before the first real sync, and operate the service
 durably on a home server.
 
-**In scope (M7 + M9 + M10 + M11 + M13):**
+**In scope (M7 + M9 + M10 + M11 + M13 + M14):**
 
 - Obtaining Plaid production API access
 - Connecting institutions via the `ledger link` browser flow (M8)
@@ -25,6 +25,7 @@ durably on a home server.
 - Container deployment via Docker Compose or Proxmox LXC (M13, Section 13)
 - Reverse-proxy auth hardening with Caddy mTLS or Authelia OIDC (M13, Section 14)
 - Deployment selection guide (M13, Section 15)
+- Agent skill auto-registration via `sync-skills.sh push` (M14, Section 16)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -127,16 +128,16 @@ Canonical behavior reminder:
 
 ---
 
-## 1c. Two-agent operations handoff (Sprint 14 closeout)
+## 1c. Two-agent OpenClaw setup
 
-Install both skill bundles into the agent-specific workspace directories:
+Push both skill bundles into the agent workspace directories and register
+them in each agent's `TOOLS.md` in one step:
 
 ```bash
-mkdir -p ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger
-mkdir -p ~/.openclaw/workspace/agents/athena/skills/athena-ledger
-cp -R skills/hestia-ledger/* ~/.openclaw/workspace/agents/hestia/skills/hestia-ledger/
-cp -R skills/athena-ledger/* ~/.openclaw/workspace/agents/athena/skills/athena-ledger/
+./scripts/sync-skills.sh push
 ```
+
+See Section 16 for what this does and how to verify it.
 
 Add the ledger credentials to `~/.openclaw/.env` so that OpenClaw loads
 them automatically at startup — no flags or manual exports required:

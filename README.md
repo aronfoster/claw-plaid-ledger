@@ -96,34 +96,16 @@ Never store Plaid secrets:
 - in markdown files
 - in the OpenClaw workspace
 
-## Getting an Access Token for Plaid Sandbox
+## Getting an Access Token
 
-**Step 1 — Create a fake public token:**
+Use the built-in browser flow — it handles the public-token creation and
+exchange automatically and prints a ready-to-paste `items.toml` snippet:
+
 ```bash
-curl -X POST https://sandbox.plaid.com/sandbox/public_token/create \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "client_id": "YOUR_CLIENT_ID",
-    "secret": "YOUR_SECRET",
-    "institution_id": "ins_109508",
-    "initial_products": ["transactions"]
-  }'
+uv run ledger link
 ```
 
-This returns something like `{"public_token": "public-sandbox-abc123..."}`.
-
-**Step 2 — Exchange it for an access token:**
-```bash
-curl -X POST https://sandbox.plaid.com/item/public_token/exchange \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "client_id": "YOUR_CLIENT_ID",
-    "secret": "YOUR_SECRET",
-    "public_token": "public-sandbox-abc123..."
-  }'
-```
-
-This returns `{"access_token": "access-sandbox-xyz..."}` — that's what goes in `.env` as `PLAID_ACCESS_TOKEN`.
+See `RUNBOOK.md` Section 2.3 for the full walkthrough.
 
 ## Configuration reference
 
@@ -186,9 +168,11 @@ Notes:
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; supports `tags` and optional `search_notes=true`) |
-| `GET` | `/spend` | Aggregate spend total/count for a required date window with optional `owner`, `tags`, `include_pending`, and `view` filters |
+| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `include_pending`, and `view` filters |
+| `GET` | `/categories` | Distinct sorted category values from all annotations |
+| `GET` | `/tags` | Distinct sorted tag values from all annotations |
 | `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
-| `PUT` | `/annotations/{id}` | Upsert annotation for a transaction |
+| `PUT` | `/annotations/{id}` | Upsert annotation; returns the full updated transaction record (no follow-up GET needed) |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |
 
@@ -252,11 +236,13 @@ uv run ledger sync
 uv run ledger serve   # starts API server on http://127.0.0.1:8000
 ```
 
-## Sprint 14 closeout status
+## Sprint 16 closeout status
 
-Sprint 14 is complete: Hestia/Athena skill bundles are split, runtime wake flow
-is Hestia-first, and operator docs include two-agent bootstrap and scheduling
-guidance. See `SPRINT.md` closeout for shipped/deferred details.
+Sprint 16 (M14) is complete: `PUT /annotations/{id}` returns the full
+transaction record, `GET /categories` and `GET /tags` expose annotation
+vocabulary, `GET /spend` accepts named range shorthands, and
+`sync-skills.sh push` auto-injects skill entries into each agent's TOOLS.md.
+See `SPRINT.md` and `RUNBOOK.md` Section 16 for details.
 
 ## Quality defaults
 
