@@ -33,7 +33,7 @@ agents to guess or hard-code brittle offsets.
 
 ---
 
-## Task 1: `ledger_errors` table and DB layer
+## Task 1: `ledger_errors` table and DB layer ✅ DONE
 
 ### Background
 
