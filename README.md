@@ -255,6 +255,24 @@ See `ARCHITECTURE.md` for structure and quality standards.
 GitHub Actions runs `ruff`, `mypy`, and `pytest` on every pull request
 and on every push to `master` (including merged PRs).
 
+## Local systemd deployment
+
+To run `ledger serve` as a managed systemd service, install the package
+as a standalone tool and use the provided deploy script to push local
+changes and restart the service:
+
+```bash
+# First-time install
+uv tool install .
+
+# After any code change
+bash scripts/deploy-local.sh
+```
+
+`deploy-local.sh` reinstalls from the local source tree and restarts the
+`claw-plaid-ledger` systemd service.  See `RUNBOOK.md` Section 12 for
+full unit file setup and configuration.
+
 ## AI contributor policy
 
 AI coding agents must run the full quality gate before committing.
