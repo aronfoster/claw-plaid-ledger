@@ -91,7 +91,9 @@ If that threshold is met:
    - exactly why the rule fires
    - exactly why the code cannot be restructured to avoid it
    - what would need to change in the future to remove the bypass
-3. Mention the bypass and its rationale in the PR description.
+3. **Explicitly list every bypass in your task completion report**, including
+   the rule code, the location, and a summary of the rationale. A bypass that
+   is not mentioned in the report is not acceptable.
 
 **Example of an acceptable bypass:**
 

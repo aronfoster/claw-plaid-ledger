@@ -972,31 +972,35 @@ def query_ledger_errors(
     query: LedgerErrorQuery,
 ) -> tuple[list[dict[str, object]], int]:
     """Return (rows, total) for the given filter window, newest first."""
-    since = datetime.now(UTC) - timedelta(hours=query.hours)
-    since_iso = since.isoformat()
-
-    where_parts: list[str] = ["created_at >= ?"]
-    params: list[object] = [since_iso]
+    since_iso = (datetime.now(UTC) - timedelta(hours=query.hours)).isoformat()
 
     if query.min_severity == "ERROR":
-        where_parts.append("severity IN ('ERROR', 'CRITICAL')")
+        count_sql = (
+            "SELECT COUNT(*) FROM ledger_errors"
+            " WHERE created_at >= ?"
+            " AND severity IN ('ERROR', 'CRITICAL')"
+        )
+        rows_sql = (
+            "SELECT id, severity, logger_name, message,"
+            " correlation_id, created_at FROM ledger_errors"
+            " WHERE created_at >= ?"
+            " AND severity IN ('ERROR', 'CRITICAL')"
+            " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        )
+    else:
+        count_sql = "SELECT COUNT(*) FROM ledger_errors WHERE created_at >= ?"
+        rows_sql = (
+            "SELECT id, severity, logger_name, message,"
+            " correlation_id, created_at FROM ledger_errors"
+            " WHERE created_at >= ?"
+            " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        )
 
-    where_sql = " AND ".join(where_parts)
-
-    total_row = connection.execute(
-        f"SELECT COUNT(*) FROM ledger_errors WHERE {where_sql}",  # noqa: S608
-        params,
-    ).fetchone()
+    total_row = connection.execute(count_sql, (since_iso,)).fetchone()
     total = int(total_row[0]) if total_row is not None else 0
 
     rows = connection.execute(
-        (
-            "SELECT id, severity, logger_name, message, "  # noqa: S608
-            f"correlation_id, created_at FROM ledger_errors WHERE {where_sql} "
-            "ORDER BY created_at DESC, id DESC "
-            "LIMIT ? OFFSET ?"
-        ),
-        (*params, query.limit, query.offset),
+        rows_sql, (since_iso, query.limit, query.offset)
     ).fetchall()
 
     parsed_rows: list[dict[str, object]] = [
