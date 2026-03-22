@@ -94,6 +94,11 @@ If that threshold is met:
 3. **Explicitly list every bypass in your task completion report**, including
    the rule code, the location, and a summary of the rationale. A bypass that
    is not mentioned in the report is not acceptable.
+4. **Notify the user directly in your final response** when committing or
+   pushing code that contains any bypass. State the rule code, file location,
+   and one-sentence rationale. This notification is required even if the bypass
+   was already documented in the inline comment and task report. A bypass
+   committed without explicit user notification is a policy violation.
 
 **Example of an acceptable bypass:**
 

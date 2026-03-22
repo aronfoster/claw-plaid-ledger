@@ -101,6 +101,12 @@ class LedgerDbHandler(logging.Handler):
             )
             with sqlite3.connect(self._db_path) as conn:
                 insert_ledger_error(conn, row)
+        # BLE001: logging.Handler.emit() must catch all exceptions and
+        # delegate to self.handleError() — this is the documented stdlib
+        # pattern (see logging.StreamHandler.emit).  Narrowing to specific
+        # exceptions (e.g. sqlite3.Error) would leave self.format(record)
+        # unprotected; format exceptions would then propagate into request
+        # handlers and crash the server.  Cannot be restructured.
         except Exception:  # noqa: BLE001
             self.handleError(record)
         finally:
