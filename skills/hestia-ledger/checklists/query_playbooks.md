@@ -27,7 +27,10 @@ Reuse these values; do not create near-duplicates.
 
 1. `GET /transactions` with fixed window + `view=canonical`.
 2. Paginate to completion.
-3. Queue records missing expected annotation context or showing uncertainty.
+3. Each row includes an `annotation` field (`null` for unannotated transactions).
+   Queue records where `annotation` is `null`, tags are missing, or annotation
+   state shows uncertainty — no per-record drill-down needed for initial
+   screening.
 
 ### 2) Drill-down before write
 

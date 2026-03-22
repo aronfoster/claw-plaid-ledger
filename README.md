@@ -167,7 +167,7 @@ Notes:
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
-| `GET` | `/transactions` | Paginated, filterable transaction list (defaults to canonical view; supports `tags` and optional `search_notes=true`) |
+| `GET` | `/transactions` | Paginated, filterable transaction list; includes `annotation` per row (`null` if unannotated); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
 | `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters |
 | `GET` | `/categories` | Distinct sorted category values from all annotations |
 | `GET` | `/tags` | Distinct sorted tag values from all annotations |
