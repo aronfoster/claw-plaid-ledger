@@ -216,35 +216,37 @@ without manual stitching:
   a "Month-over-month trends" playbook entry (playbook 7). Hestia's skill
   docs are unchanged.
 
+### M17 — Errors visible to OpenClaw (Sprint 19)
+
+Sprint 19 is complete. Ledger warnings and errors are now visible to OpenClaw
+agents without tailing logs:
+
+- **`ledger_errors` table** — new SQLite table persists WARNING, ERROR, and
+  CRITICAL log records automatically. Rows include `severity`, `logger_name`,
+  `message`, `correlation_id`, and `created_at`. Retention policy: rows older
+  than 30 days are pruned on each insert.
+- **`LedgerDbHandler`** — a `logging.Handler` subclass installed in the
+  server's `lifespan()` context manager. Any logger running during server
+  operation (background sync, webhook handler, request handler) writes WARNING+
+  records to `ledger_errors` automatically — no per-call instrumentation
+  required. A `threading.local()` re-entrancy guard prevents infinite
+  recursion.
+- **`GET /errors`** endpoint — bearer-auth required. Query parameters: `hours`
+  (lookback window, minimum 1; `?hours=0` → 422), `min_severity` (`WARNING` or
+  `ERROR`), `limit` (max 500), `offset`. Response shape:
+  `{ errors, total, limit, offset, since }`. Rows are ordered newest first.
+- **`doctor` integration** — `ledger doctor` reports
+  `doctor: error-log warn=N error=N (last 24h)` and schema check FAILs if
+  `ledger_errors` table is absent.
+- **Skill docs** — both `hestia-ledger` and `athena-ledger` skill bundles
+  updated with `GET /errors` in approved API calls, concrete pagination
+  mechanics (`limit`/`offset`/`total`), and agent-specific usage guidance
+  (Hestia: pre-run health check; Athena: proactive error alerting workflow and
+  playbook entry).
+
 ---
 
 ## Upcoming Milestones
-
-### M17 — Errors visible to OpenClaw
-
-**Focus:** Surface ledger warnings and errors to OpenClaw agents for
-user-facing alerting.
-
-**Goal:** Agents can poll a ledger endpoint to discover recent warnings and
-errors without tailing logs directly, enabling proactive alerting to users.
-
-**Scope**
-
-- New table to persist warnings and errors emitted by the ledger (schema and
-  retention policy TBD at sprint time).
-- `GET /errors` (or equivalent) endpoint returning recent entries, filterable
-  by severity and time window.
-- Structured logging layer writes to the new table on WARN/ERROR so no manual
-  instrumentation is required at each call site.
-- `doctor` reports whether error-log persistence is configured and healthy.
-
-**Skill doc updates required:** Add the new endpoint to the approved API calls
-lists in both `skills/athena-ledger/SKILL.md` and
-`skills/hestia-ledger/SKILL.md`. Document when each agent should poll it
-(e.g. Athena for proactive user-facing alerting; Hestia for pre-run health
-checks) and include a playbook entry in the relevant checklist files.
-
----
 
 ### M18 — Split test files
 

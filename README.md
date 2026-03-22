@@ -149,7 +149,7 @@ Notes:
 
 | Command | Description |
 |---|---|
-| `ledger doctor` | Validates config, DB connectivity, schema, and row counts; checks OpenClaw notification config |
+| `ledger doctor` | Validates config, DB connectivity, schema, and row counts; checks OpenClaw notification config; reports `doctor: error-log warn=N error=N (last 24h)` |
 | `ledger doctor --production-preflight` | Validates live-readiness config without contacting external services; exits non-zero on any required failure |
 | `ledger init-db` | Creates the SQLite database and initialises the schema (safe to re-run) |
 | `ledger items` | Shows per-item health (token presence, account count, last sync) for all entries in `items.toml`; exits 0 always |
@@ -175,6 +175,7 @@ Notes:
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
 | `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
 | `PUT` | `/annotations/{id}` | Upsert annotation; returns the full updated transaction record (no follow-up GET needed) |
+| `GET` | `/errors` | Recent ledger warnings and errors; supports `hours`, `min_severity`, `limit`, `offset`; use for pre-run health checks and proactive alerting |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |
 
