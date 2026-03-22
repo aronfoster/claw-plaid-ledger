@@ -28,6 +28,7 @@ durably on a home server.
 - Agent skill auto-registration via `sync-skills.sh push` (Section 16)
 - Account labels and enriched spend queries (Section 17)
 - Month-over-month spend trends via `GET /spend/trends` (Section 18)
+- Ledger error log monitoring via `GET /errors` (Section 19)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -2145,3 +2146,117 @@ filters are applied.
   `GET /spend`.
 - The current month's bucket is always partial; avoid direct comparisons
   between it and prior complete months.
+
+---
+
+## 19. Ledger error log monitoring
+
+`GET /errors` exposes recent ledger warnings and errors recorded automatically
+during server operation. Any WARNING, ERROR, or CRITICAL log emitted by any
+logger while `ledger serve` is running is persisted to the `ledger_errors`
+table without per-call instrumentation. Rows older than 30 days are pruned
+automatically on each insert.
+
+### Checking recent errors
+
+Default 24-hour window:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/errors" | jq .
+```
+
+Last hour, errors only:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/errors?hours=1&min_severity=ERROR" | jq .
+```
+
+Last week:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/errors?hours=168" | jq .
+```
+
+Response shape:
+
+```json
+{
+  "errors": [
+    {
+      "id": 1,
+      "severity": "ERROR",
+      "logger_name": "claw_plaid_ledger.server",
+      "message": "background sync failed: connection refused",
+      "correlation_id": "sync-a1b2c3d4",
+      "created_at": "2026-03-22T10:05:00.000000+00:00"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "since": "2026-03-21T10:05:00.000000+00:00"
+}
+```
+
+- `total` is the full matching count before `limit`/`offset`.
+- `since` is the UTC start of the lookback window.
+- `correlation_id` links the error to a specific API request (`req-xxxxxxxx`)
+  or sync run (`sync-xxxxxxxx`). Use it with `journalctl` or server logs to
+  retrieve full context.
+
+### `doctor` error-log summary
+
+`ledger doctor` always reports a one-line error-log summary:
+
+```
+doctor: error-log warn=2 error=0 (last 24h)
+```
+
+This count covers the last 24 hours. If `error > 0`, check the server logs
+and call `GET /errors?min_severity=ERROR` to retrieve the specific rows.
+The `doctor` command does not exit non-zero based on these counts — they are
+informational. Operators and agents can inspect the counts and decide whether
+to investigate further.
+
+### Pagination
+
+`GET /errors` uses the same offset-based pagination as `GET /transactions`:
+
+```bash
+# Page 1
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/errors?limit=50&offset=0" | jq .
+
+# Page 2
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/errors?limit=50&offset=50" | jq .
+```
+
+Stop when `offset >= total`.
+
+### Tracing an error with its correlation ID
+
+When an error row contains a `correlation_id`:
+
+```bash
+# Filter server logs by the request ID
+journalctl -u claw-plaid-ledger --since "1 hour ago" | grep "req-a1b2c3d4"
+
+# Or filter by a sync run ID
+journalctl -u claw-plaid-ledger --since "1 hour ago" | grep "sync-a1b2c3d4"
+```
+
+See also Section 9.5 for the full request-tracing walkthrough.
+
+### Notes
+
+- `?hours=0` returns HTTP 422 (minimum lookback is 1 hour).
+- `?limit` maximum is 500; larger values return HTTP 422.
+- Rows are ordered newest first (`created_at DESC`).
+- Error persistence covers all server-context code paths: webhook handlers,
+  background sync, scheduled sync loop, and API request handlers.
+- CLI sync commands (`ledger sync`, `ledger sync --all`) are intentionally out
+  of scope — they are interactive and print to the terminal.

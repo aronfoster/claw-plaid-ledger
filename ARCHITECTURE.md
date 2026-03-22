@@ -25,6 +25,9 @@
   injection, the `lifespan` context manager, and the optional scheduled sync
   background loop (`_scheduled_sync_loop`, `_check_and_sync_overdue_items`,
   `_sync_item_if_overdue`)
+- Logging utilities (`logging_utils.py`) — `CorrelationIdFilter` injects
+  correlation IDs into every log record; `LedgerDbHandler` persists WARNING+
+  records to `ledger_errors` automatically during server operation
 - OpenClaw notifier (`notifier.py`) — sends `POST /hooks/agent` to wake Hestia after a non-empty sync
 
 ## Auth boundary
@@ -168,6 +171,7 @@ Zero-change syncs skip the notification entirely.
 - `transaction`
 - `annotation` (agent-owned; sync engine never touches this)
 - `sync_state`
+- `ledger_errors` (server-owned; written by `LedgerDbHandler`; read via `GET /errors`)
 
 Deferred entities (`review_item`, rules) land in later phases.
 
@@ -239,6 +243,24 @@ CREATE TABLE IF NOT EXISTS account_labels (
 
 One row per Plaid item (institution). Stores the Plaid sync cursor and the
 timestamp of the last successful sync.
+
+### `ledger_errors`
+
+Server-written error log. Populated automatically by `LedgerDbHandler` during
+server operation; never written by CLI sync commands or the sync engine. Rows
+older than 30 days are pruned on each insert (same transaction). Read via
+`GET /errors`.
+
+```sql
+CREATE TABLE IF NOT EXISTS ledger_errors (
+    id             INTEGER PRIMARY KEY,
+    severity       TEXT NOT NULL,    -- Python level name: 'WARNING', 'ERROR', 'CRITICAL'
+    logger_name    TEXT NOT NULL,    -- e.g. 'claw_plaid_ledger.server'
+    message        TEXT NOT NULL,
+    correlation_id TEXT,             -- request_id or sync_run_id; NULL outside any context
+    created_at     TEXT NOT NULL     -- ISO 8601 UTC
+);
+```
 
 ### `annotations`
 
@@ -315,6 +337,7 @@ All endpoints are served by `ledger serve`.
 | `PUT` | `/accounts/{account_id}` | Bearer | Upsert a human-readable label for an account; returns the full account record; 404 if unknown |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
 | `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation; returns the full updated transaction record |
+| `GET` | `/errors` | Bearer | Recent ledger warnings and errors from `ledger_errors`; supports `hours`, `min_severity`, `limit`, `offset` |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
 
@@ -654,6 +677,46 @@ the annotation row. Omitted fields are stored as `null`.
 - `created_at` is preserved on updates; `updated_at` is refreshed.
 - No follow-up GET is needed to confirm the write.
 
+### `GET /errors`
+
+Returns recent ledger warnings and errors from `ledger_errors`, ordered newest
+first. Requires bearer token auth.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `hours` | int ≥ 1 | `24` | Lookback window in hours. `?hours=0` returns HTTP 422. |
+| `min_severity` | `WARNING` \| `ERROR` \| `null` | `null` | `null`/`WARNING` = all WARNING+ rows; `ERROR` = ERROR and CRITICAL only. |
+| `limit` | int | `100` | Maximum rows to return; max `500`. |
+| `offset` | int | `0` | Rows to skip (pagination). |
+
+**Response** (HTTP 200):
+
+```json
+{
+  "errors": [
+    {
+      "id": 1,
+      "severity": "ERROR",
+      "logger_name": "claw_plaid_ledger.server",
+      "message": "background sync failed: connection refused",
+      "correlation_id": "req-a1b2c3d4",
+      "created_at": "2026-03-22T10:05:00.000000+00:00"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "since": "2026-03-21T10:05:00.000000+00:00"
+}
+```
+
+- `total` is the full matching count before `limit`/`offset` are applied.
+- `since` is the UTC datetime marking the start of the `hours` window.
+- `correlation_id` is `null` for records emitted outside any request or sync context.
+- Use `?min_severity=ERROR` to narrow to actionable failures only (exclude WARNING-level noise).
+
 ## OpenAPI / SKILL definition
 
 FastAPI auto-generates a machine-readable OpenAPI spec at `GET /openapi.json`
@@ -865,6 +928,7 @@ src/claw_plaid_ledger/
   db.py
   items_config.py   # multi-item items.toml loader
   link_server.py    # local HTTP server for Plaid Link flow
+  logging_utils.py  # CorrelationIdFilter + LedgerDbHandler
   notifier.py
   plaid_adapter.py
   plaid_models.py
@@ -886,6 +950,7 @@ tests/
   test_db.py
   test_items_config.py
   test_link_server.py
+  test_logging_utils.py
   test_notifier.py
   test_plaid_adapter.py
   test_preflight.py
@@ -930,6 +995,18 @@ Correlation behavior:
 - Sync scope: each sync run emits a `sync_run_id` (`sync-xxxxxxxx`) propagated
   through sync-layer log lines (CLI, scheduled loop, webhook-triggered sync).
 - Outside request/sync scope, `correlation_id` renders as `-`.
+
+### Error persistence
+
+`LedgerDbHandler` (in `logging_utils.py`) is installed on the root logger
+during server `lifespan()`. It captures every WARNING, ERROR, and CRITICAL
+record emitted by any logger during server operation and writes it to the
+`ledger_errors` table. A `threading.local()` re-entrancy guard prevents
+infinite recursion if the DB layer itself logs at WARNING+.
+
+The handler is not installed for CLI commands (`ledger sync`, `ledger sync
+--all`). CLI sync runs are interactive and have terminal output; extending
+error persistence to the CLI is deferred.
 
 Secret-redaction policy:
 
