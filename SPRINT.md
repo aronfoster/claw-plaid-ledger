@@ -169,7 +169,7 @@ Minimum required tests:
 
 ---
 
-## Task 2: `LedgerDbHandler` + `GET /errors` endpoint + `doctor` integration
+## Task 2: `LedgerDbHandler` + `GET /errors` endpoint + `doctor` integration ✅ DONE
 
 ### Background
 

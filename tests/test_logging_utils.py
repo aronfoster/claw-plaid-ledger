@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
+from claw_plaid_ledger.db import (
+    LedgerErrorQuery,
+    initialize_database,
+    query_ledger_errors,
+)
 from claw_plaid_ledger.logging_utils import (
     CorrelationIdFilter,
+    LedgerDbHandler,
     _correlation_id_var,
     get_correlation_id,
     redact_webhook_body,
@@ -15,6 +24,8 @@ from claw_plaid_ledger.logging_utils import (
 )
 
 if TYPE_CHECKING:
+    import pathlib
+
     import pytest
 
 
@@ -219,3 +230,123 @@ class TestLogFormat:
             )
         finally:
             reset_correlation_id(token)
+
+
+# ---------------------------------------------------------------------------
+# LedgerDbHandler
+# ---------------------------------------------------------------------------
+
+
+def _make_log_record(
+    level: int, msg: str, logger_name: str = "test.handler"
+) -> logging.LogRecord:
+    """Create a minimal LogRecord for testing."""
+    record = logging.LogRecord(
+        name=logger_name,
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=msg,
+        args=(),
+        exc_info=None,
+    )
+    record.created = datetime.now(UTC).timestamp()
+    return record
+
+
+class TestLedgerDbHandler:
+    """Tests for LedgerDbHandler."""
+
+    def test_emit_warning_writes_row(self, tmp_path: pathlib.Path) -> None:
+        """Emitting a WARNING record persists one row in ledger_errors."""
+        db_path = tmp_path / "test.db"
+        initialize_database(db_path)
+        handler = LedgerDbHandler(db_path)
+
+        record = _make_log_record(logging.WARNING, "test warning message")
+        handler.emit(record)
+
+        with sqlite3.connect(db_path) as conn:
+            rows, total = query_ledger_errors(conn, LedgerErrorQuery())
+        assert total == 1
+        assert rows[0]["severity"] == "WARNING"
+        assert rows[0]["message"] == "test warning message"
+
+    def test_emit_error_writes_row(self, tmp_path: pathlib.Path) -> None:
+        """Emitting an ERROR record persists one row in ledger_errors."""
+        db_path = tmp_path / "test.db"
+        initialize_database(db_path)
+        handler = LedgerDbHandler(db_path)
+
+        record = _make_log_record(logging.ERROR, "test error message")
+        handler.emit(record)
+
+        with sqlite3.connect(db_path) as conn:
+            rows, total = query_ledger_errors(conn, LedgerErrorQuery())
+        assert total == 1
+        assert rows[0]["severity"] == "ERROR"
+
+    def test_emit_info_is_ignored(self, tmp_path: pathlib.Path) -> None:
+        """INFO records are not written; handler level is WARNING."""
+        db_path = tmp_path / "test.db"
+        initialize_database(db_path)
+        handler = LedgerDbHandler(db_path)
+
+        # Attach the handler to a temporary logger and send an INFO record
+        # through the logger — the logging framework checks handler.level
+        # before calling emit(), so INFO is never written to the DB.
+        test_logger = logging.getLogger("test_emit_info_ignored")
+        test_logger.setLevel(logging.DEBUG)
+        test_logger.addHandler(handler)
+        try:
+            test_logger.info("should not be stored")
+        finally:
+            test_logger.removeHandler(handler)
+
+        with sqlite3.connect(db_path) as conn:
+            _, total = query_ledger_errors(conn, LedgerErrorQuery())
+        assert total == 0
+
+    def test_emit_carries_correlation_id(self, tmp_path: pathlib.Path) -> None:
+        """Correlation ID set via set_correlation_id() appears in the row."""
+        db_path = tmp_path / "test.db"
+        initialize_database(db_path)
+        handler = LedgerDbHandler(db_path)
+
+        token = set_correlation_id("req-test1234")
+        try:
+            record = _make_log_record(logging.WARNING, "correlated warning")
+            handler.emit(record)
+        finally:
+            reset_correlation_id(token)
+
+        with sqlite3.connect(db_path) as conn:
+            rows, _ = query_ledger_errors(conn, LedgerErrorQuery())
+        assert rows[0]["correlation_id"] == "req-test1234"
+
+    def test_reentrancy_guard_prevents_recursion(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Re-entrant emit() calls are dropped; no exception raised."""
+        db_path = tmp_path / "test.db"
+        initialize_database(db_path)
+        handler = LedgerDbHandler(db_path)
+
+        call_count = 0
+
+        def re_entrant_insert(_conn: object, _row: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            # Try to emit again on the same handler — should be a no-op.
+            inner_record = _make_log_record(logging.ERROR, "inner")
+            handler.emit(inner_record)
+
+        with patch(
+            "claw_plaid_ledger.logging_utils.insert_ledger_error",
+            side_effect=re_entrant_insert,
+        ):
+            record = _make_log_record(logging.WARNING, "outer")
+            handler.emit(record)
+
+        # The inner re-entrant call was blocked; insert was called only once.
+        assert call_count == 1

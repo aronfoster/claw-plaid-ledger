@@ -38,6 +38,7 @@ from claw_plaid_ledger.config import (
 from claw_plaid_ledger.db import (
     AccountLabelRow,
     AnnotationRow,
+    LedgerErrorQuery,
     SpendQuery,
     SpendTrendsQuery,
     TransactionQuery,
@@ -48,6 +49,7 @@ from claw_plaid_ledger.db import (
     get_distinct_categories,
     get_distinct_tags,
     get_transaction,
+    query_ledger_errors,
     query_spend,
     query_spend_trends,
     query_transactions,
@@ -56,6 +58,7 @@ from claw_plaid_ledger.db import (
 )
 from claw_plaid_ledger.items_config import ItemConfig, load_items_config
 from claw_plaid_ledger.logging_utils import (
+    LedgerDbHandler,
     get_correlation_id,
     redact_webhook_body,
     reset_correlation_id,
@@ -477,6 +480,7 @@ async def lifespan(
 ) -> AsyncGenerator[None, None]:
     """Start and cleanly stop the scheduled sync background task."""
     task: asyncio.Task[None] | None = None
+    db_handler: LedgerDbHandler | None = None
     try:
         cfg = load_config()
     except ConfigError:
@@ -485,12 +489,16 @@ async def lifespan(
         )
         cfg = None
 
-    if cfg is not None and cfg.scheduled_sync_enabled:
-        logger.info(
-            "lifespan: starting scheduled sync loop (fallback_hours=%d)",
-            cfg.scheduled_sync_fallback_hours,
-        )
-        task = asyncio.create_task(_scheduled_sync_loop(cfg))
+    if cfg is not None:
+        db_handler = LedgerDbHandler(cfg.db_path)
+        logging.getLogger().addHandler(db_handler)
+
+        if cfg.scheduled_sync_enabled:
+            logger.info(
+                "lifespan: starting scheduled sync loop (fallback_hours=%d)",
+                cfg.scheduled_sync_fallback_hours,
+            )
+            task = asyncio.create_task(_scheduled_sync_loop(cfg))
 
     yield
 
@@ -499,6 +507,9 @@ async def lifespan(
         with contextlib.suppress(asyncio.CancelledError):
             await task
         logger.info("lifespan: scheduled sync loop stopped")
+
+    if db_handler is not None:
+        logging.getLogger().removeHandler(db_handler)
 
 
 app = fastapi.FastAPI(title="claw-plaid-ledger", lifespan=lifespan)
@@ -513,6 +524,39 @@ app.add_middleware(CorrelationIdMiddleware)
 def health() -> dict[str, str]:
     """Return service liveness status."""
     return {"status": "ok"}
+
+
+class ErrorListQuery(BaseModel):
+    """Validated query parameters for the GET /errors endpoint."""
+
+    hours: int = Field(default=24, ge=1)
+    min_severity: Literal["WARNING", "ERROR"] | None = None
+    limit: int = Query(default=100, le=500)
+    offset: int = 0
+
+
+@app.get("/errors", dependencies=[Depends(require_bearer_token)])
+def list_errors(
+    params: Annotated[ErrorListQuery, Depends()],
+) -> dict[str, object]:
+    """Return recent ledger warnings and errors."""
+    config = load_config()
+    query = LedgerErrorQuery(
+        hours=params.hours,
+        min_severity=params.min_severity,
+        limit=params.limit,
+        offset=params.offset,
+    )
+    since = datetime.now(UTC) - timedelta(hours=params.hours)
+    with sqlite3.connect(config.db_path) as connection:
+        rows, total = query_ledger_errors(connection, query)
+    return {
+        "errors": rows,
+        "total": total,
+        "limit": params.limit,
+        "offset": params.offset,
+        "since": since.isoformat(),
+    }
 
 
 _SpendRange = Literal[

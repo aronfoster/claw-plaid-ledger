@@ -6,10 +6,12 @@ import logging
 import sqlite3
 import uuid
 import webbrowser
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, cast
 
 if TYPE_CHECKING:
     import os
+    from pathlib import Path
 
 import typer
 import uvicorn
@@ -169,7 +171,7 @@ def _doctor_per_item_sync_state(
         )
 
 
-_EXPECTED_TABLES = {"accounts", "transactions", "sync_state"}
+_EXPECTED_TABLES = {"accounts", "transactions", "sync_state", "ledger_errors"}
 _REDACT_KEEP_CHARS = 4
 
 
@@ -205,6 +207,23 @@ def _doctor_db_stats(
             last_synced = sync_row[1] or "never"
 
     return schema_error, sync_count, last_synced, account_count, tx_count
+
+
+def _doctor_error_log_stats(db_path: Path) -> tuple[int, int]:
+    """Return (warn_count, error_count) for the last 24 hours."""
+    cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        warn = conn.execute(
+            "SELECT COUNT(*) FROM ledger_errors "
+            "WHERE severity = 'WARNING' AND created_at >= ?",
+            (cutoff,),
+        ).fetchone()[0]
+        error = conn.execute(
+            "SELECT COUNT(*) FROM ledger_errors "
+            "WHERE severity IN ('ERROR', 'CRITICAL') AND created_at >= ?",
+            (cutoff,),
+        ).fetchone()[0]
+    return int(warn), int(error)
 
 
 def _redact(value: str | None) -> str:
@@ -292,6 +311,10 @@ def doctor(
     )
     typer.echo(f"doctor: accounts rows={account_count}")
     typer.echo(f"doctor: transactions rows={tx_count}")
+    warn_count, error_count = _doctor_error_log_stats(config.db_path)
+    typer.echo(
+        f"doctor: error-log warn={warn_count} error={error_count} (last 24h)"
+    )
 
     if items_config_error is not None:
         typer.echo(
