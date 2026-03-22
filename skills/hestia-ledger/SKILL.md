@@ -71,14 +71,52 @@ Hestia may call only:
    (no follow-up `GET /transactions/{id}` needed to confirm the written state)
 6. `GET /accounts` — retrieve all known accounts with human-readable labels
 7. `PUT /accounts/{account_id}` — write or update a label for an account
+8. `GET /errors` — recent ledger warnings and errors; use as a pre-run
+   health check before each ingestion run
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
+
+## Pagination
+
+`GET /transactions` supports offset-based pagination via `limit` and `offset`
+query parameters. Every list response includes:
+
+```json
+{
+  "transactions": [...],
+  "total": 247,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+- `limit` — number of rows per page; default `100`, maximum `500`.
+- `offset` — zero-based row index of the first row on this page.
+- `total` — total number of rows matching the query (independent of limit/offset).
+
+**To paginate to completion:**
+
+1. Start with `offset=0` and a fixed `limit` (e.g. `100`). Keep `limit` stable
+   within a run.
+2. After each response, advance: `offset += limit`.
+3. Stop when `offset >= total` — the next page would be empty.
+
+Equivalently: stop when the number of rows returned is less than `limit`
+(the server returned a partial page, meaning this was the last).
+
+**If pagination is interrupted** (call fails or run is aborted mid-way),
+report partial coverage and avoid definitive completeness claims.
 
 ## Deterministic ingestion loop
 
 For each run:
 
+0. **Pre-run health check.** Call `GET /errors?hours=1&min_severity=ERROR`
+   before starting ingestion. If the response contains any ERROR-level rows,
+   surface them in the run frame output and lower overall confidence for
+   the run. Do not abort — continue ingestion with reduced confidence and
+   flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
 2. Query `GET /transactions` in `view=canonical` and paginate to completion.
    Each row now includes a nested `annotation` field (`category`, `note`,

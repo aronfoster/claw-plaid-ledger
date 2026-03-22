@@ -15,6 +15,16 @@ Use this sheet for deterministic analysis and reporting workflows.
 - Paginate `GET /transactions` deterministically.
 - Label partial coverage when pagination/calls fail.
 
+## Pagination mechanics
+
+Response shape for `GET /transactions`:
+`{ "transactions": [...], "total": N, "limit": L, "offset": O }`
+
+- Advance: `offset += limit` after each page.
+- Stop: when `offset >= total`.
+- Keep `limit` stable within a run (recommended: `100`).
+- If interrupted: report partial coverage; do not make totals claims.
+
 ## Vocabulary discovery
 
 Before annotating, retrieve the current vocabulary:
@@ -86,6 +96,17 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 4. To validate a specific month's total, cross-check with
    `GET /spend?start_date=<YYYY-MM-01>&end_date=<YYYY-MM-last-day>`
    using matching filters — the numbers must agree.
+
+### 8) Ledger health check
+
+1. `GET /errors?hours=24` — retrieve warnings and errors from the last 24h.
+2. If `total > 0`, group rows by `severity` and `logger_name`.
+3. For ERROR-level rows: include in any summary report with the `message` and
+   `correlation_id` for operator follow-up.
+4. For WARNING-level rows: note the count; escalate only if they form a
+   repeating pattern or accompany anomalous transaction data.
+5. To broaden the window: `?hours=168` (last 7 days).
+6. To narrow to errors only: add `?min_severity=ERROR`.
 
 ## Failure handling
 

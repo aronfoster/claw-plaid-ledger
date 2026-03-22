@@ -10,6 +10,16 @@ Use this sheet for deterministic ingestion and escalation-only behavior.
 - Use deterministic pagination for `GET /transactions`.
 - Never recommend canonical precedence overrides.
 
+## Pagination mechanics
+
+Response shape for `GET /transactions`:
+`{ "transactions": [...], "total": N, "limit": L, "offset": O }`
+
+- Advance: `offset += limit` after each page.
+- Stop: when `offset >= total`.
+- Keep `limit` stable within a run (recommended: `100`).
+- If interrupted: report partial coverage; do not make totals claims.
+
 ## Vocabulary setup (start of run)
 
 Before writing any annotations, load the current vocabulary:
@@ -18,6 +28,9 @@ Before writing any annotations, load the current vocabulary:
 2. `GET /tags` — retrieve existing tag values (sorted).
 3. `GET /accounts` — retrieve account ID-to-label mapping for any
    account-specific annotation context.
+4. `GET /errors?hours=1&min_severity=ERROR` — check for recent server errors
+   before beginning ingestion. Surface any ERROR rows in the run frame; lower
+   confidence if present.
 
 Reuse these values; do not create near-duplicates.
 
