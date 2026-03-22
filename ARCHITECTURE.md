@@ -371,6 +371,7 @@ Returns a paginated, filtered list of transactions.
 |---|---|---|---|
 | `start_date` | `YYYY-MM-DD` | — | Filter: effective date ≥ start_date (inclusive). Effective date = `COALESCE(posted_date, authorized_date)` |
 | `end_date` | `YYYY-MM-DD` | — | Filter: effective date ≤ end_date (inclusive) |
+| `range` | string | — | Shorthand date window: `last_month`, `this_month`, `last_30_days`, `last_7_days`. Resolved server-side; explicit `start_date`/`end_date` take precedence when both are provided |
 | `account_id` | string | — | Filter: exact match on `plaid_account_id` |
 | `pending` | bool | — | Filter: `true` returns only pending; `false` returns only posted |
 | `min_amount` | float | — | Filter: amount ≥ min_amount (inclusive). Plaid sign: positive = debit |
@@ -395,7 +396,13 @@ Returns a paginated, filtered list of transactions.
       "name": "Starbucks",
       "merchant_name": "Starbucks",
       "pending": false,
-      "date": "2024-01-15"
+      "date": "2024-01-15",
+      "annotation": {
+        "category": "coffee",
+        "note": "morning latte",
+        "tags": ["coffee", "recurring"],
+        "updated_at": "2024-06-01T10:00:00+00:00"
+      }
     }
   ],
   "total": 150,
@@ -407,6 +414,9 @@ Returns a paginated, filtered list of transactions.
 - `total` is the full matching count before `limit`/`offset` are applied.
 - Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
 - `date` is `COALESCE(posted_date, authorized_date)`.
+- `annotation` is `null` for transactions with no annotation row; otherwise the
+  object is field-for-field identical to the `annotation` block in
+  `GET /transactions/{id}`.
 
 ### `GET /categories`
 

@@ -176,6 +176,27 @@ are resolved:
   API call lists; `GET /spend` new filter params documented; account-scoped
   spend playbook added to Athena's `query_playbooks.md`.
 
+### M16a — Transaction list fixes (out-of-sprint patch)
+
+Two production gaps reported by Athena resolved as a targeted patch against
+the M16 codebase:
+
+- **BUG-012** — `GET /transactions` now accepts `range` (`last_month`,
+  `this_month`, `last_30_days`, `last_7_days`), matching the behaviour
+  already present on `GET /spend`. Explicit `start_date`/`end_date` still take
+  precedence when provided alongside `range`. Root cause was a module-ordering
+  issue: `_SpendRange` was defined after the route decorator ran, so FastAPI
+  silently discarded the parameter. Fix: moved the type alias before
+  `list_transactions()` in `server.py`.
+- **BUG-013** — `GET /transactions` list results now include a nested
+  `annotation` field (`category`, `note`, `tags`, `updated_at`) when an
+  annotation exists, or `null` otherwise — field-for-field identical to
+  `GET /transactions/{id}`. Previously the LEFT JOIN on `annotations` was used
+  only for filtering; columns were dropped at projection time. This eliminates
+  the need for per-transaction drill-down calls during initial screening.
+- **Skill docs** — `skills/athena-ledger/` and `skills/hestia-ledger/`
+  updated to reflect both changes.
+
 ### M16 — Spend trends (Sprint 18)
 
 Sprint 18 is complete. Month-over-month spend analysis is now available

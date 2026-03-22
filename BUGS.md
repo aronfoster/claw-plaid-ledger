@@ -8,9 +8,46 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
+*(none)*
+
+---
+
+## Resolved bugs
+
+---
+
+### BUG-013 — Annotations absent from `GET /transactions` list results
+
+**Status:** Resolved (M16a, out-of-sprint patch)
+**Severity:** Medium (callers cannot see annotation data without one extra request per transaction)
+**Area:** API (`GET /transactions`)
+**Reported by:** Athena
+
+`GET /transactions/{id}` returns a nested `annotation` field (`category`,
+`note`, `tags`, `updated_at`) via `_fetch_transaction_with_annotation()`.
+`GET /transactions` (the list endpoint) calls `query_transactions()` from
+`db.py`, which performs no JOIN to the `annotations` table. Every transaction
+in list results is returned without annotation data, even when annotations
+exist.
+
+**Affected code:**
+- `src/claw_plaid_ledger/server.py` — `list_transactions()` (lines ~536–571)
+  and `_fetch_transaction_with_annotation()` helper (lines ~754–779)
+- `src/claw_plaid_ledger/db.py` — `query_transactions()` (lines ~365–463)
+
+**Fix:** Extracted `_annotation_from_joined_row()` helper to keep
+`query_transactions()` complexity within linter thresholds. Extended the SELECT
+to project `ann.category`, `ann.note`, `ann.tags`, `ann.updated_at`, and
+`ann.plaid_transaction_id` (presence sentinel) from the LEFT JOIN that was
+already in place. Each row now carries `"annotation": {...}` when an annotation
+exists, or `"annotation": null` otherwise — field-for-field identical to the
+shape returned by `GET /transactions/{id}`.
+
+---
+
 ### BUG-012 — `range` parameter ignored on `GET /transactions`
 
-**Status:** Active
+**Status:** Resolved (M16a, out-of-sprint patch)
 **Severity:** High (date-scoped transaction queries silently return the full dataset)
 **Area:** API (`GET /transactions`)
 **Reported by:** Athena
@@ -29,42 +66,19 @@ default limit of 100 (max 500).
 - `/transactions?range=last_month` → ignores the parameter, returns 671
   transactions spanning the full history.
 
-**Affected code:**
-- `src/claw_plaid_ledger/server.py` — `TransactionListQuery` model and
-  `list_transactions()` route handler (lines ~519–571)
+**Root cause:** `_SpendRange` was defined *after* `list_transactions()` in
+`server.py`. With `from __future__ import annotations`, FastAPI resolves type
+hints via `get_type_hints()` at decoration time — when `_SpendRange` was not
+yet in the module namespace. The annotation was stored as an unresolved
+`ForwardRef`, causing FastAPI to silently skip validation and parameter binding.
 
-**Suggested fix:** Add a `range` field (same `_SpendRange` literal type) to
-`TransactionListQuery` and resolve it to `start_date`/`end_date` inside
-`list_transactions()`, reusing or extracting `_resolve_spend_dates()`.
-
----
-
-### BUG-013 — Annotations absent from `GET /transactions` list results
-
-**Status:** Active
-**Severity:** Medium (callers cannot see annotation data without one extra request per transaction)
-**Area:** API (`GET /transactions`)
-**Reported by:** Athena
-
-`GET /transactions/{id}` returns a nested `annotation` field (`category`,
-`note`, `tags`, `updated_at`) via `_fetch_transaction_with_annotation()`.
-`GET /transactions` (the list endpoint) calls `query_transactions()` from
-`db.py`, which performs no JOIN to the `annotations` table. Every transaction
-in list results is returned without annotation data, even when annotations
-exist.
-
-**Affected code:**
-- `src/claw_plaid_ledger/server.py` — `list_transactions()` (lines ~536–571)
-  and `_fetch_transaction_with_annotation()` helper (lines ~754–779)
-- `src/claw_plaid_ledger/db.py` — `query_transactions()` (lines ~365–463)
-
-**Suggested fix:** Extend `query_transactions()` to LEFT JOIN `annotations`
-and return annotation fields alongside each transaction row, matching the
-shape already produced by `_fetch_transaction_with_annotation()`.
-
----
-
-## Resolved bugs
+**Fix:** Moved `_SpendRange = Literal[...]` to before `TransactionListQuery`
+and `list_transactions()` so FastAPI can resolve the annotation at decoration
+time. Added `date_range: Annotated[_SpendRange | None, Query(alias="range")]`
+as an explicit parameter on `list_transactions()`. When supplied, it is
+resolved to `start_date`/`end_date` via the existing `_resolve_spend_dates()`
+helper. Explicit dates still take precedence (same convention as `GET /spend`).
+Invalid values are rejected with HTTP 422.
 
 ---
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -362,6 +363,27 @@ def _apply_tag_filters(
         params.append(tag)
 
 
+def _annotation_from_joined_row(
+    ann_id: object,
+    category: object,
+    note: object,
+    tags_json: object,
+    updated_at: object,
+) -> dict[str, object] | None:
+    """Build an annotation payload from LEFT-JOIN columns, or return None."""
+    if ann_id is None:
+        return None
+    ann_tags: list[str] | None = None
+    if tags_json is not None:
+        ann_tags = [str(t) for t in json.loads(str(tags_json))]
+    return {
+        "category": str(category) if category is not None else None,
+        "note": str(note) if note is not None else None,
+        "tags": ann_tags,
+        "updated_at": str(updated_at) if updated_at is not None else None,
+    }
+
+
 def query_transactions(
     connection: sqlite3.Connection,
     query: TransactionQuery,
@@ -437,7 +459,9 @@ def query_transactions(
         (
             f"SELECT t.plaid_transaction_id, t.plaid_account_id, t.amount, "
             "t.iso_currency_code, t.name, t.merchant_name, t.pending, "
-            f"{effective_date_sql} AS effective_date "
+            f"{effective_date_sql} AS effective_date, "
+            "ann.category, ann.note, ann.tags, ann.updated_at, "
+            "ann.plaid_transaction_id AS ann_id "
             f"{from_clause}"
             f"WHERE {where_sql} "
             "ORDER BY effective_date DESC, t.plaid_transaction_id ASC "
@@ -456,6 +480,9 @@ def query_transactions(
             "merchant_name": str(row[5]) if row[5] is not None else None,
             "pending": bool(row[6]),
             "date": str(row[7]) if row[7] is not None else None,
+            "annotation": _annotation_from_joined_row(
+                row[12], row[8], row[9], row[10], row[11]
+            ),
         }
         for row in rows
     ]

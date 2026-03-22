@@ -7,6 +7,11 @@ Use this sheet for deterministic analysis and reporting workflows.
 - Default to `view=canonical`.
 - Pair any `view=raw` call with an identical canonical query.
 - Always set explicit `start_date` + `end_date`, or use a `range` shorthand.
+  Both `GET /spend` and `GET /transactions` accept `range`.
+- `GET /transactions` list results include nested `annotation` data (or `null`
+  for unannotated rows). Use list results for initial triage; drill into
+  `GET /transactions/{id}` only when quoting amounts or annotation details in a
+  final report.
 - Paginate `GET /transactions` deterministically.
 - Label partial coverage when pagination/calls fail.
 
@@ -34,7 +39,9 @@ Option B — range shorthand (interactive / quick queries):
 1. `GET /spend?range=last_month` (or `this_month`, `last_30_days`,
    `last_7_days`).
 2. Confirm the resolved `start_date`/`end_date` in the response.
-3. Run `GET /transactions` with matching window for evidence.
+3. Run `GET /transactions?range=last_month` (same shorthand accepted) for
+   evidence. List results include `annotation` — no drill-down needed for
+   triage.
 
 Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 

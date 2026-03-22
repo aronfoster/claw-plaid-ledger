@@ -564,6 +564,7 @@ class TestListTransactionsEndpoint:
                     "merchant_name": "Starbucks",
                     "pending": False,
                     "date": "2024-01-15",
+                    "annotation": None,
                 }
             ],
             "total": 1,
@@ -671,6 +672,406 @@ class TestListTransactionsEndpoint:
             "limit": 100,
             "offset": 0,
         }
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /transactions — range shorthand parameter (BUG-012)
+# ---------------------------------------------------------------------------
+
+# Reuses _RANGE_TODAY and _patch_today defined later in this file alongside
+# the spend-range tests.  Python resolves these names at call time, not at
+# class definition time, so the ordering is fine.
+
+
+def _seed_range_transactions(db_path: pathlib.Path) -> None:
+    """Seed transactions across date ranges for range-param tests."""
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            (
+                "INSERT INTO accounts "
+                "(plaid_account_id, name, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)"
+            ),
+            (
+                "acct_r",
+                "Range Account",
+                "2024-01-01T00:00:00+00:00",
+                "2024-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.executemany(
+            (
+                "INSERT INTO transactions ("
+                "plaid_transaction_id, plaid_account_id, amount, "
+                "iso_currency_code, name, merchant_name, pending, "
+                "authorized_date, posted_date, raw_json, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                # Feb 2026 — inside last_month when today=2026-03-21
+                (
+                    "tx_feb1",
+                    "acct_r",
+                    10.0,
+                    "USD",
+                    "Feb Mid",
+                    None,
+                    0,
+                    None,
+                    "2026-02-15",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_feb2",
+                    "acct_r",
+                    20.0,
+                    "USD",
+                    "Feb Start",
+                    None,
+                    0,
+                    None,
+                    "2026-02-01",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                # Mar 2026, within last_7_days (2026-03-14..2026-03-21)
+                (
+                    "tx_mar1",
+                    "acct_r",
+                    30.0,
+                    "USD",
+                    "Mar Recent",
+                    None,
+                    0,
+                    None,
+                    "2026-03-18",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                # Mar 2026, outside last_7_days but inside this_month
+                (
+                    "tx_mar2",
+                    "acct_r",
+                    40.0,
+                    "USD",
+                    "Mar Early",
+                    None,
+                    0,
+                    None,
+                    "2026-03-01",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                # Jan 2026 — outside all ranges
+                (
+                    "tx_jan1",
+                    "acct_r",
+                    50.0,
+                    "USD",
+                    "Jan",
+                    None,
+                    0,
+                    None,
+                    "2026-01-15",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+
+
+class TestListTransactionsRangeParam:
+    """Tests for the ``range`` shorthand on GET /transactions (BUG-012)."""
+
+    def _setup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        db_path = tmp_path / "db.sqlite"
+        _seed_range_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        # _patch_today is defined alongside the spend-range tests below.
+        _patch_today(monkeypatch, _RANGE_TODAY)
+
+    def test_last_month_returns_only_february_transactions(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_month returns Feb 2026 transactions only."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/transactions",
+            params={"range": "last_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        ids = {t["id"] for t in body["transactions"]}
+        assert ids == {"tx_feb1", "tx_feb2"}
+        expected_total = 2
+        assert body["total"] == expected_total
+
+    def test_this_month_returns_march_transactions(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=this_month returns Mar 2026 transactions only."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/transactions",
+            params={"range": "this_month"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        ids = {t["id"] for t in response.json()["transactions"]}
+        assert ids == {"tx_mar1", "tx_mar2"}
+
+    def test_last_7_days_returns_recent_transactions(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """?range=last_7_days returns transactions within 7 days of today."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/transactions",
+            params={"range": "last_7_days"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        ids = {t["id"] for t in response.json()["transactions"]}
+        assert ids == {"tx_mar1"}
+
+    def test_explicit_start_date_overrides_range(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Explicit start_date overrides the range-derived start date."""
+        self._setup(monkeypatch, tmp_path)
+        # last_month derives 2026-02-01..2026-02-28; push start to 2026-02-10
+        response = client.get(
+            "/transactions",
+            params={"range": "last_month", "start_date": "2026-02-10"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        ids = {t["id"] for t in response.json()["transactions"]}
+        assert "tx_feb1" in ids  # 2026-02-15 — after override start
+        assert "tx_feb2" not in ids  # 2026-02-01 — before override start
+
+    def test_explicit_end_date_overrides_range(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Explicit end_date overrides the range-derived end date."""
+        self._setup(monkeypatch, tmp_path)
+        # last_month derives ..2026-02-28; pull end back to 2026-02-10
+        response = client.get(
+            "/transactions",
+            params={"range": "last_month", "end_date": "2026-02-10"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        ids = {t["id"] for t in response.json()["transactions"]}
+        assert "tx_feb2" in ids  # 2026-02-01 — before override end
+        assert "tx_feb1" not in ids  # 2026-02-15 — after override end
+
+    def test_no_range_returns_full_history(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Without range, all transactions are returned."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        expected_total = 5
+        assert response.json()["total"] == expected_total
+
+    def test_invalid_range_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Unrecognised range value is rejected with HTTP 422."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/transactions",
+            params={"range": "yesterday"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /transactions — annotations in list results (BUG-013)
+# ---------------------------------------------------------------------------
+
+
+def _seed_annotation_list_data(db_path: pathlib.Path) -> None:
+    """Seed two transactions: one annotated, one bare."""
+    initialize_database(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            (
+                "INSERT INTO accounts "
+                "(plaid_account_id, name, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)"
+            ),
+            (
+                "acct_a",
+                "Account A",
+                "2024-01-01T00:00:00+00:00",
+                "2024-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.executemany(
+            (
+                "INSERT INTO transactions ("
+                "plaid_transaction_id, plaid_account_id, amount, "
+                "iso_currency_code, name, merchant_name, pending, "
+                "authorized_date, posted_date, raw_json, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_ann",
+                    "acct_a",
+                    15.0,
+                    "USD",
+                    "Coffee Shop",
+                    "Bean Barn",
+                    0,
+                    None,
+                    "2024-06-01",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_bare",
+                    "acct_a",
+                    25.0,
+                    "USD",
+                    "Gas Station",
+                    None,
+                    0,
+                    None,
+                    "2024-06-02",
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
+        connection.execute(
+            (
+                "INSERT INTO annotations "
+                "(plaid_transaction_id, category, note, tags, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                "tx_ann",
+                "coffee",
+                "morning latte",
+                '["coffee", "recurring"]',
+                "2024-06-01T10:00:00+00:00",
+                "2024-06-01T10:00:00+00:00",
+            ),
+        )
+
+
+class TestListTransactionsAnnotations:
+    """Tests for annotation data in GET /transactions results (BUG-013)."""
+
+    def test_unannotated_transaction_has_null_annotation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Unannotated transactions return annotation: null in list results."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"start_date": "2024-06-02", "end_date": "2024-06-02"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        tx = response.json()["transactions"][0]
+        assert tx["id"] == "tx_bare"
+        assert tx["annotation"] is None
+
+    def test_annotated_transaction_includes_annotation_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Annotated transactions include the full annotation object."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"start_date": "2024-06-01", "end_date": "2024-06-01"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        tx = response.json()["transactions"][0]
+        assert tx["id"] == "tx_ann"
+        assert tx["annotation"] == {
+            "category": "coffee",
+            "note": "morning latte",
+            "tags": ["coffee", "recurring"],
+            "updated_at": "2024-06-01T10:00:00+00:00",
+        }
+
+    def test_list_annotation_shape_matches_detail_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Annotation shape in list results matches GET /transactions/{id}."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        list_resp = client.get(
+            "/transactions",
+            params={"start_date": "2024-06-01", "end_date": "2024-06-01"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        detail_resp = client.get(
+            "/transactions/tx_ann",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert list_resp.status_code == http.HTTPStatus.OK
+        assert detail_resp.status_code == http.HTTPStatus.OK
+        list_annotation = list_resp.json()["transactions"][0]["annotation"]
+        detail_annotation = detail_resp.json()["annotation"]
+        assert list_annotation == detail_annotation
+
+    def test_mixed_page_has_annotation_and_null(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Mixed page sets annotation or null correctly per row."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        txs = {t["id"]: t for t in response.json()["transactions"]}
+        assert txs["tx_ann"]["annotation"] is not None
+        assert txs["tx_bare"]["annotation"] is None
 
 
 class TestGetTransactionDetailEndpoint:
