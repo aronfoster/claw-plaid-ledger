@@ -8,7 +8,59 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
-*(No active bugs.)*
+### BUG-012 — `range` parameter ignored on `GET /transactions`
+
+**Status:** Active
+**Severity:** High (date-scoped transaction queries silently return the full dataset)
+**Area:** API (`GET /transactions`)
+**Reported by:** Athena
+
+`GET /spend` accepts a `range` query parameter (`last_month`, `this_month`,
+`last_30_days`, `last_7_days`) and resolves it to a bounded date window via
+`_resolve_spend_dates()` before querying the database. `GET /transactions` has
+no equivalent — `TransactionListQuery` only exposes explicit `start_date` and
+`end_date` strings. Passing `range=last_month` (or any range value) to
+`/transactions` is silently discarded by FastAPI. The endpoint then runs with
+no date filter and returns the full transaction dataset, paginated at the
+default limit of 100 (max 500).
+
+**Observed behaviour:**
+- `/spend?range=last_month` → correctly returns spend aggregated over Feb 1–28.
+- `/transactions?range=last_month` → ignores the parameter, returns 671
+  transactions spanning the full history.
+
+**Affected code:**
+- `src/claw_plaid_ledger/server.py` — `TransactionListQuery` model and
+  `list_transactions()` route handler (lines ~519–571)
+
+**Suggested fix:** Add a `range` field (same `_SpendRange` literal type) to
+`TransactionListQuery` and resolve it to `start_date`/`end_date` inside
+`list_transactions()`, reusing or extracting `_resolve_spend_dates()`.
+
+---
+
+### BUG-013 — Annotations absent from `GET /transactions` list results
+
+**Status:** Active
+**Severity:** Medium (callers cannot see annotation data without one extra request per transaction)
+**Area:** API (`GET /transactions`)
+**Reported by:** Athena
+
+`GET /transactions/{id}` returns a nested `annotation` field (`category`,
+`note`, `tags`, `updated_at`) via `_fetch_transaction_with_annotation()`.
+`GET /transactions` (the list endpoint) calls `query_transactions()` from
+`db.py`, which performs no JOIN to the `annotations` table. Every transaction
+in list results is returned without annotation data, even when annotations
+exist.
+
+**Affected code:**
+- `src/claw_plaid_ledger/server.py` — `list_transactions()` (lines ~536–571)
+  and `_fetch_transaction_with_annotation()` helper (lines ~754–779)
+- `src/claw_plaid_ledger/db.py` — `query_transactions()` (lines ~365–463)
+
+**Suggested fix:** Extend `query_transactions()` to LEFT JOIN `annotations`
+and return annotation fields alongside each transaction row, matching the
+shape already produced by `_fetch_transaction_with_annotation()`.
 
 ---
 
