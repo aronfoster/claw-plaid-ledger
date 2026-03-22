@@ -29,7 +29,7 @@ for a specific feature requires searching the entire file. `test_cli.py` is at
 
 ---
 
-## Task 1: Expand conftest.py and split test_cli.py
+## Task 1: Expand conftest.py and split test_cli.py ✅ DONE
 
 ### Background
 
