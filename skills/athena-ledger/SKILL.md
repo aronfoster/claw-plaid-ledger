@@ -71,6 +71,39 @@ Athena must not:
 8. `PUT /accounts/{account_id}` — write or update a label for an account
 9. `GET /spend/trends` — monthly spend buckets for a lookback window;
    supports the same filters as `GET /spend`
+10. `GET /errors` — recent ledger warnings and errors; use for proactive
+    alerting and pre-analysis health checks
+
+## Pagination
+
+`GET /transactions` supports offset-based pagination via `limit` and `offset`
+query parameters. Every list response includes:
+
+```json
+{
+  "transactions": [...],
+  "total": 247,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+- `limit` — number of rows per page; default `100`, maximum `500`.
+- `offset` — zero-based row index of the first row on this page.
+- `total` — total number of rows matching the query (independent of limit/offset).
+
+**To paginate to completion:**
+
+1. Start with `offset=0` and a fixed `limit` (e.g. `100`). Keep `limit` stable
+   within a run.
+2. After each response, advance: `offset += limit`.
+3. Stop when `offset >= total` — the next page would be empty.
+
+Equivalently: stop when the number of rows returned is less than `limit`
+(the server returned a partial page, meaning this was the last).
+
+**If pagination is interrupted** (call fails or run is aborted mid-way),
+report partial coverage and avoid definitive completeness claims.
 
 ## Core analysis workflows
 
@@ -143,6 +176,19 @@ Use `GET /spend/trends` when the question involves change over time
 2. Use raw view only when discrepancy diagnosis is needed.
 3. Assign confidence (`high`, `medium`, `low`) and uncertainty sources.
 4. Provide follow-up actions with clear operator ownership.
+
+### 6) Proactive error alerting
+
+Call `GET /errors` when preparing a periodic summary or when a user asks
+about ledger health. Useful parameters:
+
+- `?hours=24` — last day (default)
+- `?hours=168` — last week
+- `?min_severity=ERROR` — errors only (exclude warnings)
+
+If ERROR-level rows are present, include them in the summary and recommend
+the operator investigate. Warnings may be informational — note them but
+do not escalate unless they form a pattern.
 
 ## Annotation policy (Athena)
 
