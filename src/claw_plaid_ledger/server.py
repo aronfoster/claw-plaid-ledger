@@ -515,6 +515,11 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+_SpendRange = Literal[
+    "last_month", "this_month", "last_30_days", "last_7_days"
+]
+
+
 class TransactionListQuery(BaseModel):
     """Validated query parameters for the transactions list endpoint."""
 
@@ -537,6 +542,7 @@ class TransactionListQuery(BaseModel):
 def list_transactions(
     params: Annotated[TransactionListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
     """
     List transactions with optional filtering and pagination.
@@ -544,12 +550,27 @@ def list_transactions(
     Pass ``tags`` multiple times to require all listed tags (AND semantics).
     Set ``search_notes=true`` together with ``keyword`` to also match the
     annotation note field in addition to ``name`` and ``merchant_name``.
+
+    ``range`` is an optional shorthand for common date windows
+    (``this_month``, ``last_month``, ``last_30_days``, ``last_7_days``).
+    Explicit ``start_date`` / ``end_date`` override the range-derived dates
+    when both are provided together.
     """
     resolved_tags: tuple[str, ...] = tuple(tags) if tags else ()
+    start_date = params.start_date
+    end_date = params.end_date
+    if date_range is not None:
+        parsed_start = date.fromisoformat(start_date) if start_date else None
+        parsed_end = date.fromisoformat(end_date) if end_date else None
+        resolved_start, resolved_end = _resolve_spend_dates(
+            date_range, parsed_start, parsed_end
+        )
+        start_date = resolved_start.isoformat()
+        end_date = resolved_end.isoformat()
     config = load_config()
     query = TransactionQuery(
-        start_date=params.start_date,
-        end_date=params.end_date,
+        start_date=start_date,
+        end_date=end_date,
         account_id=params.account_id,
         pending=params.pending,
         min_amount=params.min_amount,
@@ -591,11 +612,6 @@ class SpendListQuery(BaseModel):
     account_id: str | None = None
     category: str | None = None
     tag: str | None = None
-
-
-_SpendRange = Literal[
-    "last_month", "this_month", "last_30_days", "last_7_days"
-]
 
 
 def _today() -> date:
