@@ -544,3 +544,4 @@ def test_overlaps_no_unconfirmed_overlaps_reports_none_detected(
 
     assert exit_code == 0
     assert "none detected" in output
+    assert "0 potential overlap flagged" in output
