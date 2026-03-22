@@ -875,8 +875,10 @@ src/claw_plaid_ledger/
   webhook_auth.py
 
 scripts/
+  deploy-local.sh   # reinstall ledger via uv tool install and restart the systemd service
   duckdns-update.sh # DuckDNS IP-update script for cron/systemd
   install-hooks.sh
+  sync-skills.sh    # push/pull OpenClaw agent skill bundles between repo and ~/.openclaw
 
 tests/
   test_cli.py

@@ -640,7 +640,14 @@ curl http://127.0.0.1:8000/health
 ### 7.1 SQLite database backup
 
 The SQLite file at `CLAW_PLAID_LEDGER_DB_PATH` is the complete local
-ledger.  Back it up with:
+ledger.  The default location (when `CLAW_PLAID_LEDGER_DB_PATH` is not
+set) is:
+
+```
+~/.local/share/claw-plaid-ledger/ledger.db
+```
+
+Back it up with:
 
 ```bash
 # Safe online backup (SQLite's built-in copy mechanism):
@@ -652,6 +659,11 @@ cp "$CLAW_PLAID_LEDGER_DB_PATH" "$HOME/ledger-backup-$(date +%Y%m%d).db"
 
 Automate this with a cron job or systemd timer.  Daily backups are
 sufficient for most household use cases.
+
+**Offsite backup:** `ledger.db` should be included in any encrypted
+offsite backup alongside secrets.  The reference setup uses a GPG-encrypted
+tarball uploaded to Google Drive via `rclone` — see
+`~/.openclaw/scripts/backup-financial.sh` for the implementation.
 
 **Recovery:** Replace the DB file with your backup.  Re-run
 `ledger sync` to pull in any transactions that occurred since the
@@ -1255,6 +1267,30 @@ When running inside a Proxmox LXC container:
 - Bind-mounts for the config directory from host to container are
   supported; see the Proxmox documentation for `mp0` bind-mount
   configuration.
+
+### 12.9 Deploying local changes to the installed binary
+
+When developing from the repository and running the service via `uv tool
+install`, use `scripts/deploy-local.sh` to reinstall the binary from the
+local source tree and restart the service in one step:
+
+```bash
+bash scripts/deploy-local.sh
+```
+
+The script:
+
+1. Runs `uv tool install --reinstall <repo-root>` to rebuild and overwrite
+   the `ledger` binary at `~/.local/bin/ledger` from the current working
+   tree.  The `--reinstall` flag forces a rebuild even when the version
+   number has not changed, which is the normal state during local
+   development.
+2. Runs `sudo systemctl restart claw-plaid-ledger`.
+3. Prints `systemctl status` output to confirm the service came back up.
+
+> **Note:** This script requires `sudo` for the `systemctl restart` step.
+> If your service is installed as a user unit (`systemctl --user`), remove
+> the `sudo` from the script and adjust the `systemctl` calls accordingly.
 
 ---
 
