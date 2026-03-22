@@ -82,12 +82,17 @@ near-duplicate labels (e.g. `groceries` vs `grocery`).
 
 ### 1) Review `needs-athena-review` queue
 
-1. Query `GET /transactions` with `tags=needs-athena-review` + explicit window.
+1. Query `GET /transactions` with `tags=needs-athena-review` + explicit window
+   (or `range` shorthand — see workflow 2).
 2. Paginate to completion.
-3. Drill into each priority record with `GET /transactions/{id}`.
-4. Classify issue type (spike, missing expected, duplicate, mismatch,
+3. Each transaction in the list response now includes a nested `annotation`
+   field (`category`, `note`, `tags`, `updated_at`, or `null` if unannotated).
+   Use this to triage without a round-trip to `GET /transactions/{id}`.
+4. Drill into each priority record with `GET /transactions/{id}` before
+   quoting amounts or annotation details in a final report.
+5. Classify issue type (spike, missing expected, duplicate, mismatch,
    orphan/discrepancy).
-5. Produce a human-facing assessment and next action.
+6. Produce a human-facing assessment and next action.
 
 ### 2) Spend rollups for defined windows
 
@@ -107,6 +112,10 @@ Optional narrowing filters (AND-combined with each other and with owner/tags):
   use `GET /tags` for vocabulary)
 
 Then run matching `GET /transactions` for representative evidence.
+`GET /transactions` accepts the same `range` shorthands, so the evidence
+query can use `range=last_month` to mirror the spend call without computing
+explicit dates. List results include `annotation` data directly (no
+drill-down required for initial evidence scanning).
 Separate posted vs pending observations.  Report totals only for the exact
 queried window (use the `start_date`/`end_date` fields in the response to
 confirm the resolved window).

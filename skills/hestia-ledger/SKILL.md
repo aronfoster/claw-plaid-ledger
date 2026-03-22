@@ -81,6 +81,9 @@ For each run:
 
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
 2. Query `GET /transactions` in `view=canonical` and paginate to completion.
+   Each row now includes a nested `annotation` field (`category`, `note`,
+   `tags`, `updated_at`) or `null` for unannotated rows. Use this to screen
+   for missing/stale annotations without extra requests.
 3. Identify candidates that are pending, missing expected tags/notes, or marked
    for re-review.
 4. Re-fetch each candidate with `GET /transactions/{id}` before any write.
@@ -129,7 +132,9 @@ For each run:
 
 1. Run `GET /transactions` with a fixed recent window and deterministic paging.
 2. Focus on newest records first.
-3. Queue records that are unannotated, stale-annotated, or uncertain.
+3. Queue records that are unannotated (list `annotation` is `null`),
+   stale-annotated, or uncertain. The `annotation` field is included in every
+   list row — no drill-down needed to detect missing annotations.
 
 ### 2) Drill-down before annotation write
 
