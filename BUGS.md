@@ -8,7 +8,95 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
-*(none)*
+---
+
+### BUG-014 — Unknown query parameters are silently ignored
+
+**Status:** Active
+**Severity:** High (callers receive unexpected results with no indication that their parameters were dropped)
+**Area:** API (all GET endpoints that accept query parameters)
+**Reported by:** Operator (agents using wrong pagination parameter names received full unfiltered datasets)
+
+#### What is happening
+
+FastAPI silently drops any query parameter that does not match a declared
+field on the endpoint's Pydantic model or function signature. A caller passing
+`?page=2&page_size=50` to `GET /transactions` gets the same response as
+`GET /transactions` with no parameters at all — the full dataset at the default
+limit — with HTTP 200 and no indication that `page` and `page_size` were
+ignored.
+
+BUG-012 (`range` silently dropped on `GET /transactions`) was a specific
+instance of this class of problem, resolved by a code-ordering fix. This bug
+covers the general case: any misspelled or misremembered parameter name on any
+endpoint silently degrades into a no-op filter.
+
+#### Required behavior
+
+When a request contains one or more query parameter names that the endpoint
+does not recognise, the server must return HTTP 422 with a response body that
+lists:
+
+1. The unrecognised parameter names.
+2. The full set of valid parameter names for that endpoint.
+
+This gives agents and callers an actionable error message rather than
+misleading data.
+
+#### Required work
+
+**Add a reusable strict-params dependency to `server.py`:**
+
+```python
+from collections.abc import Callable
+
+def _strict_params(allowed: frozenset[str]) -> Callable[[Request], None]:
+    """Raise 422 if the request contains any query parameter not in allowed."""
+    def _check(request: Request) -> None:
+        unknown = sorted(set(request.query_params.keys()) - allowed)
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unrecognized query parameters",
+                    "unrecognized": unknown,
+                    "valid_parameters": sorted(allowed),
+                },
+            )
+    return _check
+```
+
+**Wire it into each parameterised GET endpoint** as an additional entry in the
+`dependencies=[...]` list. Valid parameter sets per endpoint:
+
+| Endpoint | Valid parameters |
+|---|---|
+| `GET /transactions` | `start_date`, `end_date`, `account_id`, `pending`, `min_amount`, `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`, `range` |
+| `GET /spend` | `start_date`, `end_date`, `owner`, `tags`, `include_pending`, `view`, `account_id`, `category`, `tag`, `range` |
+| `GET /spend/trends` | `months`, `owner`, `tags`, `include_pending`, `view`, `account_id`, `category`, `tag` |
+| `GET /errors` | `hours`, `min_severity`, `limit`, `offset` |
+
+`GET /health`, `GET /accounts`, `GET /categories`, `GET /tags` accept no
+query parameters and do not need the dependency (FastAPI already ignores extras
+on parameterless endpoints, and adding an empty allowlist would break health
+checks from monitoring tools that append cache-buster params).
+
+**Add tests** to the appropriate `test_server_*.py` file for each affected
+endpoint confirming:
+
+- A request with a valid-but-misspelled parameter (e.g. `?offest=10`) returns
+  HTTP 422.
+- The 422 body contains `"unrecognized"` and `"valid_parameters"` keys.
+- A request with all-valid parameters is unaffected (no regression).
+
+#### Notes
+
+- `PUT /annotations/{transaction_id}` and `PUT /accounts/{account_id}` accept
+  no query parameters; Pydantic already rejects unknown fields in request
+  bodies via `model_config = ConfigDict(extra="forbid")` if that is not already
+  set — check and add if missing.
+- `POST /webhooks/plaid` accepts no query parameters and is called by Plaid
+  infrastructure; do not add strict param checking there.
 
 ---
 
