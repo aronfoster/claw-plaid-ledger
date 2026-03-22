@@ -6,7 +6,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -921,3 +921,90 @@ def get_all_sync_state(
         )
         for row in rows
     ]
+
+
+@dataclass(frozen=True)
+class LedgerErrorQuery:
+    """Filters for GET /errors."""
+
+    hours: int = 24
+    min_severity: str | None = None  # None / 'WARNING' → all; 'ERROR' → ERROR+
+    limit: int = 100
+    offset: int = 0
+
+
+# PLR0913: insert_ledger_error requires 6 parameters because the sprint spec
+# mandates this exact signature so callers can pass deterministic timestamps
+# for testing. Grouping into a dataclass would change the public API.
+def insert_ledger_error(  # noqa: PLR0913
+    connection: sqlite3.Connection,
+    severity: str,
+    logger_name: str,
+    message: str,
+    correlation_id: str | None,
+    created_at: datetime,
+) -> None:
+    """Insert one error row and prune rows older than 30 days."""
+    connection.execute(
+        "INSERT INTO ledger_errors "
+        "(severity, logger_name, message, correlation_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            severity,
+            logger_name,
+            message,
+            correlation_id,
+            created_at.isoformat(),
+        ),
+    )
+    cutoff = (created_at - timedelta(days=30)).isoformat()
+    connection.execute(
+        "DELETE FROM ledger_errors WHERE created_at < ?", (cutoff,)
+    )
+
+
+def query_ledger_errors(
+    connection: sqlite3.Connection,
+    query: LedgerErrorQuery,
+) -> tuple[list[dict[str, object]], int]:
+    """Return (rows, total) for the given filter window, newest first."""
+    since = datetime.now(UTC) - timedelta(hours=query.hours)
+    since_iso = since.isoformat()
+
+    where_parts: list[str] = ["created_at >= ?"]
+    params: list[object] = [since_iso]
+
+    if query.min_severity == "ERROR":
+        where_parts.append("severity IN ('ERROR', 'CRITICAL')")
+
+    where_sql = " AND ".join(where_parts)
+
+    total_row = connection.execute(
+        f"SELECT COUNT(*) FROM ledger_errors WHERE {where_sql}",  # noqa: S608
+        params,
+    ).fetchone()
+    total = int(total_row[0]) if total_row is not None else 0
+
+    rows = connection.execute(
+        (
+            "SELECT id, severity, logger_name, message, "  # noqa: S608
+            f"correlation_id, created_at FROM ledger_errors WHERE {where_sql} "
+            "ORDER BY created_at DESC, id DESC "
+            "LIMIT ? OFFSET ?"
+        ),
+        (*params, query.limit, query.offset),
+    ).fetchall()
+
+    parsed_rows: list[dict[str, object]] = [
+        {
+            "id": int(row[0]),
+            "severity": str(row[1]),
+            "logger_name": str(row[2]),
+            "message": str(row[3]),
+            "correlation_id": str(row[4]) if row[4] is not None else None,
+            "created_at": str(row[5]),
+        }
+        for row in rows
+    ]
+
+    return parsed_rows, total

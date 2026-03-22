@@ -56,3 +56,12 @@ CREATE TABLE IF NOT EXISTS account_labels (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ledger_errors (
+    id           INTEGER PRIMARY KEY,
+    severity     TEXT NOT NULL,
+    logger_name  TEXT NOT NULL,
+    message      TEXT NOT NULL,
+    correlation_id TEXT,
+    created_at   TEXT NOT NULL
+);

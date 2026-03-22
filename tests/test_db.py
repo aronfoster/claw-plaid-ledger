@@ -10,6 +10,7 @@ import pytest
 
 from claw_plaid_ledger.db import (
     AnnotationRow,
+    LedgerErrorQuery,
     NormalizedAccountRow,
     SyncStateRow,
     TransactionQuery,
@@ -19,8 +20,10 @@ from claw_plaid_ledger.db import (
     get_sync_cursor,
     get_transaction,
     initialize_database,
+    insert_ledger_error,
     normalize_account_for_db,
     normalize_transaction_for_db,
+    query_ledger_errors,
     query_transactions,
     upsert_account,
     upsert_annotation,
@@ -1206,3 +1209,138 @@ def test_apply_account_precedence_idempotent(tmp_path: Path) -> None:
     assert result == 1
     assert stored is not None
     assert stored[0] == "acct-canonical"
+
+
+_LARGE_HOURS_WINDOW = 24 * 365 * 2
+_EXPECTED_ROW_COUNT = 5
+_PAGE_SIZE = 2
+
+
+class TestLedgerErrors:
+    """Tests for insert_ledger_error and query_ledger_errors."""
+
+    def _db(self, tmp_path: Path) -> Path:
+        """Return path to a freshly initialized test database."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+        return db_path
+
+    def test_insert_and_query_basic(self, tmp_path: Path) -> None:
+        """Insert one WARNING row; query returns it with correct fields."""
+        db_path = self._db(tmp_path)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(
+                conn, "WARNING", "test.logger", "something happened", None, now
+            )
+            rows, total = query_ledger_errors(conn, LedgerErrorQuery())
+        assert total == 1
+        assert len(rows) == 1
+        assert rows[0]["severity"] == "WARNING"
+        assert rows[0]["logger_name"] == "test.logger"
+        assert rows[0]["message"] == "something happened"
+
+    def test_query_returns_newest_first(self, tmp_path: Path) -> None:
+        """Rows with different created_at values are ordered newest first."""
+        db_path = self._db(tmp_path)
+        base = datetime.datetime.now(tz=datetime.UTC)
+        older = base - datetime.timedelta(hours=2)
+        newer = base - datetime.timedelta(hours=1)
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(conn, "WARNING", "test", "older", None, older)
+            insert_ledger_error(conn, "WARNING", "test", "newer", None, newer)
+            rows, _ = query_ledger_errors(conn, LedgerErrorQuery())
+        assert rows[0]["message"] == "newer"
+        assert rows[1]["message"] == "older"
+
+    def test_min_severity_error_filters_warnings(self, tmp_path: Path) -> None:
+        """min_severity='ERROR' returns only ERROR rows, not WARNING."""
+        db_path = self._db(tmp_path)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(
+                conn,
+                "WARNING",
+                "test",
+                "warn msg",
+                None,
+                now - datetime.timedelta(seconds=1),
+            )
+            insert_ledger_error(conn, "ERROR", "test", "error msg", None, now)
+            rows, total = query_ledger_errors(
+                conn, LedgerErrorQuery(min_severity="ERROR")
+            )
+        assert total == 1
+        assert rows[0]["severity"] == "ERROR"
+
+    def test_hours_window_excludes_old_rows(self, tmp_path: Path) -> None:
+        """A row inserted 48h ago is not returned by a hours=24 query."""
+        db_path = self._db(tmp_path)
+        old_ts = datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(
+            hours=48
+        )
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(
+                conn, "ERROR", "test", "old error", None, old_ts
+            )
+            rows, total = query_ledger_errors(conn, LedgerErrorQuery(hours=24))
+        assert total == 0
+        assert rows == []
+
+    def test_retention_prunes_old_rows(self, tmp_path: Path) -> None:
+        """Inserting a future-dated row prunes rows older than 30 days."""
+        db_path = self._db(tmp_path)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        old_ts = now - datetime.timedelta(days=1)
+        future_ts = now + datetime.timedelta(days=31)
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(
+                conn, "WARNING", "test", "old row", None, old_ts
+            )
+            # future_ts is >30 days after old_ts, so old_ts is pruned on insert
+            insert_ledger_error(
+                conn, "WARNING", "test", "future row", None, future_ts
+            )
+            rows, _ = query_ledger_errors(
+                conn, LedgerErrorQuery(hours=_LARGE_HOURS_WINDOW)
+            )
+        messages = [r["message"] for r in rows]
+        assert "old row" not in messages
+        assert "future row" in messages
+
+    def test_total_reflects_full_count(self, tmp_path: Path) -> None:
+        """Total equals full matching count, independent of limit."""
+        db_path = self._db(tmp_path)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        with sqlite3.connect(db_path) as conn:
+            for i in range(_EXPECTED_ROW_COUNT):
+                insert_ledger_error(
+                    conn,
+                    "WARNING",
+                    "test",
+                    f"msg {i}",
+                    None,
+                    now - datetime.timedelta(seconds=i),
+                )
+            rows, total = query_ledger_errors(
+                conn, LedgerErrorQuery(limit=_PAGE_SIZE, offset=0)
+            )
+        assert total == _EXPECTED_ROW_COUNT
+        assert len(rows) == _PAGE_SIZE
+
+    def test_correlation_id_nullable(self, tmp_path: Path) -> None:
+        """A row inserted with correlation_id=None round-trips as None."""
+        db_path = self._db(tmp_path)
+        now = datetime.datetime.now(tz=datetime.UTC)
+        with sqlite3.connect(db_path) as conn:
+            insert_ledger_error(conn, "WARNING", "test", "no corr", None, now)
+            rows, _ = query_ledger_errors(conn, LedgerErrorQuery())
+        assert rows[0]["correlation_id"] is None
+
+    def test_empty_table_returns_zero(self, tmp_path: Path) -> None:
+        """A fresh DB returns ([], 0) from query_ledger_errors."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            rows, total = query_ledger_errors(conn, LedgerErrorQuery())
+        assert rows == []
+        assert total == 0
