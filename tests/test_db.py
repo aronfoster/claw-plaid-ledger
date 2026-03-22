@@ -11,6 +11,7 @@ import pytest
 from claw_plaid_ledger.db import (
     AnnotationRow,
     LedgerErrorQuery,
+    LedgerErrorRow,
     NormalizedAccountRow,
     SyncStateRow,
     TransactionQuery,
@@ -1229,10 +1230,11 @@ class TestLedgerErrors:
         """Insert one WARNING row; query returns it with correct fields."""
         db_path = self._db(tmp_path)
         now = datetime.datetime.now(tz=datetime.UTC)
+        row = LedgerErrorRow(
+            "WARNING", "test.logger", "something happened", None, now
+        )
         with sqlite3.connect(db_path) as conn:
-            insert_ledger_error(
-                conn, "WARNING", "test.logger", "something happened", None, now
-            )
+            insert_ledger_error(conn, row)
             rows, total = query_ledger_errors(conn, LedgerErrorQuery())
         assert total == 1
         assert len(rows) == 1
@@ -1247,8 +1249,12 @@ class TestLedgerErrors:
         older = base - datetime.timedelta(hours=2)
         newer = base - datetime.timedelta(hours=1)
         with sqlite3.connect(db_path) as conn:
-            insert_ledger_error(conn, "WARNING", "test", "older", None, older)
-            insert_ledger_error(conn, "WARNING", "test", "newer", None, newer)
+            insert_ledger_error(
+                conn, LedgerErrorRow("WARNING", "test", "older", None, older)
+            )
+            insert_ledger_error(
+                conn, LedgerErrorRow("WARNING", "test", "newer", None, newer)
+            )
             rows, _ = query_ledger_errors(conn, LedgerErrorQuery())
         assert rows[0]["message"] == "newer"
         assert rows[1]["message"] == "older"
@@ -1260,13 +1266,17 @@ class TestLedgerErrors:
         with sqlite3.connect(db_path) as conn:
             insert_ledger_error(
                 conn,
-                "WARNING",
-                "test",
-                "warn msg",
-                None,
-                now - datetime.timedelta(seconds=1),
+                LedgerErrorRow(
+                    "WARNING",
+                    "test",
+                    "warn msg",
+                    None,
+                    now - datetime.timedelta(seconds=1),
+                ),
             )
-            insert_ledger_error(conn, "ERROR", "test", "error msg", None, now)
+            insert_ledger_error(
+                conn, LedgerErrorRow("ERROR", "test", "error msg", None, now)
+            )
             rows, total = query_ledger_errors(
                 conn, LedgerErrorQuery(min_severity="ERROR")
             )
@@ -1281,7 +1291,8 @@ class TestLedgerErrors:
         )
         with sqlite3.connect(db_path) as conn:
             insert_ledger_error(
-                conn, "ERROR", "test", "old error", None, old_ts
+                conn,
+                LedgerErrorRow("ERROR", "test", "old error", None, old_ts),
             )
             rows, total = query_ledger_errors(conn, LedgerErrorQuery(hours=24))
         assert total == 0
@@ -1295,11 +1306,15 @@ class TestLedgerErrors:
         future_ts = now + datetime.timedelta(days=31)
         with sqlite3.connect(db_path) as conn:
             insert_ledger_error(
-                conn, "WARNING", "test", "old row", None, old_ts
+                conn,
+                LedgerErrorRow("WARNING", "test", "old row", None, old_ts),
             )
             # future_ts is >30 days after old_ts, so old_ts is pruned on insert
             insert_ledger_error(
-                conn, "WARNING", "test", "future row", None, future_ts
+                conn,
+                LedgerErrorRow(
+                    "WARNING", "test", "future row", None, future_ts
+                ),
             )
             rows, _ = query_ledger_errors(
                 conn, LedgerErrorQuery(hours=_LARGE_HOURS_WINDOW)
@@ -1316,11 +1331,13 @@ class TestLedgerErrors:
             for i in range(_EXPECTED_ROW_COUNT):
                 insert_ledger_error(
                     conn,
-                    "WARNING",
-                    "test",
-                    f"msg {i}",
-                    None,
-                    now - datetime.timedelta(seconds=i),
+                    LedgerErrorRow(
+                        "WARNING",
+                        "test",
+                        f"msg {i}",
+                        None,
+                        now - datetime.timedelta(seconds=i),
+                    ),
                 )
             rows, total = query_ledger_errors(
                 conn, LedgerErrorQuery(limit=_PAGE_SIZE, offset=0)
@@ -1333,7 +1350,9 @@ class TestLedgerErrors:
         db_path = self._db(tmp_path)
         now = datetime.datetime.now(tz=datetime.UTC)
         with sqlite3.connect(db_path) as conn:
-            insert_ledger_error(conn, "WARNING", "test", "no corr", None, now)
+            insert_ledger_error(
+                conn, LedgerErrorRow("WARNING", "test", "no corr", None, now)
+            )
             rows, _ = query_ledger_errors(conn, LedgerErrorQuery())
         assert rows[0]["correlation_id"] is None
 

@@ -933,16 +933,20 @@ class LedgerErrorQuery:
     offset: int = 0
 
 
-# PLR0913: insert_ledger_error requires 6 parameters because the sprint spec
-# mandates this exact signature so callers can pass deterministic timestamps
-# for testing. Grouping into a dataclass would change the public API.
-def insert_ledger_error(  # noqa: PLR0913
+@dataclass(frozen=True)
+class LedgerErrorRow:
+    """One row to insert into ledger_errors."""
+
+    severity: str
+    logger_name: str
+    message: str
+    correlation_id: str | None
+    created_at: datetime
+
+
+def insert_ledger_error(
     connection: sqlite3.Connection,
-    severity: str,
-    logger_name: str,
-    message: str,
-    correlation_id: str | None,
-    created_at: datetime,
+    row: LedgerErrorRow,
 ) -> None:
     """Insert one error row and prune rows older than 30 days."""
     connection.execute(
@@ -950,14 +954,14 @@ def insert_ledger_error(  # noqa: PLR0913
         "(severity, logger_name, message, correlation_id, created_at) "
         "VALUES (?, ?, ?, ?, ?)",
         (
-            severity,
-            logger_name,
-            message,
-            correlation_id,
-            created_at.isoformat(),
+            row.severity,
+            row.logger_name,
+            row.message,
+            row.correlation_id,
+            row.created_at.isoformat(),
         ),
     )
-    cutoff = (created_at - timedelta(days=30)).isoformat()
+    cutoff = (row.created_at - timedelta(days=30)).isoformat()
     connection.execute(
         "DELETE FROM ledger_errors WHERE created_at < ?", (cutoff,)
     )
