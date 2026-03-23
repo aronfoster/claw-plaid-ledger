@@ -1,200 +1,250 @@
-# Sprint 20 — M18: Split Test Files
+# Sprint 21 — M19: Split server.py into routers
 
 ## Sprint goal
 
-Break the test suite into focused modules so no file exceeds ~2,000 lines,
-LLM context windows can cover a full test file comfortably, and shared helpers
-live in one place.
+Decompose the 1 054-line `server.py` monolith into a proper FastAPI router
+structure so that each domain has its own file, the app factory is thin, and
+M20 can add an `allocations` router without touching every other concern.
 
-## Why this sprint exists
+This sprint also resolves **BUG-014** (unknown query parameters silently
+ignored) by introducing `_strict_params` in `routers/utils.py` and wiring it
+into every parameterised GET endpoint as each router is created.
 
-`test_server.py` has grown to 5,249 lines across 15+ test classes covering
-every API endpoint, all middleware, background sync, and scheduling logic.
-Loading it in a single LLM context window is impractical, and finding tests
-for a specific feature requires searching the entire file. `test_cli.py` is at
-1,725 lines and will cross the threshold when M20+ adds allocation commands.
+## Scope
+
+- Pure structural refactor — **zero API behaviour change, zero schema change**,
+  no new endpoints.
+- BUG-014 (`_strict_params`) is the only new runtime behaviour.
+- Quality gate must pass identically before and after **every task**.
+
+## Target module structure
+
+```
+src/claw_plaid_ledger/
+  server.py               # app factory only (~50 lines)
+  middleware/
+    __init__.py
+    auth.py               # require_bearer_token, _bearer_scheme
+    correlation.py        # CorrelationIdMiddleware
+    ip_allowlist.py       # WebhookIPAllowlistMiddleware, _resolve_client_ip,
+                          # _ip_in_allowlist; imports _WEBHOOK_PATH from
+                          # routers.webhooks
+  routers/
+    __init__.py
+    utils.py              # _SpendRange, _today, _resolve_spend_dates,
+                          # _strict_params (BUG-014)
+    health.py             # GET /health, GET /errors
+    transactions.py       # GET /transactions, GET /transactions/{id},
+                          # PUT /annotations/{id}
+    spend.py              # GET /spend, GET /spend/trends
+    accounts.py           # GET /accounts, PUT /accounts/{id},
+                          # GET /categories, GET /tags
+    webhooks.py           # POST /webhooks/plaid, _WEBHOOK_PATH,
+                          # _background_sync, all scheduling helpers, lifespan
+```
 
 ## Working agreements
 
-- Tasks 1 and 2 are independent and may be done concurrently.
-- Task 3 depends on Task 2 (both touch `test_server.py`; must be sequential).
-- Each task must leave the quality gate green before the next starts.
-- All Python changes must pass the full quality gate before commit:
-  - `uv run --locked ruff format . --check`
-  - `uv run --locked ruff check .`
-  - `uv run --locked mypy .`
-  - `uv run --locked pytest -v`
-- No test logic may be added, removed, or changed — this is reorganisation only.
+- Tasks are **sequential** — each must leave the quality gate green before the
+  next starts.
+- No test logic may be added, removed, or changed as part of the structural
+  moves; only import paths and the new BUG-014 tests are permitted changes.
+- All Python changes must pass the full quality gate before commit.
 - Mark completed tasks `✅ DONE` in this file before committing.
 
 ---
 
-## Task 1: Expand conftest.py and split test_cli.py ✅ DONE
+## Task 1: Create the middleware package
 
-### Background
+Move `require_bearer_token`, `CorrelationIdMiddleware`, and
+`WebhookIPAllowlistMiddleware` (plus their helpers) out of `server.py` into
+dedicated modules under a new `middleware/` package.
 
-`test_cli.py` is organised naturally by CLI command. Splitting along command
-boundaries gives each new file a single coherent concern and keeps test
-discovery straightforward.
+**Symbols to move:**
 
-The current `conftest.py` holds only `_isolate_env_file`. Before splitting,
-audit both `test_cli.py` and `test_server.py` for helpers that will be needed
-in two or more of the new files, and promote them to `conftest.py` (or a
-`tests/helpers.py` module if the helpers are not fixtures). This prevents
-duplication across the split files.
-
-The most important candidate is `_seed_transactions()` from `test_server.py`
-(line 434): it is used by both the future `test_server_transactions.py` and
-`test_server_annotations.py`. It must end up in exactly one place before
-Task 2 begins.
-
-`_TOKEN = "test-bearer-value"` and `client = TestClient(app)` are used by
-every `test_server_*.py` file. They can be defined independently in each file
-(one line each with the existing `# noqa: S105` comment) or extracted to
-`conftest.py` — developer's call, as long as the choice is consistent across
-all server test files.
-
-### Target file layout
-
-```
-tests/
-  conftest.py          # existing _isolate_env_file + any promoted shared helpers
-  test_cli_doctor.py   # ledger doctor, ledger doctor --production-preflight
-  test_cli_sync.py     # ledger sync, ledger sync --item, ledger sync --all,
-                       # ledger init-db, ledger serve startup
-  test_cli_link.py     # ledger link
-  test_cli_items.py    # ledger items, ledger overlaps, ledger apply-precedence
-```
-
-Delete `test_cli.py` once all tests are moved and the quality gate passes.
-
-### Test routing
-
-| Source (test_cli.py) | Target file |
+| Symbol | Destination |
 |---|---|
-| `test_help`, `test_doctor_*`, `test_serve_refuses_without_api_secret`, `test_serve_refuses_invalid_log_level`, `test_serve_logs_startup_info`, `test_doctor_production_preflight_*`, `test_doctor_without_preflight_*` | `test_cli_doctor.py` |
-| `test_init_db_*`, `test_sync_*` | `test_cli_sync.py` |
-| `test_link_*` | `test_cli_link.py` |
-| `test_items_*`, `test_apply_precedence_*`, `test_overlaps_*` | `test_cli_items.py` |
+| `_bearer_scheme`, `require_bearer_token` | `middleware/auth.py` |
+| `CorrelationIdMiddleware` | `middleware/correlation.py` |
+| `_resolve_client_ip`, `_ip_in_allowlist`, `WebhookIPAllowlistMiddleware` | `middleware/ip_allowlist.py` |
+
+Also move `_WEBHOOK_PATH` to `middleware/ip_allowlist.py` for now — it will
+move to its canonical home in `routers/webhooks.py` in Task 3.
+
+**Test import updates** (logic unchanged):
+
+| Test file | Symbol | New location |
+|---|---|---|
+| `test_server_auth.py` | `require_bearer_token` | `middleware.auth` |
+| `test_server_ip_allowlist.py` | `_resolve_client_ip`, `_ip_in_allowlist` | `middleware.ip_allowlist` |
 
 ### Done when
 
-- Four new `test_cli_*.py` files exist; `test_cli.py` is deleted.
-- Shared helpers used by 2+ files are in `conftest.py` (or `tests/helpers.py`),
-  not duplicated.
-- `pytest -v` reports the same test count as before this task.
+- `server.py` no longer defines any of the symbols listed above.
 - Quality gate passes.
 
 ---
 
-## Task 2: Split test_server.py — endpoint tests ✅ DONE
+## Task 2: Create the routers scaffold — utils.py and _strict_params
 
-### Background
+Create the `routers/` package and the shared utilities module. No routes move
+in this task.
 
-This task covers the HTTP API endpoint tests: the domain-facing routes that
-agents and operators call directly. Move each test class (and its scoped seed
-helper, if any) into a dedicated file, then delete that class from
-`test_server.py`. The file shrinks with each move; Task 3 finishes the job.
+**`routers/utils.py`** should contain:
 
-Each `_seed_*` helper is used by exactly one test class (with the exception of
-`_seed_transactions`, which was handled in Task 1) and travels with that class
-into the new file.
+- `_SpendRange` — moved from `server.py`
+- `_today()` — moved from `server.py`
+- `_resolve_spend_dates()` — moved from `server.py`
+- `_strict_params()` — new, per BUG-014 spec in BUGS.md
 
-### Target files
-
-```
-tests/
-  test_server_health.py           # GET /health; no-auth contract
-  test_server_transactions.py     # GET /transactions, GET /transactions/{id}
-  test_server_annotations.py      # PUT /annotations/{transaction_id}
-  test_server_spend.py            # GET /spend, GET /spend/trends
-  test_server_accounts.py         # GET /accounts, PUT /accounts/{id},
-                                  # GET /categories, GET /tags
-  test_server_errors.py           # GET /errors
-```
-
-### Test routing
-
-| Class / functions | Target file |
-|---|---|
-| `test_health_returns_200`, `test_health_returns_ok_payload`, `test_health_no_auth_required` | `test_server_health.py` |
-| `TestListTransactionsEndpoint`, `TestListTransactionsRangeParam`, `TestListTransactionsAnnotations`, `TestGetTransactionDetailEndpoint`, `TestListTransactionsTagsAndSearchNotes` | `test_server_transactions.py` |
-| `TestPutAnnotationEndpoint` | `test_server_annotations.py` |
-| `TestGetSpendEndpoint`, `TestGetSpendRangeParam`, spend filter test class(es), `TestGetSpendTrendsEndpoint` | `test_server_spend.py` |
-| `TestCategoriesEndpoint`, `TestTagsEndpoint`, `TestAccountsEndpoints` | `test_server_accounts.py` |
-| `TestGetErrorsEndpoint` | `test_server_errors.py` |
+Update `server.py` to import `_SpendRange`, `_today`, and `_resolve_spend_dates`
+from `routers.utils` so the remaining routes continue to compile.
 
 ### Done when
 
-- Six new files exist.
-- All listed classes and their seed helpers no longer appear in
-  `test_server.py`.
-- `pytest -v` reports the same test count as before this task.
+- `routers/utils.py` exists with all four items.
+- `server.py` no longer defines those three symbols.
 - Quality gate passes.
 
 ---
 
-## Task 3: Split test_server.py — infrastructure tests, then delete it ✅ DONE
+## Task 3: Create routers/webhooks.py
 
-### Background
+Move all background-sync logic, the scheduled-sync infrastructure, the
+`lifespan` context manager, and `POST /webhooks/plaid` into `routers/webhooks.py`.
 
-This task moves the remaining test classes — middleware (three files per the
-M18 design decision), webhooks, background sync, scheduled sync, and
-structured logging. When all classes are moved, `test_server.py` is empty and
-is deleted.
+**Symbols to move** (all currently in `server.py`):
 
-`TestStructuredLogging` tests that webhook and sync errors produce
-correctly-structured log records; it belongs in `test_server_correlation.py`
-alongside the other correlation-ID and logging infrastructure tests.
+`_SYNC_UPDATES_AVAILABLE`, `_WEBHOOK_PATH`, `_SCHEDULED_SYNC_POLL_INTERVAL_SECONDS`,
+`_background_sync`, `_load_sync_states`, `_hours_since_sync`,
+`_sync_item_if_overdue`, `_check_multi_item`, `_check_and_sync_overdue_items`,
+`_scheduled_sync_loop`, `lifespan`, and the `POST /webhooks/plaid` route handler.
 
-### Target files
+**`_WEBHOOK_PATH` becomes canonical here.** Update `middleware/ip_allowlist.py`
+to import it from `routers.webhooks` rather than defining it locally.
+There is no circular import: `ip_allowlist` → `routers.webhooks` → `middleware.auth`
+forms a directed chain with no cycle.
 
-```
-tests/
-  test_server_webhooks.py      # POST /webhooks/plaid, item routing,
-                               # background sync notification wiring,
-                               # injected credentials
-  test_server_scheduling.py    # lifespan, check_and_sync_overdue_items,
-                               # scheduled_sync_loop
-  test_server_auth.py          # require_bearer_token unit tests,
-                               # TestProtectedRoute
-  test_server_correlation.py   # CorrelationIdMiddleware, SyncRunId,
-                               # TestStructuredLogging
-  test_server_ip_allowlist.py  # _resolve_client_ip, _ip_in_allowlist,
-                               # WebhookIPAllowlistMiddleware
-```
+**`server.py`** imports `lifespan` from `routers.webhooks` and passes it to
+`FastAPI()`, then includes the webhooks `APIRouter`.
 
-### Test routing
+**Test import updates:**
 
-| Class | Target file |
-|---|---|
-| `TestWebhookPlaid`, `TestWebhookItemRouting`, `TestBackgroundSyncNotificationWiring`, `TestBackgroundSyncInjectedCredentials` | `test_server_webhooks.py` |
-| `TestLifespan`, `TestCheckAndSyncOverdueItems`, `TestScheduledSyncLoop` | `test_server_scheduling.py` |
-| `TestRequireBearerToken`, `TestProtectedRoute` | `test_server_auth.py` |
-| `TestCorrelationIdMiddleware`, `TestSyncRunId`, `TestStructuredLogging` | `test_server_correlation.py` |
-| `TestResolveClientIp`, `TestIpInAllowlist`, `TestWebhookIPAllowlistMiddleware` | `test_server_ip_allowlist.py` |
+| Test file | Symbols | New location |
+|---|---|---|
+| `test_server_sync.py` | `_background_sync`, `_check_and_sync_overdue_items`, `_scheduled_sync_loop`, `lifespan` | `routers.webhooks` |
+| `test_server_logging.py` | `_background_sync` | `routers.webhooks` |
 
 ### Done when
 
-- Five new files exist.
-- `test_server.py` is deleted (all content moved).
-- `pytest -v` reports the same test count as before this sprint.
-- No test appears in two files; no test has been dropped.
+- `server.py` contains no sync, scheduling, or webhook route code.
+- `middleware/ip_allowlist.py` imports `_WEBHOOK_PATH` from `routers.webhooks`.
 - Quality gate passes.
 
 ---
 
-## Acceptance criteria for Sprint 20
+## Task 4: Create routers/health.py — BUG-014 on GET /errors
 
-- No test file exceeds 2,000 lines.
-- `pytest -v` passes with the same test count before and after the sprint.
-- `test_server.py` and `test_cli.py` are deleted; all tests migrated.
-- Helpers used by two or more files live in `conftest.py` or `tests/helpers.py`,
-  not duplicated.
+Move `ErrorListQuery`, `GET /health`, and `GET /errors` to `routers/health.py`.
+
+Wire `_strict_params` onto `GET /errors` using the valid parameter set from
+BUGS.md. Do **not** add it to `GET /health` — monitoring tools commonly append
+cache-buster params to health checks.
+
+**Add BUG-014 tests to `test_server_errors.py`** per the test requirements in
+BUGS.md (misspelled param → 422 with `"unrecognized"` and `"valid_parameters"`;
+valid param → 200).
+
+### Done when
+
+- `GET /errors` rejects unknown query parameters with HTTP 422.
+- New tests pass.
+- Quality gate passes.
+
+---
+
+## Task 5: Create routers/spend.py — BUG-014 on GET /spend and GET /spend/trends
+
+Move `SpendListQuery`, `SpendTrendsListQuery`, `GET /spend`, and
+`GET /spend/trends` to `routers/spend.py`. Import `_SpendRange`, `_today`,
+and `_resolve_spend_dates` from `routers.utils`.
+
+Wire `_strict_params` onto both endpoints using the valid parameter sets from
+BUGS.md.
+
+**Add BUG-014 tests** to `test_server_spend.py` and `test_server_spend_trends.py`
+per the test requirements in BUGS.md.
+
+### Done when
+
+- Both spend endpoints reject unknown query parameters with HTTP 422.
+- New tests pass.
+- Quality gate passes.
+
+---
+
+## Task 6: Create routers/transactions.py — BUG-014 on GET /transactions
+
+Move `TransactionListQuery`, `_fetch_transaction_with_annotation`,
+`GET /transactions`, `GET /transactions/{id}`, `AnnotationRequest`, and
+`PUT /annotations/{id}` to `routers/transactions.py`. Import `_SpendRange`
+and `_resolve_spend_dates` from `routers.utils`.
+
+Wire `_strict_params` onto `GET /transactions` only — the `/{id}` and
+`PUT` routes accept no query parameters.
+
+Also verify that `AnnotationRequest` has `model_config = ConfigDict(extra="forbid")`
+per BUG-014 notes in BUGS.md; add it if missing.
+
+**Add BUG-014 tests to `test_server_transactions.py`** per the test requirements
+in BUGS.md.
+
+### Done when
+
+- `GET /transactions` rejects unknown query parameters with HTTP 422.
+- `AnnotationRequest` has `extra="forbid"`.
+- New tests pass.
+- Quality gate passes.
+
+---
+
+## Task 7: Create routers/accounts.py — finish thinning server.py
+
+Move `AccountLabelRequest`, `GET /accounts`, `PUT /accounts/{account_id}`,
+`GET /categories`, and `GET /tags` to `routers/accounts.py`.
+
+Verify that `AccountLabelRequest` has `model_config = ConfigDict(extra="forbid")`
+per BUG-014 notes in BUGS.md; add it if missing.
+
+No `_strict_params` on these endpoints — the GET routes are parameterless.
+
+After wiring the router in `server.py`, the file should contain only imports,
+middleware registration, router inclusion, and the `FastAPI()` call — no route
+handlers, Pydantic models, or helpers. If anything else remains, move it.
+
+Mark BUG-014 as **Resolved (Sprint 21, M19)** in BUGS.md.
+
+### Done when
+
+- `AccountLabelRequest` has `extra="forbid"`.
+- `server.py` is ≤50 lines with no route handlers or business logic.
+- BUG-014 marked Resolved in BUGS.md.
+- Quality gate passes.
+
+---
+
+## Acceptance criteria for Sprint 21
+
+- Final module structure matches the **Target module structure** above.
+- `server.py` is ≤50 lines; no route handlers, models, or helpers remain.
+- All existing tests pass with the same count as before the sprint.
+- BUG-014 tests pass for `GET /errors`, `GET /spend`, `GET /spend/trends`,
+  and `GET /transactions`.
+- `AnnotationRequest` and `AccountLabelRequest` both have `extra="forbid"`.
 - All quality-gate commands pass.
 
 ## Explicitly deferred
 
-- Splitting `test_db.py` (1,365 lines, below threshold; revisit if `db.py`
-  grows in M20+).
-- Splitting production `server.py` into routers (tracked as M19).
+- `_strict_params` on new endpoints added in M20+ (apply the pattern when
+  adding new parameterised GET endpoints).
+- Splitting `test_db.py` (below threshold; revisit if `db.py` grows in M20+).
