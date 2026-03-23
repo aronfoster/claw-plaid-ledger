@@ -401,6 +401,37 @@ Plaid transactions represent settlement events, not necessarily a single budgeti
 
 ---
 
+### M23 — Remove Annotations Table
+
+**Goal:** simplify the data model by eliminating the now-redundant `annotations`
+table after the allocation migration is complete.
+
+**Rationale:** The project is intentionally collapsing from a two-table semantic
+model (`annotations` + `allocations`) into a single semantic table. In practice,
+transaction-level metadata stored in `annotations` (category, tags, notes) has not
+been pulling its weight as a separate layer — the same information belongs in
+`allocations`, which is already the authoritative budgeting surface. Keeping both
+tables creates dual-write complexity with no benefit. After M20–M22 fully migrate
+that data, `annotations` becomes dead weight and should be removed entirely.
+
+#### Deliverables
+
+- Migrate any remaining `annotations.note` data into `allocations`.
+- Remove all reads/writes that depend on `annotations`.
+- Delete the `annotations` table and related migration compatibility code.
+- Update API, CLI, and reporting paths to use `allocations` as the only
+  semantic/budgeting layer.
+
+#### Acceptance criteria
+
+- No production code depends on `annotations`.
+- Transaction categorization, tags, and notes are stored only in `allocations`.
+- Transaction sync/import logic remains unchanged and Plaid data remains immutable.
+- The schema is simpler: raw financial events in `transactions`, semantic budgeting
+  data in `allocations`.
+
+---
+
 ## Deferred / Unscheduled
 
 ### `doctor` auto-remediation
