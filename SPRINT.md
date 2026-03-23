@@ -85,7 +85,7 @@ move to its canonical home in `routers/webhooks.py` in Task 3.
 
 ---
 
-## Task 2: Create the routers scaffold — utils.py and _strict_params
+## Task 2: Create the routers scaffold — utils.py and _strict_params ✅ DONE
 
 Create the `routers/` package and the shared utilities module. No routes move
 in this task.

@@ -32,7 +32,9 @@ _TRENDS_THREE_MONTHS = 3
 def _patch_today(monkeypatch: pytest.MonkeyPatch, isodate: str) -> None:
     """Patch claw_plaid_ledger.server._today to return *isodate*."""
     fixed = date.fromisoformat(isodate)
-    monkeypatch.setattr("claw_plaid_ledger.server._today", lambda: fixed)
+    monkeypatch.setattr(
+        "claw_plaid_ledger.routers.utils._today", lambda: fixed
+    )
 
 
 def _seed_trends_data(db_path: pathlib.Path) -> None:
