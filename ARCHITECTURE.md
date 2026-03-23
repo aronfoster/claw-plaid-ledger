@@ -945,7 +945,12 @@ scripts/
   sync-skills.sh    # push/pull OpenClaw agent skill bundles between repo and ~/.openclaw
 
 tests/
-  test_cli.py
+  conftest.py                  # shared fixtures and helpers (M18)
+  helpers.py                   # shared seed helpers (M18)
+  test_cli_doctor.py           # ledger doctor, production-preflight (M18)
+  test_cli_items.py            # ledger items, overlaps, apply-precedence (M18)
+  test_cli_link.py             # ledger link (M18)
+  test_cli_sync.py             # ledger sync, init-db, serve startup (M18)
   test_config.py
   test_db.py
   test_items_config.py
@@ -954,7 +959,19 @@ tests/
   test_notifier.py
   test_plaid_adapter.py
   test_preflight.py
-  test_server.py
+  test_server_accounts.py      # GET /accounts, PUT /accounts/{id}, /categories, /tags (M18)
+  test_server_annotations.py   # PUT /annotations/{id} (M18)
+  test_server_auth.py          # require_bearer_token, TestProtectedRoute (M18)
+  test_server_categories.py    # GET /categories (M18)
+  test_server_errors.py        # GET /errors (M18)
+  test_server_health.py        # GET /health (M18)
+  test_server_ip_allowlist.py  # IP resolution, allowlist middleware (M18)
+  test_server_logging.py       # CorrelationIdMiddleware, SyncRunId, structured logging (M18)
+  test_server_spend.py         # GET /spend (M18)
+  test_server_spend_trends.py  # GET /spend/trends (M18)
+  test_server_sync.py          # lifespan, scheduled sync, background sync (M18)
+  test_server_transactions.py  # GET /transactions, GET /transactions/{id} (M18)
+  test_server_webhook.py       # POST /webhooks/plaid, item routing (M18)
   test_sync_engine.py
   test_webhook_auth.py
 

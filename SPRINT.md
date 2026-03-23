@@ -87,7 +87,7 @@ Delete `test_cli.py` once all tests are moved and the quality gate passes.
 
 ---
 
-## Task 2: Split test_server.py — endpoint tests
+## Task 2: Split test_server.py — endpoint tests ✅ DONE
 
 ### Background
 

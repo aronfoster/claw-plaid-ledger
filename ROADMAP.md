@@ -244,33 +244,26 @@ agents without tailing logs:
   (Hestia: pre-run health check; Athena: proactive error alerting workflow and
   playbook entry).
 
+### M18 — Split test files (Sprint 20)
+
+Sprint 20 is complete. The two monolithic test files have been broken into
+focused modules with no test regressions:
+
+- `tests/test_cli.py` (1 725 lines) split into four files by CLI command:
+  `test_cli_doctor.py`, `test_cli_items.py`, `test_cli_link.py`,
+  `test_cli_sync.py`.
+- `tests/test_server.py` (5 249 lines) split into twelve focused modules
+  covering endpoints, middleware, webhooks, scheduling, auth, correlation
+  logging, and IP allowlisting.
+- Shared fixtures and seed helpers promoted to `conftest.py` and `helpers.py`;
+  no helpers are duplicated across files.
+- All test files are under the 2 000-line threshold.
+- Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
+  with identical test counts before and after.
+
 ---
 
 ## Upcoming Milestones
-
-### M18 — Split test files
-
-**Focus:** Break up unwieldy test modules for LLM context window compatibility
-and general maintainability.
-
-**Goal:** No single test file exceeds ~2 000 lines; each module covers a
-focused slice of the surface area; shared fixtures live in `conftest.py`.
-
-**Scope**
-
-- Split `tests/test_server.py` into focused modules:
-  - `test_server_transactions.py`
-  - `test_server_annotations.py`
-  - `test_server_spend.py`
-  - `test_server_webhooks.py`
-  - (additional splits as line counts warrant)
-- Move shared fixtures and helpers into `tests/conftest.py`.
-- Audit other test files (e.g. `test_cli.py`, `test_sync.py`) and split any
-  that are approaching the threshold.
-- Confirm the full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`)
-  passes after the reorganisation with no test regressions.
-
----
 
 ### M19 — Split server.py into routers
 
