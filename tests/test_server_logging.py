@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
-from claw_plaid_ledger.server import _background_sync, app
+from claw_plaid_ledger.routers.webhooks import _background_sync
+from claw_plaid_ledger.server import app
 from claw_plaid_ledger.sync_engine import SyncSummary
 
 if TYPE_CHECKING:
@@ -53,7 +54,9 @@ class TestStructuredLogging:
 
         body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
 
-        with caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"):
+        with caplog.at_level(
+            logging.ERROR, logger="claw_plaid_ledger.routers.webhooks"
+        ):
             client.post(
                 "/webhooks/plaid",
                 content=body,
@@ -93,16 +96,18 @@ class TestStructuredLogging:
         mock_config.webhook_allowed_ips = []  # no IP filtering
 
         with (
-            caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"),
+            caplog.at_level(
+                logging.ERROR, logger="claw_plaid_ledger.routers.webhooks"
+            ),
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
             patch(
-                "claw_plaid_ledger.server.PlaidClientAdapter"
+                "claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"
             ) as mock_adapter_cls,
             patch(
-                "claw_plaid_ledger.server.run_sync",
+                "claw_plaid_ledger.routers.webhooks.run_sync",
                 side_effect=RuntimeError("deliberate test failure"),
             ),
         ):
@@ -215,14 +220,18 @@ class TestSyncRunId:
         )
 
         with (
-            caplog.at_level(logging.INFO, logger="claw_plaid_ledger.server"),
+            caplog.at_level(
+                logging.INFO, logger="claw_plaid_ledger.routers.webhooks"
+            ),
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter") as mock_cls,
             patch(
-                "claw_plaid_ledger.server.run_sync",
+                "claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"
+            ) as mock_cls,
+            patch(
+                "claw_plaid_ledger.routers.webhooks.run_sync",
                 return_value=mock_summary,
             ),
         ):
@@ -258,14 +267,18 @@ class TestSyncRunId:
         )
 
         with (
-            caplog.at_level(logging.INFO, logger="claw_plaid_ledger.server"),
+            caplog.at_level(
+                logging.INFO, logger="claw_plaid_ledger.routers.webhooks"
+            ),
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter") as mock_cls,
             patch(
-                "claw_plaid_ledger.server.run_sync",
+                "claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"
+            ) as mock_cls,
+            patch(
+                "claw_plaid_ledger.routers.webhooks.run_sync",
                 return_value=mock_summary,
             ),
         ):
@@ -296,7 +309,8 @@ class TestSyncRunId:
                 captured_sync_run_id.append(sync_run_id)
 
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", _capture_sync
+            "claw_plaid_ledger.routers.webhooks._background_sync",
+            _capture_sync,
         )
 
         response = client.post(

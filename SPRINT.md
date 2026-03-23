@@ -108,7 +108,7 @@ from `routers.utils` so the remaining routes continue to compile.
 
 ---
 
-## Task 3: Create routers/webhooks.py
+## Task 3: Create routers/webhooks.py ✅ DONE
 
 Move all background-sync logic, the scheduled-sync infrastructure, the
 `lifespan` context manager, and `POST /webhooks/plaid` into `routers/webhooks.py`.

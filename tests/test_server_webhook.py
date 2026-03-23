@@ -47,7 +47,7 @@ class TestWebhookPlaid:
 
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         response = client.post(
@@ -96,7 +96,7 @@ class TestWebhookPlaid:
 
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         response = client.post(
@@ -131,14 +131,14 @@ class TestWebhookPlaid:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
             patch(
-                "claw_plaid_ledger.server.PlaidClientAdapter"
+                "claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"
             ) as mock_adapter_cls,
             patch(
-                "claw_plaid_ledger.server.run_sync",
+                "claw_plaid_ledger.routers.webhooks.run_sync",
                 side_effect=RuntimeError("sync blew up"),
             ),
         ):
@@ -182,11 +182,12 @@ class TestWebhookItemRouting:
         )
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         with patch(
-            "claw_plaid_ledger.server.load_items_config", return_value=[item]
+            "claw_plaid_ledger.routers.webhooks.load_items_config",
+            return_value=[item],
         ):
             response = client.post(
                 "/webhooks/plaid",
@@ -229,15 +230,15 @@ class TestWebhookItemRouting:
         )
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         with (
             caplog.at_level(
-                logging.WARNING, logger="claw_plaid_ledger.server"
+                logging.WARNING, logger="claw_plaid_ledger.routers.webhooks"
             ),
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item],
             ),
         ):
@@ -275,11 +276,12 @@ class TestWebhookItemRouting:
 
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         with patch(
-            "claw_plaid_ledger.server.load_items_config", return_value=[]
+            "claw_plaid_ledger.routers.webhooks.load_items_config",
+            return_value=[],
         ):
             response = client.post(
                 "/webhooks/plaid",
@@ -306,10 +308,12 @@ class TestWebhookItemRouting:
 
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
-        with patch("claw_plaid_ledger.server.load_items_config") as mock_load:
+        with patch(
+            "claw_plaid_ledger.routers.webhooks.load_items_config"
+        ) as mock_load:
             response = client.post(
                 "/webhooks/plaid",
                 content=body,
@@ -347,13 +351,15 @@ class TestWebhookItemRouting:
         )
         mock_bg = MagicMock()
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", mock_bg
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
         with (
-            caplog.at_level(logging.ERROR, logger="claw_plaid_ledger.server"),
+            caplog.at_level(
+                logging.ERROR, logger="claw_plaid_ledger.routers.webhooks"
+            ),
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item],
             ),
         ):
@@ -394,7 +400,7 @@ class TestWebhookIPAllowlistMiddleware:
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", AsyncMock()
+            "claw_plaid_ledger.routers.webhooks._background_sync", AsyncMock()
         )
 
         response = client.post(
@@ -428,7 +434,7 @@ class TestWebhookIPAllowlistMiddleware:
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", AsyncMock()
+            "claw_plaid_ledger.routers.webhooks._background_sync", AsyncMock()
         )
 
         response = client.post(
@@ -489,7 +495,7 @@ class TestWebhookIPAllowlistMiddleware:
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
-            "claw_plaid_ledger.server._background_sync", AsyncMock()
+            "claw_plaid_ledger.routers.webhooks._background_sync", AsyncMock()
         )
 
         response = client.post(
@@ -566,7 +572,7 @@ class TestWebhookIPAllowlistMiddleware:
         sig = _make_plaid_sig(body)
 
         with caplog.at_level(
-            logging.WARNING, logger="claw_plaid_ledger.server"
+            logging.WARNING, logger="claw_plaid_ledger.routers.webhooks"
         ):
             client.post(
                 "/webhooks/plaid",

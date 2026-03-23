@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from claw_plaid_ledger.config import ConfigError, load_config
 from claw_plaid_ledger.logging_utils import get_correlation_id
+from claw_plaid_ledger.routers.webhooks import _WEBHOOK_PATH
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -19,8 +20,6 @@ if TYPE_CHECKING:
     from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
-
-_WEBHOOK_PATH = "/webhooks/plaid"
 
 
 def _resolve_client_ip(
