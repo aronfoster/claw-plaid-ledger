@@ -134,7 +134,7 @@ tests/
 
 ---
 
-## Task 3: Split test_server.py — infrastructure tests, then delete it
+## Task 3: Split test_server.py — infrastructure tests, then delete it ✅ DONE
 
 ### Background
 
