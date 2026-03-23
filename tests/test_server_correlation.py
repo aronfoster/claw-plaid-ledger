@@ -1,4 +1,4 @@
-"""Tests for structured logging, correlation IDs, and sync_run_id."""
+"""Tests for CorrelationIdMiddleware, SyncRunId, and structured logging."""
 
 from __future__ import annotations
 
