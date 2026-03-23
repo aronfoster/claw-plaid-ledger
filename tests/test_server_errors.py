@@ -7,7 +7,6 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import (
@@ -19,6 +18,8 @@ from claw_plaid_ledger.server import app
 
 if TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
 client = TestClient(app)
 

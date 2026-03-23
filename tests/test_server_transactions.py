@@ -6,7 +6,6 @@ import http
 import sqlite3
 from typing import TYPE_CHECKING
 
-import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
@@ -15,6 +14,8 @@ from tests.helpers import _RANGE_TODAY, _patch_today, _seed_transactions
 
 if TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
 client = TestClient(app)
 

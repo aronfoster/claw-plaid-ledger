@@ -10,19 +10,20 @@ from datetime import date
 from io import StringIO
 from typing import TYPE_CHECKING
 
-import pytest
-
 from claw_plaid_ledger.cli import main
 from claw_plaid_ledger.db import initialize_database
 
 if TYPE_CHECKING:
     import pathlib
 
+    import pytest
+
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 # ---------------------------------------------------------------------------
 # Shared seed helpers
 # ---------------------------------------------------------------------------
+
 
 # Used by test_server_transactions.py and test_server_annotations.py.
 def _seed_transactions(db_path: pathlib.Path) -> None:

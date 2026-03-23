@@ -1,4 +1,4 @@
-"""Tests for structured logging, correlation IDs, and sync_run_id propagation."""
+"""Tests for structured logging, correlation IDs, and sync_run_id."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
@@ -19,6 +18,8 @@ from claw_plaid_ledger.sync_engine import SyncSummary
 
 if TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
 client = TestClient(app)
 

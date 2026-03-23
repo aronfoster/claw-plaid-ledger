@@ -9,7 +9,6 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.items_config import ItemConfig
@@ -17,6 +16,8 @@ from claw_plaid_ledger.server import app
 
 if TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
 client = TestClient(app)
 

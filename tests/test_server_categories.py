@@ -7,7 +7,6 @@ import json
 import sqlite3
 from typing import TYPE_CHECKING
 
-import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
@@ -15,6 +14,8 @@ from claw_plaid_ledger.server import app
 
 if TYPE_CHECKING:
     import pathlib
+
+    import pytest
 
 client = TestClient(app)
 
