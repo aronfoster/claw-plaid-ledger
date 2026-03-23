@@ -253,7 +253,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Missing Authorization header returns 401."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -270,7 +269,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Omitting start_date returns HTTP 422."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -288,7 +286,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Omitting end_date returns HTTP 422."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -306,7 +303,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Non-ISO date strings return HTTP 422."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -324,7 +320,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Basic window returns correct total_spend and transaction_count."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -351,7 +346,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Date window with no matches returns zeros, not an error."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -372,7 +366,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?tags=groceries restricts to transactions with that tag."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -399,7 +392,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?tags=groceries&tags=food restricts to transactions with both."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -428,7 +420,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """A tag that matches nothing returns zeros."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -453,7 +444,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Default include_pending=false excludes pending transactions."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -480,7 +470,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """include_pending=true adds pending transactions to the total."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -507,7 +496,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?owner=alice restricts spend to Alice's accounts."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -535,7 +523,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """view=raw includes transactions from suppressed accounts."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -561,7 +548,6 @@ class TestGetSpendEndpoint:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """view=canonical excludes suppressed-account transactions."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -608,7 +594,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?range=this_month resolves to first-of-month .. today."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -624,7 +609,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?range=last_month resolves to first..last day of prior month."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -640,7 +624,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?range=last_month in January resolves to December of prior year."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -661,7 +644,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?range=last_30_days returns today-30 .. today."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -677,7 +659,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """?range=last_7_days returns today-7 .. today."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -693,7 +674,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Explicit start_date overrides the range-derived start date."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -709,7 +689,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Explicit end_date overrides the range-derived end date."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -725,7 +704,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Omitting both range and start_date/end_date returns HTTP 422."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -737,7 +715,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """An unrecognised range value returns HTTP 422."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -750,7 +727,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Existing calls with explicit start_date+end_date are unaffected."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -767,7 +743,6 @@ class TestGetSpendRangeParam:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
         """Response always includes the resolved start_date and end_date."""
-
         self._setup(monkeypatch, tmp_path)
         response = client.get(
             "/spend",
@@ -797,7 +772,6 @@ class TestGetSpendEnrichedFilters:
         params: dict[str, str],
     ) -> dict[str, object]:
         """Seed DB, call GET /spend with given params, return parsed JSON."""
-
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
