@@ -180,7 +180,9 @@ class TestCorrelationIdMiddleware:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Middleware emits INFO logs for request_start and request_end."""
-        with caplog.at_level(logging.INFO, logger="claw_plaid_ledger.server"):
+        with caplog.at_level(
+            logging.INFO, logger="claw_plaid_ledger.middleware.correlation"
+        ):
             client.get("/health")
 
         messages = [r.getMessage() for r in caplog.records]

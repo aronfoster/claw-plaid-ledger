@@ -54,7 +54,7 @@ src/claw_plaid_ledger/
 
 ---
 
-## Task 1: Create the middleware package
+## Task 1: Create the middleware package ✅ DONE
 
 Move `require_bearer_token`, `CorrelationIdMiddleware`, and
 `WebhookIPAllowlistMiddleware` (plus their helpers) out of `server.py` into

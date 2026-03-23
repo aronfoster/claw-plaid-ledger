@@ -11,7 +11,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
-from claw_plaid_ledger.server import require_bearer_token
+from claw_plaid_ledger.middleware.auth import require_bearer_token
 
 # Short name so S105 ("hardcoded password") does not fire; this value carries
 # no real security significance — it is only used as a test fixture.
@@ -83,7 +83,8 @@ class TestRequireBearerToken:
         # Simulate load_api_secret() returning the secret from the .env file
         # (i.e. not present in the process environment).
         with patch(
-            "claw_plaid_ledger.server.load_api_secret", return_value=_TOKEN
+            "claw_plaid_ledger.middleware.auth.load_api_secret",
+            return_value=_TOKEN,
         ):
             creds = HTTPAuthorizationCredentials(
                 scheme="Bearer", credentials=_TOKEN
