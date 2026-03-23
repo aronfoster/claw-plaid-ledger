@@ -1,4 +1,4 @@
-"""Tests for lifespan, scheduled sync loop, and overdue-item checking."""
+"""Tests for background sync, lifespan, and scheduled-sync helpers."""
 
 from __future__ import annotations
 
@@ -10,23 +10,41 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from claw_plaid_ledger.config import Config
+from claw_plaid_ledger.config import Config, OpenClawConfig
 from claw_plaid_ledger.db import initialize_database, upsert_sync_state
 from claw_plaid_ledger.items_config import ItemConfig
 from claw_plaid_ledger.server import (
+    _background_sync,
     _check_and_sync_overdue_items,
     _scheduled_sync_loop,
     app,
     lifespan,
 )
+from claw_plaid_ledger.sync_engine import SyncSummary
 
 if TYPE_CHECKING:
     import pathlib
     from collections.abc import Generator
 
+_OC_TOKEN = "test-oc-token"  # noqa: S105
+_OC_URL = "http://127.0.0.1:18789/hooks/agent"
+
 _FALLBACK_HOURS_24 = 24
 _EXPECTED_TWO_CALLS = 2
 _EXPECTED_ONE_CALL = 1
+
+
+def _make_mock_config(tmp_path: pathlib.Path) -> MagicMock:
+    """Return a minimal mock Config for _background_sync tests."""
+    mock_config = MagicMock()
+    mock_config.plaid_access_token = "access-token"  # noqa: S105
+    mock_config.item_id = "default-item"
+    mock_config.db_path = tmp_path
+    mock_config.openclaw_hooks_url = _OC_URL
+    mock_config.openclaw_hooks_token = _OC_TOKEN
+    mock_config.openclaw_hooks_agent = "Hestia"
+    mock_config.openclaw_hooks_wake_mode = "now"
+    return mock_config
 
 
 def _make_scheduled_sync_config(
@@ -45,6 +63,159 @@ def _make_scheduled_sync_config(
         scheduled_sync_enabled=True,
         scheduled_sync_fallback_hours=fallback_hours,
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for notify_openclaw wiring in _background_sync
+# ---------------------------------------------------------------------------
+
+
+class TestBackgroundSyncNotificationWiring:
+    """Tests that _background_sync wires notify_openclaw correctly."""
+
+    def test_notify_called_when_sync_has_changes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """notify_openclaw called once when sync has non-zero changes."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=3, modified=1, removed=0, accounts=1, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+        ):
+            asyncio.run(_background_sync())
+
+        expected_openclaw_cfg = OpenClawConfig(
+            url=mock_config.openclaw_hooks_url,
+            token=mock_config.openclaw_hooks_token,
+            agent=mock_config.openclaw_hooks_agent,
+            wake_mode=mock_config.openclaw_hooks_wake_mode,
+        )
+        mock_notify.assert_called_once_with(summary, expected_openclaw_cfg)
+
+    def test_notify_not_called_when_sync_has_no_changes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """notify_openclaw not called when sync returns zero changes."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+        ):
+            asyncio.run(_background_sync())
+
+        mock_notify.assert_not_called()
+
+    def test_notify_exception_does_not_propagate(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Exception from notify_openclaw is caught; sync does not crash."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=1, modified=0, removed=0, accounts=1, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch(
+                "claw_plaid_ledger.server.notify_openclaw",
+                side_effect=RuntimeError("notifier bug"),
+            ),
+        ):
+            # Must not raise — except Exception in _background_sync absorbs it.
+            asyncio.run(_background_sync())
+
+
+# ---------------------------------------------------------------------------
+# Tests for _background_sync with injected credentials
+# ---------------------------------------------------------------------------
+
+
+class TestBackgroundSyncInjectedCredentials:
+    """Tests for _background_sync() with explicit access_token / item_id."""
+
+    def test_injected_access_token_is_passed_to_run_sync(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Injected access_token and item_id are forwarded to run_sync."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.server.run_sync", return_value=summary
+            ) as mock_run_sync,
+        ):
+            asyncio.run(
+                _background_sync(
+                    # S106: test fixture value, not a real credential
+                    access_token="injected-token",  # noqa: S106
+                    item_id="bank-alice",
+                    owner="alice",
+                )
+            )
+
+        mock_run_sync.assert_called_once()
+        call_kwargs = mock_run_sync.call_args.kwargs
+        # S105: comparing against a test fixture token, not a real credential
+        assert call_kwargs["access_token"] == "injected-token"  # noqa: S105
+        assert call_kwargs["item_id"] == "bank-alice"
+        assert call_kwargs["owner"] == "alice"
+
+    def test_no_args_uses_config_values_backward_compat(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """_background_sync() with no args uses config token and item_id."""
+        mock_config = _make_mock_config(tmp_path)
+        summary = SyncSummary(
+            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        )
+
+        with (
+            patch(
+                "claw_plaid_ledger.server.load_config",
+                return_value=mock_config,
+            ),
+            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.server.run_sync", return_value=summary
+            ) as mock_run_sync,
+        ):
+            asyncio.run(_background_sync())
+
+        mock_run_sync.assert_called_once()
+        call_kwargs = mock_run_sync.call_args.kwargs
+        assert call_kwargs["access_token"] == mock_config.plaid_access_token
+        assert call_kwargs["item_id"] == mock_config.item_id
 
 
 # ---------------------------------------------------------------------------

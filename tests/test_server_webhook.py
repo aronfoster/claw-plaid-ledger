@@ -1,21 +1,18 @@
-"""Tests for the POST /webhooks/plaid endpoint and background sync wiring."""
+"""Tests for the POST /webhooks/plaid endpoint and IP allowlist middleware."""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import http
 import logging
 from typing import TYPE_CHECKING
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from claw_plaid_ledger.config import OpenClawConfig
 from claw_plaid_ledger.items_config import ItemConfig
-from claw_plaid_ledger.server import _background_sync, app
-from claw_plaid_ledger.sync_engine import SyncSummary
+from claw_plaid_ledger.server import app
 
 if TYPE_CHECKING:
     import pathlib
@@ -28,26 +25,11 @@ client = TestClient(app)
 # no real security significance — it is only used as a test fixture.
 _TOKEN = "test-bearer-value"  # noqa: S105
 _WEBHOOK_SECRET = "test-webhook-secret"  # noqa: S105
-_OC_TOKEN = "test-oc-token"  # noqa: S105
-_OC_URL = "http://127.0.0.1:18789/hooks/agent"
 
 
 def _make_plaid_sig(body: bytes, secret: str = _WEBHOOK_SECRET) -> str:
     """Compute a valid Plaid-Verification HMAC-SHA256 hex digest."""
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-
-
-def _make_mock_config(tmp_path: pathlib.Path) -> MagicMock:
-    """Return a minimal mock Config for _background_sync tests."""
-    mock_config = MagicMock()
-    mock_config.plaid_access_token = "access-token"  # noqa: S105
-    mock_config.item_id = "default-item"
-    mock_config.db_path = tmp_path
-    mock_config.openclaw_hooks_url = _OC_URL
-    mock_config.openclaw_hooks_token = _OC_TOKEN
-    mock_config.openclaw_hooks_agent = "Hestia"
-    mock_config.openclaw_hooks_wake_mode = "now"
-    return mock_config
 
 
 class TestWebhookPlaid:
@@ -395,154 +377,205 @@ class TestWebhookItemRouting:
         assert any("not set" in m for m in error_messages)
 
 
-# ---------------------------------------------------------------------------
-# Tests for notify_openclaw wiring in _background_sync
-# ---------------------------------------------------------------------------
+class TestWebhookIPAllowlistMiddleware:
+    """Integration tests for the webhook IP allowlist middleware."""
 
-
-class TestBackgroundSyncNotificationWiring:
-    """Tests that _background_sync wires notify_openclaw correctly."""
-
-    def test_notify_called_when_sync_has_changes(
-        self, tmp_path: pathlib.Path
+    def test_no_allowlist_configured_webhook_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """notify_openclaw called once when sync has non-zero changes."""
-        mock_config = _make_mock_config(tmp_path)
-        summary = SyncSummary(
-            added=3, modified=1, removed=0, accounts=1, next_cursor="cur"
+        """Middleware is transparent when CLAW_WEBHOOK_ALLOWED_IPS is unset."""
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", db_path)
+        monkeypatch.delenv("CLAW_WEBHOOK_ALLOWED_IPS", raising=False)
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", AsyncMock()
         )
 
-        with (
-            patch(
-                "claw_plaid_ledger.server.load_config",
-                return_value=mock_config,
-            ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
-            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
-        ):
-            asyncio.run(_background_sync())
-
-        expected_openclaw_cfg = OpenClawConfig(
-            url=mock_config.openclaw_hooks_url,
-            token=mock_config.openclaw_hooks_token,
-            agent=mock_config.openclaw_hooks_agent,
-            wake_mode=mock_config.openclaw_hooks_wake_mode,
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
         )
-        mock_notify.assert_called_once_with(summary, expected_openclaw_cfg)
 
-    def test_notify_not_called_when_sync_has_no_changes(
-        self, tmp_path: pathlib.Path
+        # Middleware is transparent when no allowlist is configured.
+        assert response.status_code != http.HTTPStatus.FORBIDDEN
+
+    def test_allowlist_configured_matching_ip_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """notify_openclaw not called when sync returns zero changes."""
-        mock_config = _make_mock_config(tmp_path)
-        summary = SyncSummary(
-            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        """Request from an allowlisted IP passes the middleware."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
+        # TestClient direct IP falls back to 127.0.0.1 (trusted); no XFF →
+        # resolved IP = 127.0.0.1.  Allow 127.0.0.1/32.
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "127.0.0.1/32")
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", AsyncMock()
         )
 
-        with (
-            patch(
-                "claw_plaid_ledger.server.load_config",
-                return_value=mock_config,
-            ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
-            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
-        ):
-            asyncio.run(_background_sync())
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
+        )
 
-        mock_notify.assert_not_called()
+        assert response.status_code != http.HTTPStatus.FORBIDDEN
 
-    def test_notify_exception_does_not_propagate(
-        self, tmp_path: pathlib.Path
+    def test_allowlist_configured_non_matching_ip_blocked(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Exception from notify_openclaw is caught; sync does not crash."""
-        mock_config = _make_mock_config(tmp_path)
-        summary = SyncSummary(
-            added=1, modified=0, removed=0, accounts=1, next_cursor="cur"
+        """Request from a non-allowlisted IP receives HTTP 403."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
+        # TestClient direct IP → 127.0.0.1; allowed range excludes it.
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "10.0.0.1")
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
         )
 
-        with (
-            patch(
-                "claw_plaid_ledger.server.load_config",
-                return_value=mock_config,
-            ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
-            patch(
-                "claw_plaid_ledger.server.notify_openclaw",
-                side_effect=RuntimeError("notifier bug"),
-            ),
-        ):
-            # Must not raise — except Exception in _background_sync absorbs it.
-            asyncio.run(_background_sync())
+        assert response.status_code == http.HTTPStatus.FORBIDDEN
+        assert response.json() == {"detail": "forbidden"}
 
-
-# ---------------------------------------------------------------------------
-# Tests for _background_sync with injected credentials
-# ---------------------------------------------------------------------------
-
-
-class TestBackgroundSyncInjectedCredentials:
-    """Tests for _background_sync() with explicit access_token / item_id."""
-
-    def test_injected_access_token_is_passed_to_run_sync(
-        self, tmp_path: pathlib.Path
+    def test_xff_resolves_to_allowed_ip_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Injected access_token and item_id are forwarded to run_sync."""
-        mock_config = _make_mock_config(tmp_path)
-        summary = SyncSummary(
-            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
+        """X-Forwarded-For from trusted proxy resolves to allowlisted IP."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
+        # TestClient falls back to 127.0.0.1 as direct IP, which is trusted.
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        monkeypatch.setattr(
+            "claw_plaid_ledger.server._background_sync", AsyncMock()
         )
 
-        with (
-            patch(
-                "claw_plaid_ledger.server.load_config",
-                return_value=mock_config,
-            ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch(
-                "claw_plaid_ledger.server.run_sync", return_value=summary
-            ) as mock_run_sync,
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+                # Leftmost XFF is a Plaid IP in the allowed range.
+                "X-Forwarded-For": "52.21.5.1, 10.0.0.1",
+            },
+        )
+
+        assert response.status_code != http.HTTPStatus.FORBIDDEN
+
+    def test_xff_resolves_to_blocked_ip_returns_403(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """XFF from trusted proxy that resolves to non-allowlisted IP → 403."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+                # Leftmost XFF is not in the allowed range.
+                "X-Forwarded-For": "10.99.0.1",
+            },
+        )
+
+        assert response.status_code == http.HTTPStatus.FORBIDDEN
+        assert response.json() == {"detail": "forbidden"}
+
+    def test_allowlist_does_not_affect_other_routes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-webhook routes are unaffected when allowlist is configured."""
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "10.0.0.1")
+
+        response = client.get("/health")
+
+        assert response.status_code == http.HTTPStatus.OK
+
+    def test_blocked_webhook_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Blocked webhook attempt is logged at WARNING level."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
+        monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
+        monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "10.0.0.1")
+
+        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        sig = _make_plaid_sig(body)
+
+        with caplog.at_level(
+            logging.WARNING, logger="claw_plaid_ledger.server"
         ):
-            asyncio.run(
-                _background_sync(
-                    # S106: test fixture value, not a real credential
-                    access_token="injected-token",  # noqa: S106
-                    item_id="bank-alice",
-                    owner="alice",
-                )
+            client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
             )
 
-        mock_run_sync.assert_called_once()
-        call_kwargs = mock_run_sync.call_args.kwargs
-        # S105: comparing against a test fixture token, not a real credential
-        assert call_kwargs["access_token"] == "injected-token"  # noqa: S105
-        assert call_kwargs["item_id"] == "bank-alice"
-        assert call_kwargs["owner"] == "alice"
-
-    def test_no_args_uses_config_values_backward_compat(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """_background_sync() with no args uses config token and item_id."""
-        mock_config = _make_mock_config(tmp_path)
-        summary = SyncSummary(
-            added=0, modified=0, removed=0, accounts=0, next_cursor="cur"
-        )
-
-        with (
-            patch(
-                "claw_plaid_ledger.server.load_config",
-                return_value=mock_config,
-            ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch(
-                "claw_plaid_ledger.server.run_sync", return_value=summary
-            ) as mock_run_sync,
-        ):
-            asyncio.run(_background_sync())
-
-        mock_run_sync.assert_called_once()
-        call_kwargs = mock_run_sync.call_args.kwargs
-        assert call_kwargs["access_token"] == mock_config.plaid_access_token
-        assert call_kwargs["item_id"] == mock_config.item_id
+        assert any("webhook IP blocked" in r.message for r in caplog.records)
