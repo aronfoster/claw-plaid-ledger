@@ -157,6 +157,21 @@ picking up the next task.
 
 ---
 
+## Next Task Queueing
+
+After completing a task, provide the next step text to the user so he can copy-paste it. When starting a new Sprint, use **PM New Sprint**. When uncompleted tasks remain in SPRINT.md, use **Developer Step for Sprint Task**. When all tasks are complete in SPRINT.md, use **PM Sprint Closeout**. After the closeout, provide **PM New Sprint**.
+
+### PM New Sprint
+You are an expert PM. See AGENTS.md, ROADMAP.md, and BUGS.md. We're going to work together to turn [next milestone number and title from ROADMAP.md] into a series of Tasks within SPRINT.md. We will focus on requirements, not implementation. However, we will provide specifics, even code, if it will answer necessary design decisions for the developer. The goal is that our developers can grab a task and complete it in the way they want, with minimal intervention, and they'll produce a result that meets the customer's needs. This is the stage to ask questions.
+
+### Developer Step for Sprint Task
+See AGENTS.md and SPRINT.md. Complete Sprint [Sprint number from SPRINT.md header] Task [First incomplete task in SPRINT.md].
+
+### PM Sprint Closeout
+Complete Sprint [Sprint number from SPRINT.md header] from SPRINT.md. See AGENTS.md for additional guidance. Close out the Sprint, ensuring that all markdown files are up to date (including architecture, readme, roadmap, and runbook; but please search and assess all markdown files in the project) and all objectives have been met. Do not erase or overwrite SPRINT.md, just mark items completed.
+
+---
+
 ## Required behavior summary
 
 1. Run the full quality gate before committing.
