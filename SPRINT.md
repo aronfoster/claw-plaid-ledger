@@ -208,7 +208,7 @@ in BUGS.md.
 
 ---
 
-## Task 7: Create routers/accounts.py — finish thinning server.py
+## Task 7: Create routers/accounts.py — finish thinning server.py ✅ DONE
 
 Move `AccountLabelRequest`, `GET /accounts`, `PUT /accounts/{account_id}`,
 `GET /categories`, and `GET /tags` to `routers/accounts.py`.
