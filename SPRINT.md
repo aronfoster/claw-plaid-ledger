@@ -163,7 +163,7 @@ valid param → 200).
 
 ---
 
-## Task 5: Create routers/spend.py — BUG-014 on GET /spend and GET /spend/trends
+## Task 5: Create routers/spend.py — BUG-014 on GET /spend and GET /spend/trends ✅ DONE
 
 Move `SpendListQuery`, `SpendTrendsListQuery`, `GET /spend`, and
 `GET /spend/trends` to `routers/spend.py`. Import `_SpendRange`, `_today`,

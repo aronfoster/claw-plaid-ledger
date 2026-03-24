@@ -535,3 +535,69 @@ class TestGetSpendTrendsEndpoint:
         self._setup(monkeypatch, tmp_path)
         response = client.get("/spend/trends")
         assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /spend/trends — BUG-014 strict query parameter checking
+# ---------------------------------------------------------------------------
+
+
+class TestGetSpendTrendsStrictParams:
+    """BUG-014: unknown query params on GET /spend/trends return HTTP 422."""
+
+    def _setup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        db_path = tmp_path / "db.sqlite"
+        _seed_trends_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        _patch_today(monkeypatch, _TRENDS_TODAY)
+
+    def test_misspelled_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Misspelled query parameter returns HTTP 422."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend/trends",
+            params={"moth": 3},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_unknown_param_body_contains_unrecognized_and_valid_parameters(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """422 body contains 'unrecognized' and 'valid_parameters' keys."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend/trends",
+            params={"moth": 3},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        detail = response.json()["detail"]
+        assert "unrecognized" in detail
+        assert "valid_parameters" in detail
+        assert "moth" in detail["unrecognized"]
+
+    def test_all_valid_params_returns_200(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Request with all valid parameters is unaffected (no regression)."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend/trends",
+            params={
+                "months": 3,
+                "owner": "alice",
+                "include_pending": "false",
+                "view": "canonical",
+                "account_id": "acct_alice",
+                "category": "Software",
+                "tag": "software",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
