@@ -143,7 +143,7 @@ forms a directed chain with no cycle.
 
 ---
 
-## Task 4: Create routers/health.py — BUG-014 on GET /errors
+## Task 4: Create routers/health.py — BUG-014 on GET /errors ✅ DONE
 
 Move `ErrorListQuery`, `GET /health`, and `GET /errors` to `routers/health.py`.
 
