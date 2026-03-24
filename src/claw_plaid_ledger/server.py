@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 import fastapi
@@ -16,7 +16,6 @@ from claw_plaid_ledger.config import load_config
 from claw_plaid_ledger.db import (
     AccountLabelRow,
     AnnotationRow,
-    LedgerErrorQuery,
     SpendQuery,
     SpendTrendsQuery,
     TransactionQuery,
@@ -26,7 +25,6 @@ from claw_plaid_ledger.db import (
     get_distinct_categories,
     get_distinct_tags,
     get_transaction,
-    query_ledger_errors,
     query_spend,
     query_spend_trends,
     query_transactions,
@@ -38,6 +36,7 @@ from claw_plaid_ledger.middleware.correlation import CorrelationIdMiddleware
 from claw_plaid_ledger.middleware.ip_allowlist import (
     WebhookIPAllowlistMiddleware,
 )
+from claw_plaid_ledger.routers import health as health_module
 from claw_plaid_ledger.routers import webhooks as webhooks_module
 from claw_plaid_ledger.routers.utils import (
     _resolve_spend_dates,
@@ -56,45 +55,7 @@ app = fastapi.FastAPI(
 app.add_middleware(WebhookIPAllowlistMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.include_router(webhooks_module.router)
-
-
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Return service liveness status."""
-    return {"status": "ok"}
-
-
-class ErrorListQuery(BaseModel):
-    """Validated query parameters for the GET /errors endpoint."""
-
-    hours: int = Field(default=24, ge=1)
-    min_severity: Literal["WARNING", "ERROR"] | None = None
-    limit: int = Query(default=100, le=500)
-    offset: int = 0
-
-
-@app.get("/errors", dependencies=[Depends(require_bearer_token)])
-def list_errors(
-    params: Annotated[ErrorListQuery, Depends()],
-) -> dict[str, object]:
-    """Return recent ledger warnings and errors."""
-    config = load_config()
-    query = LedgerErrorQuery(
-        hours=params.hours,
-        min_severity=params.min_severity,
-        limit=params.limit,
-        offset=params.offset,
-    )
-    since = datetime.now(UTC) - timedelta(hours=params.hours)
-    with sqlite3.connect(config.db_path) as connection:
-        rows, total = query_ledger_errors(connection, query)
-    return {
-        "errors": rows,
-        "total": total,
-        "limit": params.limit,
-        "offset": params.offset,
-        "since": since.isoformat(),
-    }
+app.include_router(health_module.router)
 
 
 class TransactionListQuery(BaseModel):

@@ -179,3 +179,48 @@ class TestGetErrorsEndpoint:
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
         assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_unknown_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Misspelled query parameter returns HTTP 422."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/errors",
+            params={"offest": 10},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_unknown_param_body_contains_unrecognized_and_valid_parameters(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """422 body contains 'unrecognized' and 'valid_parameters' keys."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/errors",
+            params={"offest": 10},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        detail = response.json()["detail"]
+        assert "unrecognized" in detail
+        assert "valid_parameters" in detail
+        assert "offest" in detail["unrecognized"]
+
+    def test_all_valid_params_returns_200(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Request with all valid parameters is unaffected (no regression)."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/errors",
+            params={
+                "hours": 48,
+                "min_severity": "ERROR",
+                "limit": 10,
+                "offset": 5,
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
