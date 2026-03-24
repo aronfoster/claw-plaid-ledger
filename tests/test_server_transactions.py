@@ -1110,3 +1110,71 @@ class TestListTransactionsTagsAndSearchNotes:
         body = response.json()
         assert body["total"] == 1
         assert len(body["transactions"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /transactions — strict query parameter enforcement (BUG-014)
+# ---------------------------------------------------------------------------
+
+
+class TestListTransactionsStrictParams:
+    """Tests for BUG-014: unknown query parameters rejected with 422."""
+
+    def test_misspelled_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """A misspelled parameter (offest) is rejected with HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"offest": "10"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        body = response.json()
+        assert "unrecognized" in body["detail"]
+        assert "valid_parameters" in body["detail"]
+        assert "offest" in body["detail"]["unrecognized"]
+
+    def test_unrecognized_param_body_contains_required_keys(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """422 body contains 'unrecognized' and 'valid_parameters' keys."""
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"page": "2", "page_size": "50"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        detail = response.json()["detail"]
+        assert "unrecognized" in detail
+        assert "valid_parameters" in detail
+        assert sorted(detail["unrecognized"]) == ["page", "page_size"]
+
+    def test_valid_params_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """A request with all-valid parameters returns 200 (no regression)."""
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"limit": "10", "offset": "0", "view": "canonical"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
