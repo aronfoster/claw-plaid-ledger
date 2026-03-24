@@ -20,11 +20,19 @@
   for live-readiness validation
 - Plaid client wrapper (`plaid_adapter.py`)
 - Sync engine (`sync_engine.py`)
-- HTTP server (`server.py`) — FastAPI application served via uvicorn; includes
-  multi-item webhook routing, `_background_sync()` with per-item context
-  injection, the `lifespan` context manager, and the optional scheduled sync
-  background loop (`_scheduled_sync_loop`, `_check_and_sync_overdue_items`,
-  `_sync_item_if_overdue`)
+- HTTP server (`server.py`) — thin FastAPI app factory (~50 lines); assembles
+  middleware and routers; no route handlers or business logic
+- Middleware package (`middleware/`) — `auth.py` (bearer token),
+  `correlation.py` (`CorrelationIdMiddleware`), `ip_allowlist.py`
+  (`WebhookIPAllowlistMiddleware`)
+- Router package (`routers/`) — domain-scoped `APIRouter` modules:
+  `health.py` (`GET /health`, `GET /errors`), `transactions.py`
+  (`GET /transactions`, `GET /transactions/{id}`, `PUT /annotations/{id}`),
+  `spend.py` (`GET /spend`, `GET /spend/trends`), `accounts.py`
+  (`GET /accounts`, `PUT /accounts/{id}`, `GET /categories`, `GET /tags`),
+  `webhooks.py` (`POST /webhooks/plaid`, `_background_sync`, scheduled-sync
+  helpers, `lifespan`); `utils.py` shared date-range helpers and
+  `_strict_params` (BUG-014 unknown-query-parameter enforcement)
 - Logging utilities (`logging_utils.py`) — `CorrelationIdFilter` injects
   correlation IDs into every log record; `LedgerDbHandler` persists WARNING+
   records to `ledger_errors` automatically during server operation
@@ -730,9 +738,9 @@ reading the source code.
 
 ## OpenClaw notification
 
-After a webhook-triggered sync, `_background_sync` in `server.py` calls
-`notify_openclaw` from `notifier.py` when `summary.added + summary.modified +
-summary.removed > 0`.
+After a webhook-triggered sync, `_background_sync` in `routers/webhooks.py`
+calls `notify_openclaw` from `notifier.py` when
+`summary.added + summary.modified + summary.removed > 0`.
 
 ### When notification fires
 
@@ -929,12 +937,30 @@ src/claw_plaid_ledger/
   items_config.py   # multi-item items.toml loader
   link_server.py    # local HTTP server for Plaid Link flow
   logging_utils.py  # CorrelationIdFilter + LedgerDbHandler
+  middleware/
+    __init__.py
+    auth.py           # require_bearer_token, _bearer_scheme
+    correlation.py    # CorrelationIdMiddleware
+    ip_allowlist.py   # WebhookIPAllowlistMiddleware, _resolve_client_ip,
+                      # _ip_in_allowlist
   notifier.py
   plaid_adapter.py
   plaid_models.py
   preflight.py      # production preflight check logic
+  routers/
+    __init__.py
+    accounts.py       # GET /accounts, PUT /accounts/{id},
+                      # GET /categories, GET /tags
+    health.py         # GET /health, GET /errors
+    spend.py          # GET /spend, GET /spend/trends
+    transactions.py   # GET /transactions, GET /transactions/{id},
+                      # PUT /annotations/{id}
+    utils.py          # _SpendRange, _today, _resolve_spend_dates,
+                      # _strict_params (BUG-014 unknown-param enforcement)
+    webhooks.py       # POST /webhooks/plaid, _WEBHOOK_PATH,
+                      # _background_sync, scheduling helpers, lifespan
   schema.sql
-  server.py         # webhook routing, scheduled sync loop
+  server.py         # app factory only (~50 lines); no route handlers
   sync_engine.py
   webhook_auth.py
 
