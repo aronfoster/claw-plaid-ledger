@@ -261,52 +261,36 @@ focused modules with no test regressions:
 - Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
   with identical test counts before and after.
 
+### M19 — Split server.py into routers (Sprint 21)
+
+Sprint 21 is complete. The 1 054-line `server.py` monolith has been
+decomposed into a proper FastAPI router structure:
+
+- **`middleware/`** package: `auth.py` (bearer token), `correlation.py`
+  (`CorrelationIdMiddleware`), `ip_allowlist.py`
+  (`WebhookIPAllowlistMiddleware`).
+- **`routers/`** package: `health.py` (`GET /health`, `GET /errors`),
+  `transactions.py` (`GET /transactions`, `GET /transactions/{id}`,
+  `PUT /annotations/{id}`), `spend.py` (`GET /spend`, `GET /spend/trends`),
+  `accounts.py` (`GET /accounts`, `PUT /accounts/{id}`, `GET /categories`,
+  `GET /tags`), `webhooks.py` (`POST /webhooks/plaid`, `_background_sync`,
+  scheduled-sync helpers, `lifespan`), `utils.py` (shared date-range
+  helpers and `_strict_params`).
+- **`server.py`** is now a thin app factory (~50 lines): no route handlers,
+  models, or helpers; only imports, middleware registration, and router
+  inclusion.
+- **BUG-014** resolved: `_strict_params` dependency wired into every
+  parameterised GET endpoint (`GET /errors`, `GET /transactions`,
+  `GET /spend`, `GET /spend/trends`). Unknown query parameters return
+  HTTP 422 with `"unrecognized"` and `"valid_parameters"` keys.
+  `AnnotationRequest` and `AccountLabelRequest` both have
+  `extra="forbid"` on their Pydantic models.
+- Pure structural refactor — zero API behaviour change, zero schema change.
+- Full quality gate passes with identical test counts (458 tests).
+
 ---
 
 ## Upcoming Milestones
-
-### M19 — Split server.py into routers
-
-**Focus:** Decompose the monolithic `server.py` into a proper FastAPI router
-structure before M20 adds the allocations route group.
-
-**Goal:** No single source file dominates the API surface; each router module
-is responsible for one domain; the app factory is thin and concerned only with
-assembly.
-
-**Proposed module structure:**
-
-```
-src/claw_plaid_ledger/
-  server.py           # app factory: FastAPI instance, lifespan, middleware
-                      # registration, and router inclusion (~50 lines)
-  middleware/
-    auth.py           # require_bearer_token, HTTPBearer setup
-    correlation.py    # CorrelationIdMiddleware
-    ip_allowlist.py   # WebhookIPAllowlistMiddleware, _resolve_client_ip,
-                      # _ip_in_allowlist
-  routers/
-    health.py         # GET /health, GET /errors
-    transactions.py   # GET /transactions, GET /transactions/{id},
-                      # PUT /annotations/{id}
-    spend.py          # GET /spend, GET /spend/trends
-    accounts.py       # GET /accounts, PUT /accounts/{id},
-                      # GET /categories, GET /tags
-    webhooks.py       # POST /webhooks/plaid, background sync,
-                      # scheduled sync, lifespan helpers
-```
-
-**Constraints:**
-
-- Pure internal restructure — zero API behavior change, zero schema change,
-  no new functionality.
-- All routers use FastAPI's `APIRouter`; assembled in `server.py` via
-  `app.include_router()`.
-- Quality gate must pass identically before and after.
-- The M18 test split should require only import-path updates, not test logic
-  changes.
-
----
 
 ### M20 — Allocation Model for Multi-Purpose Transactions
 
