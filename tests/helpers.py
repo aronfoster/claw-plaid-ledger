@@ -107,9 +107,11 @@ _RANGE_TODAY = "2026-03-21"
 
 
 def _patch_today(monkeypatch: pytest.MonkeyPatch, isodate: str) -> None:
-    """Patch claw_plaid_ledger.server._today to return *isodate*."""
+    """Patch claw_plaid_ledger.routers.utils._today to return *isodate*."""
     fixed = date.fromisoformat(isodate)
-    monkeypatch.setattr("claw_plaid_ledger.server._today", lambda: fixed)
+    monkeypatch.setattr(
+        "claw_plaid_ledger.routers.utils._today", lambda: fixed
+    )
 
 
 # ---------------------------------------------------------------------------

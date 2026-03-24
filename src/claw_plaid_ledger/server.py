@@ -10,14 +10,12 @@ from typing import Annotated, Literal
 
 import fastapi
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from claw_plaid_ledger.config import load_config
 from claw_plaid_ledger.db import (
     AccountLabelRow,
     AnnotationRow,
-    SpendQuery,
-    SpendTrendsQuery,
     TransactionQuery,
     get_account,
     get_all_accounts,
@@ -25,8 +23,6 @@ from claw_plaid_ledger.db import (
     get_distinct_categories,
     get_distinct_tags,
     get_transaction,
-    query_spend,
-    query_spend_trends,
     query_transactions,
     upsert_account_label,
     upsert_annotation,
@@ -37,11 +33,11 @@ from claw_plaid_ledger.middleware.ip_allowlist import (
     WebhookIPAllowlistMiddleware,
 )
 from claw_plaid_ledger.routers import health as health_module
+from claw_plaid_ledger.routers import spend as spend_module
 from claw_plaid_ledger.routers import webhooks as webhooks_module
 from claw_plaid_ledger.routers.utils import (
     _resolve_spend_dates,
     _SpendRange,
-    _today,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +52,7 @@ app.add_middleware(WebhookIPAllowlistMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.include_router(webhooks_module.router)
 app.include_router(health_module.router)
+app.include_router(spend_module.router)
 
 
 class TransactionListQuery(BaseModel):
@@ -128,131 +125,6 @@ def list_transactions(
         "limit": params.limit,
         "offset": params.offset,
     }
-
-
-class SpendListQuery(BaseModel):
-    """
-    Scalar query parameters for GET /spend.
-
-    List-typed params (tags) and bool params (include_pending) are declared
-    separately on the endpoint to satisfy FastAPI's multi-value and
-    FBT001/FBT002 constraints.  ``start_date`` and ``end_date`` are optional
-    because they may be derived from the ``range`` shorthand parameter.
-    """
-
-    start_date: date | None = None
-    end_date: date | None = None
-    owner: str | None = None
-    # bool | None avoids FBT001/FBT002; None is treated as False (conservative
-    # default: exclude pending transactions unless caller opts in).
-    include_pending: bool | None = None
-    view: Literal["canonical", "raw"] = "canonical"
-    account_id: str | None = None
-    category: str | None = None
-    tag: str | None = None
-
-
-@app.get("/spend", dependencies=[Depends(require_bearer_token)])
-def get_spend(
-    params: Annotated[SpendListQuery, Depends()],
-    tags: Annotated[list[str] | None, Query()] = None,
-    date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
-) -> dict[str, object]:
-    """
-    Return aggregate spend totals for a date window with optional filters.
-
-    Sums transaction amounts over the inclusive date window.  Positive amounts
-    are debits (money leaving the account); negative amounts are credits —
-    the sum is returned as-is per Plaid conventions.  Pass ``tags`` multiple
-    times to require all listed tags (AND semantics).
-
-    ``range`` is an optional shorthand for common date windows
-    (``this_month``, ``last_month``, ``last_30_days``, ``last_7_days``).
-    Explicit ``start_date`` / ``end_date`` override the range-derived dates
-    when both are provided together.  If ``range`` is absent, both
-    ``start_date`` and ``end_date`` are required.
-    """
-    resolved_start, resolved_end = _resolve_spend_dates(
-        date_range, params.start_date, params.end_date
-    )
-    resolved_tags: list[str] = tags or []
-    include_pending = params.include_pending is True
-    config = load_config()
-    spend_query = SpendQuery(
-        start_date=resolved_start.isoformat(),
-        end_date=resolved_end.isoformat(),
-        owner=params.owner,
-        tags=tuple(resolved_tags),
-        include_pending=include_pending,
-        canonical_only=params.view == "canonical",
-        account_id=params.account_id,
-        category=params.category,
-        tag=params.tag,
-    )
-    with sqlite3.connect(config.db_path) as connection:
-        total_spend, transaction_count = query_spend(connection, spend_query)
-    return {
-        "start_date": resolved_start.isoformat(),
-        "end_date": resolved_end.isoformat(),
-        "total_spend": total_spend,
-        "transaction_count": transaction_count,
-        "includes_pending": include_pending,
-        "filters": {
-            "owner": params.owner,
-            "tags": resolved_tags,
-            "account_id": params.account_id,
-            "category": params.category,
-            "tag": params.tag,
-        },
-    }
-
-
-class SpendTrendsListQuery(BaseModel):
-    """Scalar query parameters for GET /spend/trends."""
-
-    months: int = Field(default=6, ge=1)
-    owner: str | None = None
-    # bool | None avoids FBT001/FBT002; None is treated as False (conservative
-    # default: exclude pending transactions unless caller opts in).
-    include_pending: bool | None = None
-    view: Literal["canonical", "raw"] = "canonical"
-    account_id: str | None = None
-    category: str | None = None
-    tag: str | None = None
-
-
-@app.get("/spend/trends", dependencies=[Depends(require_bearer_token)])
-def get_spend_trends(
-    params: Annotated[SpendTrendsListQuery, Depends()],
-    tags: Annotated[list[str] | None, Query()] = None,
-) -> list[dict[str, object]]:
-    """
-    Return spend aggregated by calendar month for a lookback window.
-
-    Returns exactly ``months`` buckets ordered oldest → newest. The
-    current (in-progress) calendar month is flagged ``partial: true``
-    so callers know not to compare it directly against complete months.
-    Months with no qualifying transactions appear as zero-filled buckets.
-
-    Supports the same filters as ``GET /spend`` (``owner``, ``tags``,
-    ``category``, ``tag``, ``account_id``, ``view``,
-    ``include_pending``) for direct comparability.
-    """
-    resolved_tags: list[str] = tags or []
-    include_pending = params.include_pending is True
-    config = load_config()
-    trends_query = SpendTrendsQuery(
-        months=params.months,
-        owner=params.owner,
-        tags=tuple(resolved_tags),
-        include_pending=include_pending,
-        canonical_only=params.view == "canonical",
-        account_id=params.account_id,
-        category=params.category,
-        tag=params.tag,
-    )
-    with sqlite3.connect(config.db_path) as connection:
-        return query_spend_trends(connection, trends_query, _today())
 
 
 def _fetch_transaction_with_annotation(
