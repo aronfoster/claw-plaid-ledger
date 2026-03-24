@@ -8,11 +8,17 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
+*(none)*
+
+---
+
+## Resolved bugs (recent)
+
 ---
 
 ### BUG-014 — Unknown query parameters are silently ignored
 
-**Status:** Active
+**Status:** Resolved (Sprint 21, M19)
 **Severity:** High (callers receive unexpected results with no indication that their parameters were dropped)
 **Area:** API (all GET endpoints that accept query parameters)
 **Reported by:** Operator (agents using wrong pagination parameter names received full unfiltered datasets)
@@ -97,10 +103,6 @@ endpoint confirming:
   set — check and add if missing.
 - `POST /webhooks/plaid` accepts no query parameters and is called by Plaid
   infrastructure; do not add strict param checking there.
-
----
-
-## Resolved bugs
 
 ---
 
