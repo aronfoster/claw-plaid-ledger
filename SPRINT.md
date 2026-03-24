@@ -54,7 +54,7 @@ src/claw_plaid_ledger/
 
 ---
 
-## Task 1: Create the middleware package
+## Task 1: Create the middleware package ✅ DONE
 
 Move `require_bearer_token`, `CorrelationIdMiddleware`, and
 `WebhookIPAllowlistMiddleware` (plus their helpers) out of `server.py` into
@@ -85,7 +85,7 @@ move to its canonical home in `routers/webhooks.py` in Task 3.
 
 ---
 
-## Task 2: Create the routers scaffold — utils.py and _strict_params
+## Task 2: Create the routers scaffold — utils.py and _strict_params ✅ DONE
 
 Create the `routers/` package and the shared utilities module. No routes move
 in this task.
@@ -108,7 +108,7 @@ from `routers.utils` so the remaining routes continue to compile.
 
 ---
 
-## Task 3: Create routers/webhooks.py
+## Task 3: Create routers/webhooks.py ✅ DONE
 
 Move all background-sync logic, the scheduled-sync infrastructure, the
 `lifespan` context manager, and `POST /webhooks/plaid` into `routers/webhooks.py`.

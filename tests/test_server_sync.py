@@ -13,13 +13,13 @@ import pytest
 from claw_plaid_ledger.config import Config, OpenClawConfig
 from claw_plaid_ledger.db import initialize_database, upsert_sync_state
 from claw_plaid_ledger.items_config import ItemConfig
-from claw_plaid_ledger.server import (
+from claw_plaid_ledger.routers.webhooks import (
     _background_sync,
     _check_and_sync_overdue_items,
     _scheduled_sync_loop,
-    app,
     lifespan,
 )
+from claw_plaid_ledger.server import app
 from claw_plaid_ledger.sync_engine import SyncSummary
 
 if TYPE_CHECKING:
@@ -84,12 +84,17 @@ class TestBackgroundSyncNotificationWiring:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
-            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+            patch("claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.routers.webhooks.run_sync",
+                return_value=summary,
+            ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks.notify_openclaw"
+            ) as mock_notify,
         ):
             asyncio.run(_background_sync())
 
@@ -112,12 +117,17 @@ class TestBackgroundSyncNotificationWiring:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
-            patch("claw_plaid_ledger.server.notify_openclaw") as mock_notify,
+            patch("claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"),
+            patch(
+                "claw_plaid_ledger.routers.webhooks.run_sync",
+                return_value=summary,
+            ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks.notify_openclaw"
+            ) as mock_notify,
         ):
             asyncio.run(_background_sync())
 
@@ -134,13 +144,16 @@ class TestBackgroundSyncNotificationWiring:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
-            patch("claw_plaid_ledger.server.run_sync", return_value=summary),
+            patch("claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"),
             patch(
-                "claw_plaid_ledger.server.notify_openclaw",
+                "claw_plaid_ledger.routers.webhooks.run_sync",
+                return_value=summary,
+            ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks.notify_openclaw",
                 side_effect=RuntimeError("notifier bug"),
             ),
         ):
@@ -167,12 +180,13 @@ class TestBackgroundSyncInjectedCredentials:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"),
             patch(
-                "claw_plaid_ledger.server.run_sync", return_value=summary
+                "claw_plaid_ledger.routers.webhooks.run_sync",
+                return_value=summary,
             ) as mock_run_sync,
         ):
             asyncio.run(
@@ -202,12 +216,13 @@ class TestBackgroundSyncInjectedCredentials:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_config",
+                "claw_plaid_ledger.routers.webhooks.load_config",
                 return_value=mock_config,
             ),
-            patch("claw_plaid_ledger.server.PlaidClientAdapter"),
+            patch("claw_plaid_ledger.routers.webhooks.PlaidClientAdapter"),
             patch(
-                "claw_plaid_ledger.server.run_sync", return_value=summary
+                "claw_plaid_ledger.routers.webhooks.run_sync",
+                return_value=summary,
             ) as mock_run_sync,
         ):
             asyncio.run(_background_sync())
@@ -243,7 +258,7 @@ class TestLifespan:
 
         async def _run() -> None:
             with patch(
-                "claw_plaid_ledger.server.asyncio.create_task",
+                "claw_plaid_ledger.routers.webhooks.asyncio.create_task",
                 side_effect=_capture_task,
             ):
                 async with lifespan(app):
@@ -279,7 +294,7 @@ class TestLifespan:
 
         async def _run() -> None:
             with patch(
-                "claw_plaid_ledger.server.asyncio.create_task",
+                "claw_plaid_ledger.routers.webhooks.asyncio.create_task",
                 return_value=task_fake,
             ) as mock_create:
                 async with lifespan(app):
@@ -324,10 +339,12 @@ class TestCheckAndSyncOverdueItems:
         mock_bg = AsyncMock()
         with (
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item_cfg],
             ),
-            patch("claw_plaid_ledger.server._background_sync", mock_bg),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
+            ),
         ):
             asyncio.run(_check_and_sync_overdue_items(cfg))
 
@@ -360,10 +377,12 @@ class TestCheckAndSyncOverdueItems:
         mock_bg = AsyncMock()
         with (
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item_cfg],
             ),
-            patch("claw_plaid_ledger.server._background_sync", mock_bg),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
+            ),
         ):
             asyncio.run(_check_and_sync_overdue_items(cfg))
 
@@ -389,10 +408,12 @@ class TestCheckAndSyncOverdueItems:
         mock_bg = AsyncMock()
         with (
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item_cfg],
             ),
-            patch("claw_plaid_ledger.server._background_sync", mock_bg),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
+            ),
         ):
             asyncio.run(_check_and_sync_overdue_items(cfg))
 
@@ -431,11 +452,11 @@ class TestCheckAndSyncOverdueItems:
 
         with (
             patch(
-                "claw_plaid_ledger.server.load_items_config",
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item_alice, item_bob],
             ),
             patch(
-                "claw_plaid_ledger.server._background_sync",
+                "claw_plaid_ledger.routers.webhooks._background_sync",
                 side_effect=_flaky_bg,
             ),
         ):
@@ -458,9 +479,12 @@ class TestCheckAndSyncOverdueItems:
         mock_bg = AsyncMock()
         with (
             patch(
-                "claw_plaid_ledger.server.load_items_config", return_value=[]
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
+                return_value=[],
             ),
-            patch("claw_plaid_ledger.server._background_sync", mock_bg),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
+            ),
         ):
             asyncio.run(_check_and_sync_overdue_items(cfg))
 
@@ -492,11 +516,11 @@ class TestScheduledSyncLoop:
         async def _run() -> None:
             with (
                 patch(
-                    "claw_plaid_ledger.server.asyncio.sleep",
+                    "claw_plaid_ledger.routers.webhooks.asyncio.sleep",
                     new_callable=AsyncMock,
                 ),
                 patch(
-                    "claw_plaid_ledger.server._check_and_sync_overdue_items",
+                    "claw_plaid_ledger.routers.webhooks._check_and_sync_overdue_items",
                     side_effect=_fake_check,
                 ),
                 pytest.raises(asyncio.CancelledError),

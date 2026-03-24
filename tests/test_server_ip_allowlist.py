@@ -5,7 +5,10 @@ from __future__ import annotations
 import ipaddress
 from unittest.mock import MagicMock
 
-from claw_plaid_ledger.server import _ip_in_allowlist, _resolve_client_ip
+from claw_plaid_ledger.middleware.ip_allowlist import (
+    _ip_in_allowlist,
+    _resolve_client_ip,
+)
 
 
 class TestResolveClientIp:
