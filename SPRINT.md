@@ -183,7 +183,7 @@ per the test requirements in BUGS.md.
 
 ---
 
-## Task 6: Create routers/transactions.py — BUG-014 on GET /transactions
+## Task 6: Create routers/transactions.py — BUG-014 on GET /transactions ✅ DONE
 
 Move `TransactionListQuery`, `_fetch_transaction_with_annotation`,
 `GET /transactions`, `GET /transactions/{id}`, `AnnotationRequest`, and
