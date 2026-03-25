@@ -38,8 +38,12 @@ Group=alice
 EnvironmentFile=/home/alice/.config/claw-plaid-ledger/.env
 
 # --- Executable ---------------------------------------------------------
-# Adjust path to match your ledger installation (see claw-plaid-ledger.service).
-ExecStart=/usr/local/bin/ledger sync --all
+# %h expands to the home directory of the User= above.
+# uv tool install (the recommended install method) places the ledger binary
+# at ~/.local/bin/ledger, which is what %h/.local/bin/ledger resolves to.
+# If you installed ledger system-wide (e.g. /usr/local/bin/ledger), replace
+# %h/.local/bin with the appropriate absolute path.
+ExecStart=%h/.local/bin/ledger sync --all
 
 # --- Logging ------------------------------------------------------------
 StandardOutput=journal
