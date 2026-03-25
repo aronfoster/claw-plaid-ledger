@@ -207,13 +207,14 @@ def _seed_spend_data(db_path: pathlib.Path) -> None:
         )
         connection.executemany(
             (
-                "INSERT INTO annotations (plaid_transaction_id, category, "
-                "note, tags, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO allocations (plaid_transaction_id, amount, "
+                "category, note, tags, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
             ),
             [
                 (
                     "tx_a1",
+                    100.0,
                     "food",
                     None,
                     '["groceries","food"]',
@@ -222,6 +223,7 @@ def _seed_spend_data(db_path: pathlib.Path) -> None:
                 ),
                 (
                     "tx_a2",
+                    50.0,
                     "food",
                     None,
                     '["groceries"]',
@@ -230,9 +232,37 @@ def _seed_spend_data(db_path: pathlib.Path) -> None:
                 ),
                 (
                     "tx_b1",
+                    200.0,
                     "transport",
                     None,
                     '["transport"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_ap",
+                    75.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_af",
+                    30.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_dup",
+                    999.0,
+                    None,
+                    None,
+                    None,
                     "2025-01-01T00:00:00+00:00",
                     "2025-01-01T00:00:00+00:00",
                 ),
@@ -923,6 +953,89 @@ class TestGetSpendEnrichedFilters:
         assert filters["account_id"] == "acct_alice"
         assert filters["category"] == "food"
         assert filters["tag"] == "groceries"
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /spend — allocation amount is used, not transaction amount
+# ---------------------------------------------------------------------------
+
+
+class TestGetSpendUsesAllocationAmount:
+    """Verify GET /spend sums allocation amounts, not transaction amounts."""
+
+    def test_spend_reflects_allocation_amount_not_transaction_amount(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """
+        Spend total reflects allocation amount when it differs from tx.
+
+        When an allocation has a different amount than its transaction,
+        spend totals reflect the allocation amount.
+        """
+        db_path = tmp_path / "db.sqlite"
+        initialize_database(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "INSERT INTO accounts (plaid_account_id, name, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (
+                    "acct_test",
+                    "Test Bank",
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO transactions (plaid_transaction_id, "
+                "plaid_account_id, amount, iso_currency_code, name, "
+                "merchant_name, pending, authorized_date, posted_date, "
+                "raw_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "tx_alloc_test",
+                    "acct_test",
+                    100.0,  # transaction amount
+                    "USD",
+                    "Store",
+                    None,
+                    0,
+                    None,
+                    "2025-01-10",
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            )
+            # Allocation has a different amount than the transaction
+            connection.execute(
+                "INSERT INTO allocations (plaid_transaction_id, amount, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (
+                    "tx_alloc_test",
+                    42.0,  # allocation amount differs from transaction (100.0)
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            )
+
+        response = client.get(
+            "/spend",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-31",
+                "view": "raw",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        # Must reflect allocation amount (42.0), not transaction amount (100.0)
+        assert body["total_spend"] == pytest.approx(42.0)
+        assert body["transaction_count"] == 1
 
 
 # ---------------------------------------------------------------------------

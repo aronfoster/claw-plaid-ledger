@@ -282,7 +282,7 @@ No change required — the `tags` filter continues to work; it now targets
 
 ---
 
-## Task 4: Spend, trends, categories, and tags switch to allocations
+## Task 4: Spend, trends, categories, and tags switch to allocations ✅ DONE
 
 ### What
 
