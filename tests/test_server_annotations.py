@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 
 from fastapi.testclient import TestClient
 
-from claw_plaid_ledger.db import get_annotation
+from claw_plaid_ledger.db import (
+    get_allocations_for_transaction,
+    get_annotation,
+)
 from claw_plaid_ledger.server import app
 from tests.helpers import _seed_transactions
 
@@ -22,6 +25,9 @@ client = TestClient(app)
 # Short name so S105 ("hardcoded password") does not fire; this value carries
 # no real security significance — it is only used as a test fixture.
 _TOKEN = "test-bearer-value"  # noqa: S105
+
+# tx_1 amount from the _seed_transactions helper — used for PLR2004 avoidance.
+_TX_1_AMOUNT = 12.34
 
 
 class TestPutAnnotationEndpoint:
@@ -53,14 +59,15 @@ class TestPutAnnotationEndpoint:
         assert body["account_id"] == "acct_1"
         assert "amount" in body
         assert body["name"] == "Starbucks"
-        assert "annotation" in body
-        # Annotation block must reflect values just written
-        annotation = body["annotation"]
-        assert annotation is not None
-        assert annotation["category"] == "food"
-        assert annotation["note"] == "Morning coffee"
-        assert annotation["tags"] == ["discretionary"]
-        assert annotation["updated_at"] is not None
+        assert "allocation" in body
+        assert "annotation" not in body
+        # Allocation block must reflect values just written
+        allocation = body["allocation"]
+        assert allocation is not None
+        assert allocation["category"] == "food"
+        assert allocation["note"] == "Morning coffee"
+        assert allocation["tags"] == ["discretionary"]
+        assert allocation["updated_at"] is not None
 
     def test_second_put_replaces_annotation_preserves_created_at(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -98,10 +105,10 @@ class TestPutAnnotationEndpoint:
         # updated_at should be >= first_updated_at
         assert second.updated_at >= first_updated_at
 
-    def test_second_put_response_reflects_updated_annotation(
+    def test_second_put_response_reflects_updated_allocation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Second PUT (update) returns the newly updated annotation fields."""
+        """Second PUT (update) returns the newly updated allocation fields."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -125,11 +132,11 @@ class TestPutAnnotationEndpoint:
 
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
-        annotation = body["annotation"]
-        assert annotation is not None
-        assert annotation["category"] == "transport"
-        assert annotation["note"] == "Updated note"
-        assert annotation["tags"] == ["b", "c"]
+        allocation = body["allocation"]
+        assert allocation is not None
+        assert allocation["category"] == "transport"
+        assert allocation["note"] == "Updated note"
+        assert allocation["tags"] == ["b", "c"]
 
     def test_put_empty_body_stores_all_null(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -175,7 +182,7 @@ class TestPutAnnotationEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json()["annotation"]["tags"] == []
+        assert response.json()["allocation"]["tags"] == []
 
     def test_put_unknown_transaction_returns_404(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -227,10 +234,10 @@ class TestPutAnnotationEndpoint:
 
         assert response.status_code == http.HTTPStatus.UNAUTHORIZED
 
-    def test_end_to_end_put_then_get_annotation_block_matches(
+    def test_end_to_end_put_then_get_allocation_block_matches(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """PUT then GET; annotation block in detail response matches."""
+        """PUT then GET; allocation block in detail response matches."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -252,8 +259,58 @@ class TestPutAnnotationEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        annotation = response.json()["annotation"]
-        assert annotation is not None
-        assert annotation["category"] == "food"
-        assert annotation["note"] == "Morning coffee"
-        assert annotation["tags"] == ["discretionary", "recurring"]
+        allocation = response.json()["allocation"]
+        assert allocation is not None
+        assert allocation["category"] == "food"
+        assert allocation["note"] == "Morning coffee"
+        assert allocation["tags"] == ["discretionary", "recurring"]
+
+    def test_put_creates_allocation_with_correct_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """PUT creates an allocation row with the correct fields."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        client.put(
+            "/annotations/tx_1",
+            json={
+                "category": "food",
+                "note": "Morning coffee",
+                "tags": ["discretionary"],
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        with sqlite3.connect(db_path) as connection:
+            allocs = get_allocations_for_transaction(connection, "tx_1")
+        assert len(allocs) == 1
+        alloc = allocs[0]
+        assert alloc.amount == _TX_1_AMOUNT
+        assert alloc.category == "food"
+        assert alloc.note == "Morning coffee"
+        assert alloc.tags == '["discretionary"]'
+
+    def test_put_response_has_allocation_key_not_annotation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """PUT response contains allocation key, not annotation."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/annotations/tx_1",
+            json={"category": "food"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert "allocation" in body
+        assert "annotation" not in body
+        assert body["allocation"]["category"] == "food"
+        assert body["allocation"]["amount"] == _TX_1_AMOUNT

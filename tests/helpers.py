@@ -90,6 +90,29 @@ def _seed_transactions(db_path: pathlib.Path) -> None:
                 ),
             ],
         )
+        # Seed blank allocations for both transactions (mirrors
+        # the upsert_transaction allocation seeding from Task 1).
+        connection.executemany(
+            (
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_1",
+                    12.34,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_2",
+                    55.0,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,9 @@ client = TestClient(app)
 # no real security significance — it is only used as a test fixture.
 _TOKEN = "test-bearer-value"  # noqa: S105
 
+# tx_1 amount from the _seed_transactions helper — used for PLR2004 avoidance.
+_TX_1_AMOUNT = 12.34
+
 
 class TestListTransactionsEndpoint:
     """Tests for GET /transactions endpoint behavior."""
@@ -503,6 +506,35 @@ def _seed_annotation_list_data(db_path: pathlib.Path) -> None:
                 "2024-06-01T10:00:00+00:00",
             ),
         )
+        # Seed allocations (mirrors production seeding; tx_ann includes
+        # semantic fields to match the annotation already written above).
+        connection.executemany(
+            (
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_ann",
+                    15.0,
+                    "coffee",
+                    "morning latte",
+                    '["coffee", "recurring"]',
+                    "2024-06-01T10:00:00+00:00",
+                    "2024-06-01T10:00:00+00:00",
+                ),
+                (
+                    "tx_bare",
+                    25.0,
+                    None,
+                    None,
+                    None,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
 
 
 class TestListTransactionsAnnotations:
@@ -556,7 +588,7 @@ class TestListTransactionsAnnotations:
     def test_list_annotation_shape_matches_detail_endpoint(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotation shape in list results matches GET /transactions/{id}."""
+        """List has annotation key; detail has allocation key; same data."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -574,9 +606,17 @@ class TestListTransactionsAnnotations:
 
         assert list_resp.status_code == http.HTTPStatus.OK
         assert detail_resp.status_code == http.HTTPStatus.OK
+        # List still returns annotation key (updated to allocation in Task 3)
         list_annotation = list_resp.json()["transactions"][0]["annotation"]
-        detail_annotation = detail_resp.json()["annotation"]
-        assert list_annotation == detail_annotation
+        assert list_annotation["category"] == "coffee"
+        assert list_annotation["note"] == "morning latte"
+        assert list_annotation["tags"] == ["coffee", "recurring"]
+        # Detail returns allocation key since Task 2
+        detail_allocation = detail_resp.json()["allocation"]
+        assert detail_allocation is not None
+        assert detail_allocation["category"] == "coffee"
+        assert detail_allocation["note"] == "morning latte"
+        assert detail_allocation["tags"] == ["coffee", "recurring"]
 
     def test_mixed_page_has_annotation_and_null(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -630,10 +670,10 @@ class TestGetTransactionDetailEndpoint:
 
         assert response.status_code == http.HTTPStatus.UNAUTHORIZED
 
-    def test_known_id_without_annotation_returns_null_annotation(
+    def test_known_id_without_annotation_has_blank_allocation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Known transaction without annotation returns annotation null."""
+        """Known transaction has blank allocation with null semantic fields."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -645,46 +685,43 @@ class TestGetTransactionDetailEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json() == {
-            "id": "tx_1",
-            "account_id": "acct_1",
-            "amount": 12.34,
-            "iso_currency_code": "USD",
-            "name": "Starbucks",
-            "merchant_name": "Starbucks",
-            "pending": False,
-            "date": "2024-01-15",
-            "raw_json": None,
-            "suppressed_by": None,
-            "annotation": None,
-        }
+        body = response.json()
+        assert body["id"] == "tx_1"
+        assert body["account_id"] == "acct_1"
+        assert body["amount"] == _TX_1_AMOUNT
+        assert body["name"] == "Starbucks"
+        assert body["pending"] is False
+        assert body["raw_json"] is None
+        assert body["suppressed_by"] is None
+        assert "annotation" not in body
+        allocation = body["allocation"]
+        assert allocation is not None
+        assert allocation["amount"] == _TX_1_AMOUNT
+        assert allocation["category"] is None
+        assert allocation["note"] is None
+        assert allocation["tags"] is None
+        assert "id" in allocation
+        assert "updated_at" in allocation
 
-    def test_known_id_with_annotation_parses_tags_list(
+    def test_known_id_with_allocation_parses_tags_list(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotation tags are returned as parsed JSON list."""
+        """Allocation tags are returned as parsed JSON list."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
-        with sqlite3.connect(db_path) as connection:
-            connection.execute(
-                (
-                    "INSERT INTO annotations ("
-                    "plaid_transaction_id, category, note, tags, "
-                    "created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    "tx_1",
-                    "food",
-                    "Morning coffee",
-                    '["discretionary", "recurring"]',
-                    "2024-01-01T00:00:00+00:00",
-                    "2024-01-02T00:00:00+00:00",
-                ),
-            )
-
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Use PUT to write annotation + allocation (double-write).
+        client.put(
+            "/annotations/tx_1",
+            json={
+                "category": "food",
+                "note": "Morning coffee",
+                "tags": ["discretionary", "recurring"],
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
 
         response = client.get(
             "/transactions/tx_1",
@@ -692,39 +729,27 @@ class TestGetTransactionDetailEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json()["annotation"] == {
-            "category": "food",
-            "note": "Morning coffee",
-            "tags": ["discretionary", "recurring"],
-            "updated_at": "2024-01-02T00:00:00+00:00",
-        }
+        allocation = response.json()["allocation"]
+        assert allocation is not None
+        assert allocation["category"] == "food"
+        assert allocation["note"] == "Morning coffee"
+        assert allocation["tags"] == ["discretionary", "recurring"]
 
-    def test_annotation_with_null_tags_returns_null_tags(
+    def test_allocation_with_null_tags_returns_null_tags(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotation with NULL tags returns tags as null."""
+        """Allocation with NULL tags returns tags as null."""
         db_path = tmp_path / "db.sqlite"
         _seed_transactions(db_path)
-        with sqlite3.connect(db_path) as connection:
-            connection.execute(
-                (
-                    "INSERT INTO annotations ("
-                    "plaid_transaction_id, category, note, tags, "
-                    "created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    "tx_1",
-                    "food",
-                    "Morning coffee",
-                    None,
-                    "2024-01-01T00:00:00+00:00",
-                    "2024-01-02T00:00:00+00:00",
-                ),
-            )
-
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # Use PUT with no tags — allocation.tags should be null.
+        client.put(
+            "/annotations/tx_1",
+            json={"category": "food", "note": "Morning coffee"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
 
         response = client.get(
             "/transactions/tx_1",
@@ -732,7 +757,7 @@ class TestGetTransactionDetailEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json()["annotation"]["tags"] is None
+        assert response.json()["allocation"]["tags"] is None
 
     def test_suppressed_transaction_includes_suppressed_by(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
