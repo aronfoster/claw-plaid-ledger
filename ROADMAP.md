@@ -461,6 +461,30 @@ If automatic account or transaction source-precedence confidence is low,
 surface a small review queue rather than silently guessing. This can remain manual until the
 household has enough real production history to reveal the weird edge cases.
 
+### CSV export for financial data
+
+Export transaction and allocation data as CSV for use in spreadsheet tools
+and manual review workflows.
+
+**Scope**
+
+- CLI command (e.g. `ledger export`) that writes a CSV to stdout or a named
+  file.
+- Supports the same filter parameters as `GET /transactions` (date range,
+  account, owner, category, view).
+- Each row represents one allocation (matching the API's one-row-per-allocation
+  semantics introduced in M20).
+- Columns include: transaction date, merchant, transaction amount, allocation
+  amount, category, tags, note, account id, owner.
+
+**Design questions for PM/user**
+
+- Should an API endpoint (`GET /export/csv`) be added alongside the CLI, or
+  is CLI-only sufficient?
+- What file-naming convention should the CLI use for file output vs. stdout?
+
+---
+
 ### Parallel multi-institution sync
 
 M6 syncs institutions sequentially. If sync latency becomes a problem with
