@@ -40,18 +40,20 @@ Reuse these values; do not create near-duplicates.
 
 1. `GET /transactions` with fixed window + `view=canonical`.
 2. Paginate to completion.
-3. Each row includes an `annotation` field (`null` for unannotated transactions).
-   Queue records where `annotation` is `null`, tags are missing, or annotation
-   state shows uncertainty — no per-record drill-down needed for initial
-   screening.
+3. Each row includes an `allocation` field. Use `allocation.category`,
+   `allocation.tags`, and `allocation.note` to screen for missing or stale
+   categorization. The `allocation` object is always present (never null);
+   fields within it may be null for uncategorized transactions. No
+   per-record drill-down needed for initial screening.
 
 ### 2) Drill-down before write
 
 1. `GET /transactions/{id}` to verify current details.
 2. Optional filtered `GET /transactions` to resolve conflicting context.
 3. `PUT /annotations/{transaction_id}` only if evidence is sufficient.
-4. The PUT response contains the full updated transaction record — use it
-   directly to confirm the written state (no follow-up GET needed).
+4. The PUT response contains the full updated transaction record with an
+   `allocation` block — use it directly to confirm the written state
+   (no follow-up GET needed).
 
 ### 3) Orphan/discrepancy triage with Athena escalation
 

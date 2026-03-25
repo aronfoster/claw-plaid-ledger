@@ -64,8 +64,8 @@ Athena must not:
 1. `GET /transactions`
 2. `GET /transactions/{id}`
 3. `GET /spend`
-4. `GET /categories` — discover the current annotation category vocabulary
-5. `GET /tags` — discover the current annotation tag vocabulary
+4. `GET /categories` — discover the current allocation category vocabulary
+5. `GET /tags` — discover the current allocation tag vocabulary
 6. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
 7. `GET /accounts` — retrieve all known accounts with human-readable labels
 8. `PUT /accounts/{account_id}` — write or update a label for an account
@@ -73,6 +73,28 @@ Athena must not:
    supports the same filters as `GET /spend`
 10. `GET /errors` — recent ledger warnings and errors; use for proactive
     alerting and pre-analysis health checks
+
+## Allocation object shape
+
+Every transaction response (`GET /transactions`, `GET /transactions/{id}`,
+`PUT /annotations/{id}`) includes an `allocation` key. It is always present
+(never null). `category`, `tags`, and `note` may be null for uncategorized
+transactions.
+
+```json
+"allocation": {
+  "id": 1,
+  "amount": 50.00,
+  "category": "groceries",
+  "tags": ["household"],
+  "note": "weekly shopping",
+  "updated_at": "2026-03-25T10:00:00+00:00"
+}
+```
+
+`PUT /annotations/{id}` is the write surface for `category`, `tags`, and
+`note`. Its request body is unchanged (`{ "category": ..., "tags": [...],
+"note": ... }`). The response contains `allocation` instead of `annotation`.
 
 ## Pagination
 
@@ -110,7 +132,8 @@ report partial coverage and avoid definitive completeness claims.
 ### 0) Vocabulary discovery
 
 Before annotating, call `GET /categories` and `GET /tags` to retrieve the
-current vocabulary already present in the ledger. This avoids creating
+current allocation vocabulary already present in the ledger. These endpoints
+now draw from `allocations`, not `annotations`. This avoids creating
 near-duplicate labels (e.g. `groceries` vs `grocery`).
 
 ### 1) Review `needs-athena-review` queue
@@ -118,9 +141,12 @@ near-duplicate labels (e.g. `groceries` vs `grocery`).
 1. Query `GET /transactions` with `tags=needs-athena-review` + explicit window
    (or `range` shorthand — see workflow 2).
 2. Paginate to completion.
-3. Each transaction in the list response now includes a nested `annotation`
-   field (`category`, `note`, `tags`, `updated_at`, or `null` if unannotated).
-   Use this to triage without a round-trip to `GET /transactions/{id}`.
+3. Each transaction in the list response now includes a nested `allocation`
+   field (`id`, `amount`, `category`, `tags`, `note`, `updated_at`). It is
+   always present (never null); `category`, `tags`, and `note` may be null
+   for uncategorized transactions. Use `allocation.category`,
+   `allocation.tags`, and `allocation.note` to triage without a round-trip
+   to `GET /transactions/{id}`.
 4. Drill into each priority record with `GET /transactions/{id}` before
    quoting amounts or annotation details in a final report.
 5. Classify issue type (spike, missing expected, duplicate, mismatch,
@@ -139,16 +165,20 @@ Use `GET /spend` with either:
 
 Optional narrowing filters (AND-combined with each other and with owner/tags):
 - `account_id` — restrict to one account (use `GET /accounts` to discover IDs)
-- `category` — restrict to one annotation category (case-insensitive;
+- `category` — restrict to one allocation category (case-insensitive;
   use `GET /categories` for vocabulary)
-- `tag` — restrict to one annotation tag (case-insensitive, singular;
+- `tag` — restrict to one allocation tag (case-insensitive, singular;
   use `GET /tags` for vocabulary)
 
 Then run matching `GET /transactions` for representative evidence.
 `GET /transactions` accepts the same `range` shorthands, so the evidence
 query can use `range=last_month` to mirror the spend call without computing
-explicit dates. List results include `annotation` data directly (no
+explicit dates. List results include `allocation` data directly (no
 drill-down required for initial evidence scanning).
+`GET /spend` sums `allocations.amount`. For M20 (1:1 allocation per
+transaction), totals are numerically identical to transaction amounts. In
+future sprints, a multi-allocation transaction will contribute only its
+matching allocation amount when filtered by category.
 Separate posted vs pending observations.  Report totals only for the exact
 queried window (use the `start_date`/`end_date` fields in the response to
 confirm the resolved window).
