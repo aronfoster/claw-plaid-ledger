@@ -45,7 +45,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: Allocations schema, DB layer, and transaction seeding
+## Task 1: Allocations schema, DB layer, and transaction seeding ✅ DONE
 
 ### What
 

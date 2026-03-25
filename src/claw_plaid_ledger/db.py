@@ -44,6 +44,22 @@ def initialize_database(db_path: Path) -> None:
             except sqlite3.OperationalError:
                 # Column already exists — schema is current.
                 logger.debug("db migration already applied: %s", stmt)
+
+        # Backfill allocations for transactions that have no allocation row.
+        # This catches transactions synced before the allocations table
+        # existed. The NOT EXISTS guard makes this idempotent on startups.
+        backfill_now = _utc_now_iso()
+        connection.execute(
+            "INSERT INTO allocations "
+            "(plaid_transaction_id, amount, created_at, updated_at) "
+            "SELECT t.plaid_transaction_id, t.amount, ?, ? "
+            "FROM transactions t "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM allocations a "
+            "WHERE a.plaid_transaction_id = t.plaid_transaction_id"
+            ")",
+            (backfill_now, backfill_now),
+        )
         connection.commit()
 
 
@@ -209,6 +225,24 @@ def upsert_transaction(
             now,
         ),
     )
+    # Seed a blank allocation for new transactions without one. Because
+    # allocations has no UNIQUE constraint on plaid_transaction_id, raw
+    # INSERT OR IGNORE cannot be used; instead we guard with NOT EXISTS.
+    connection.execute(
+        "INSERT INTO allocations "
+        "(plaid_transaction_id, amount, created_at, updated_at) "
+        "SELECT ?, ?, ?, ? "
+        "WHERE NOT EXISTS ("
+        "SELECT 1 FROM allocations WHERE plaid_transaction_id = ?"
+        ")",
+        (
+            row.plaid_transaction_id,
+            row.amount,
+            now,
+            now,
+            row.plaid_transaction_id,
+        ),
+    )
 
 
 def apply_account_precedence(
@@ -325,6 +359,96 @@ def get_annotation(
         created_at=str(db_row[4]),
         updated_at=str(db_row[5]),
     )
+
+
+@dataclass
+class AllocationRow:
+    """One allocation row from the allocations table."""
+
+    plaid_transaction_id: str
+    amount: float
+    created_at: str
+    updated_at: str
+    id: int | None = None
+    category: str | None = None
+    tags: str | None = None
+    note: str | None = None
+
+
+def upsert_single_allocation(
+    connection: sqlite3.Connection,
+    row: AllocationRow,
+) -> int:
+    """
+    Insert or update the single allocation for a transaction.
+
+    Updates the first/only allocation row for *plaid_transaction_id* if one
+    exists; otherwise inserts a new row. Returns the allocation id.
+    """
+    existing = connection.execute(
+        "SELECT id FROM allocations WHERE plaid_transaction_id = ? "
+        "ORDER BY id ASC LIMIT 1",
+        (row.plaid_transaction_id,),
+    ).fetchone()
+
+    if existing is not None:
+        alloc_id = int(existing[0])
+        connection.execute(
+            "UPDATE allocations SET amount = ?, category = ?, tags = ?, "
+            "note = ?, updated_at = ? WHERE id = ?",
+            (
+                row.amount,
+                row.category,
+                row.tags,
+                row.note,
+                row.updated_at,
+                alloc_id,
+            ),
+        )
+        return alloc_id
+
+    cursor = connection.execute(
+        "INSERT INTO allocations "
+        "(plaid_transaction_id, amount, category, tags, note, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            row.plaid_transaction_id,
+            row.amount,
+            row.category,
+            row.tags,
+            row.note,
+            row.created_at,
+            row.updated_at,
+        ),
+    )
+    return int(cursor.lastrowid)  # type: ignore[arg-type]
+
+
+def get_allocations_for_transaction(
+    connection: sqlite3.Connection,
+    plaid_transaction_id: str,
+) -> list[AllocationRow]:
+    """Return all allocation rows for a transaction, ordered by id ASC."""
+    rows = connection.execute(
+        "SELECT id, plaid_transaction_id, amount, category, tags, note, "
+        "created_at, updated_at FROM allocations "
+        "WHERE plaid_transaction_id = ? ORDER BY id ASC",
+        (plaid_transaction_id,),
+    ).fetchall()
+    return [
+        AllocationRow(
+            id=int(row[0]),
+            plaid_transaction_id=str(row[1]),
+            amount=float(row[2]),
+            category=str(row[3]) if row[3] is not None else None,
+            tags=str(row[4]) if row[4] is not None else None,
+            note=str(row[5]) if row[5] is not None else None,
+            created_at=str(row[6]),
+            updated_at=str(row[7]),
+        )
+        for row in rows
+    ]
 
 
 @dataclass(frozen=True)
