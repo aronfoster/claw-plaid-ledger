@@ -167,14 +167,14 @@ Notes:
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
-| `GET` | `/transactions` | Paginated, filterable transaction list; includes `annotation` per row (`null` if unannotated); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
+| `GET` | `/transactions` | Paginated, filterable transaction list; includes `allocation` per row (never null; `category`, `tags`, `note` within it may be null); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
 | `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters |
-| `GET` | `/categories` | Distinct sorted category values from all annotations |
-| `GET` | `/tags` | Distinct sorted tag values from all annotations |
+| `GET` | `/categories` | Distinct sorted category values from all allocations |
+| `GET` | `/tags` | Distinct sorted tag values from all allocations |
 | `GET` | `/accounts` | All synced accounts with human-readable labels (`label`, `description`) from `account_labels`; use to discover account IDs |
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
-| `GET` | `/transactions/{id}` | Single transaction with merged annotation and suppression provenance (`suppressed_by`) |
-| `PUT` | `/annotations/{id}` | Upsert annotation; returns the full updated transaction record (no follow-up GET needed) |
+| `GET` | `/transactions/{id}` | Single transaction with allocation and suppression provenance (`suppressed_by`) |
+| `PUT` | `/annotations/{id}` | Upsert annotation (double-writes to allocations); returns the full updated transaction record with `allocation` key (no follow-up GET needed) |
 | `GET` | `/errors` | Recent ledger warnings and errors; supports `hours`, `min_severity`, `limit`, `offset`; use for pre-run health checks and proactive alerting |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |

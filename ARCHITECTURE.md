@@ -148,9 +148,10 @@ _scheduled_sync_loop (every 60 min)
   periodic schedule, optionally prioritizing `needs-athena-review` tags.
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
-never touches `annotations`. Source precedence is applied after sync writes via
+never touches `annotations`; it also seeds blank allocation rows via
+`upsert_transaction`. Source precedence is applied after sync writes via
 `ledger apply-precedence`; canonical filtering happens in query/view logic,
-never by deleting raw rows. Agents read transactions and write annotations
+never by deleting raw rows. Agents read transactions and write allocations
 exclusively through the HTTP API.
 
 After a webhook-triggered sync where `added + modified + removed > 0`, the
@@ -165,6 +166,7 @@ Zero-change syncs skip the notification entirely.
 - CLI commands orchestrate workflows but should not contain raw Plaid API setup.
 - The `annotations` table is entirely agent-owned; the sync engine must never
   read from or write to it.
+- The `allocations` table is the budgeting layer; `annotations` continues to receive double-writes and is decommissioned in M23.
 - Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) are immutable
   from the agent's perspective.
 
@@ -177,7 +179,8 @@ Zero-change syncs skip the notification entirely.
 - `account`
 - `account_label` (agent/operator-owned; sync engine never touches this)
 - `transaction`
-- `annotation` (agent-owned; sync engine never touches this)
+- `annotation` (agent-owned; sync engine never touches this; continues to receive double-writes until M23)
+- `allocation` (budgeting layer; seeded by sync engine via `upsert_transaction`; written via `PUT /annotations/{transaction_id}`)
 - `sync_state`
 - `ledger_errors` (server-owned; written by `LedgerDbHandler`; read via `GET /errors`)
 
@@ -301,6 +304,42 @@ Column notes:
 | `created_at` | TEXT | ISO 8601 UTC timestamp; set on first insert; never changed on update |
 | `updated_at` | TEXT | ISO 8601 UTC timestamp; updated on every upsert |
 
+### `allocations`
+
+Budgeting layer. Each Plaid transaction maps to one or more allocation rows.
+In M20, every transaction has exactly one allocation. The sync engine seeds a
+blank allocation row (amount = transaction amount, all semantic fields null)
+for every new transaction via `upsert_transaction`. A startup migration
+backfills allocations for any transaction that lacks one. Written via
+`PUT /annotations/{transaction_id}` (which double-writes to both `annotations`
+and `allocations`). Read by all transaction, spend, and category/tag endpoints.
+`annotations` receives double-writes until M23 when it is decommissioned.
+
+```sql
+CREATE TABLE IF NOT EXISTS allocations (
+    id                   INTEGER PRIMARY KEY,
+    plaid_transaction_id TEXT NOT NULL
+                         REFERENCES transactions(plaid_transaction_id),
+    amount               NUMERIC NOT NULL,
+    category             TEXT,
+    tags                 TEXT,
+    note                 TEXT,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER | Auto-incrementing primary key; no UNIQUE on `plaid_transaction_id` to allow M21 multi-allocation |
+| `plaid_transaction_id` | TEXT | FK to `transactions.plaid_transaction_id` |
+| `amount` | NUMERIC | Allocation amount; for single-allocation transactions equals `transaction.amount` |
+| `category` | TEXT \| NULL | Agent-assigned category label |
+| `tags` | TEXT \| NULL | JSON array stored as text (e.g. `'["food","recurring"]'`) |
+| `note` | TEXT \| NULL | Free-text agent note |
+| `created_at` | TEXT | ISO 8601 UTC; set on first insert; never changed on update |
+| `updated_at` | TEXT | ISO 8601 UTC; updated on every upsert |
+
 ## Interfaces
 
 Current operator-facing CLI commands:
@@ -339,12 +378,12 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/transactions` | Bearer | Paginated, filtered transaction list (supports tags and optional note search) |
 | `GET` | `/spend` | Bearer | Aggregate spend total and count for a date window or named range shorthand with optional owner/tag filters |
 | `GET` | `/spend/trends` | Bearer | Monthly spend buckets for a lookback window; exactly `months` buckets oldest → newest with a `partial` flag on the current month |
-| `GET` | `/categories` | Bearer | Distinct sorted category values from all annotations |
-| `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all annotations |
+| `GET` | `/categories` | Bearer | Distinct sorted category values from all allocations |
+| `GET` | `/tags` | Bearer | Distinct sorted tag values unnested from all allocations |
 | `GET` | `/accounts` | Bearer | All synced accounts joined with label data (`label`, `description`) from `account_labels` |
 | `PUT` | `/accounts/{account_id}` | Bearer | Upsert a human-readable label for an account; returns the full account record; 404 if unknown |
-| `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged annotation and suppression provenance |
-| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation; returns the full updated transaction record |
+| `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged allocation and suppression provenance |
+| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation (double-writes to `allocations`); returns the full updated transaction record with `allocation` key |
 | `GET` | `/errors` | Bearer | Recent ledger warnings and errors from `ledger_errors`; supports `hours`, `min_severity`, `limit`, `offset` |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
@@ -407,9 +446,9 @@ Returns a paginated, filtered list of transactions.
 | `pending` | bool | — | Filter: `true` returns only pending; `false` returns only posted |
 | `min_amount` | float | — | Filter: amount ≥ min_amount (inclusive). Plaid sign: positive = debit |
 | `max_amount` | float | — | Filter: amount ≤ max_amount (inclusive) |
-| `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name`; also matches `annotations.note` when `search_notes=true` |
-| `tags` | list[string] | `[]` | Filter: transaction annotation must include **all** listed tags (AND semantics); pass `?tags=a&tags=b` |
-| `search_notes` | bool | `false` | If true and `keyword` is set, include annotation `note` in keyword search |
+| `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name`; also matches `allocations.note` when `search_notes=true` |
+| `tags` | list[string] | `[]` | Filter: transaction allocation must include **all** listed tags (AND semantics); pass `?tags=a&tags=b` |
+| `search_notes` | bool | `false` | If true and `keyword` is set, include allocation `note` in keyword search |
 | `limit` | int | `100` | Maximum rows to return; max `500`; `limit > 500` returns HTTP 422 |
 | `offset` | int | `0` | Number of matching rows to skip (for pagination) |
 | `view` | `canonical` \\| `raw` | `canonical` | `canonical` excludes suppressed-account rows via source precedence; `raw` returns all rows |
@@ -428,7 +467,9 @@ Returns a paginated, filtered list of transactions.
       "merchant_name": "Starbucks",
       "pending": false,
       "date": "2024-01-15",
-      "annotation": {
+      "allocation": {
+        "id": 1,
+        "amount": 12.34,
         "category": "coffee",
         "note": "morning latte",
         "tags": ["coffee", "recurring"],
@@ -445,14 +486,12 @@ Returns a paginated, filtered list of transactions.
 - `total` is the full matching count before `limit`/`offset` are applied.
 - Empty result set returns HTTP 200 with `"transactions": []` and `"total": 0`.
 - `date` is `COALESCE(posted_date, authorized_date)`.
-- `annotation` is `null` for transactions with no annotation row; otherwise the
-  object is field-for-field identical to the `annotation` block in
-  `GET /transactions/{id}`.
+- `allocation` is never null (every transaction has an allocation); `category`, `tags`, and `note` within it may be null for uncategorized transactions.
 
 ### `GET /categories`
 
 Returns the distinct set of non-null `category` values present across all
-annotation rows, sorted alphabetically (case-insensitive).
+allocation rows, sorted alphabetically (case-insensitive).
 
 **Response** (HTTP 200):
 
@@ -460,12 +499,12 @@ annotation rows, sorted alphabetically (case-insensitive).
 {"categories": ["food", "software", "transport", "utilities"]}
 ```
 
-- Empty array when no annotations have a category set.
+- Empty array when no allocations have a category set.
 - Requires bearer token auth.
 
 ### `GET /tags`
 
-Returns the distinct set of tag values unnested from all annotation rows,
+Returns the distinct set of tag values unnested from all allocation rows,
 sorted alphabetically (case-insensitive).
 
 **Response** (HTTP 200):
@@ -474,7 +513,7 @@ sorted alphabetically (case-insensitive).
 {"tags": ["discretionary", "needs-athena-review", "recurring", "subscription"]}
 ```
 
-- Empty array when no annotations have tags set.
+- Empty array when no allocations have tags set.
 - Requires bearer token auth.
 
 ### `GET /accounts`
@@ -547,8 +586,8 @@ supplied either as explicit ISO dates or as a named range shorthand.
 | `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
 | `account_id` | string | — | Restrict to a single Plaid account (use `GET /accounts` to discover IDs). |
-| `category` | string | — | Restrict to one annotation category (case-insensitive; use `GET /categories` for vocabulary). |
-| `tag` | string | — | Restrict to one annotation tag (case-insensitive, singular; use `GET /tags` for vocabulary). |
+| `category` | string | — | Restrict to one allocation category (case-insensitive; use `GET /categories` for vocabulary). |
+| `tag` | string | — | Restrict to one allocation tag (case-insensitive, singular; use `GET /tags` for vocabulary). |
 | `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
 
@@ -598,8 +637,8 @@ month with no qualifying transactions.
 | `owner` | string | — | Restrict to accounts tagged with this owner. |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics. |
 | `account_id` | string | — | Restrict to a single Plaid account. |
-| `category` | string | — | Restrict to one annotation category (case-insensitive). |
-| `tag` | string | — | Restrict to one annotation tag (case-insensitive, singular). |
+| `category` | string | — | Restrict to one allocation category (case-insensitive). |
+| `tag` | string | — | Restrict to one allocation tag (case-insensitive, singular). |
 | `include_pending` | bool | `false` | Include pending transactions when true. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
 
@@ -624,7 +663,7 @@ point-in-time `GET /spend` call over the same window and filters.
 
 ### `GET /transactions/{transaction_id}`
 
-Returns full detail for one transaction, including a merged annotation block.
+Returns full detail for one transaction, including an allocation block.
 `transaction_id` in the path is the `plaid_transaction_id` string.
 
 Returns HTTP 404 if not found.
@@ -642,7 +681,9 @@ Returns HTTP 404 if not found.
   "pending": false,
   "date": "2024-01-15",
   "raw_json": "{...}",
-  "annotation": {
+  "allocation": {
+    "id": 1,
+    "amount": 12.34,
     "category": "food",
     "note": "Morning coffee",
     "tags": ["discretionary", "recurring"],
@@ -651,7 +692,7 @@ Returns HTTP 404 if not found.
 }
 ```
 
-- `annotation` is `null` if no annotation exists for this transaction.
+- `allocation` is always present (never null); `category`, `tags`, and `note` within it may be null for uncategorized transactions.
 - `tags` in the response is a parsed JSON list (not the raw text stored in
   SQLite); if stored value is `null`, returns `null` for tags.
 - `raw_json` is the raw Plaid API payload stored at sync time; may be `null`
@@ -680,7 +721,7 @@ the annotation row. Omitted fields are stored as `null`.
   Agents cannot annotate phantom transactions.
 - Returns HTTP 200 with the full transaction record (same shape as
   `GET /transactions/{transaction_id}`) on successful create or update.
-  The `annotation` block in the response always reflects the values just
+  The `allocation` block in the response always reflects the values just
   written — it is never `null` in a successful PUT response.
 - `created_at` is preserved on updates; `updated_at` is refreshed.
 - No follow-up GET is needed to confirm the write.

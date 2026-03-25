@@ -288,51 +288,35 @@ decomposed into a proper FastAPI router structure:
 - Pure structural refactor — zero API behaviour change, zero schema change.
 - Full quality gate passes with identical test counts (458 tests).
 
+### M20 — Allocation Model for Multi-Purpose Transactions (Sprint 22)
+
+Sprint 22 is complete. The `allocations` table is now the budgeting layer:
+
+- **`allocations` table** — `id`, `plaid_transaction_id`, `amount`, `category`,
+  `tags`, `note`, `created_at`, `updated_at`. No UNIQUE constraint on
+  `plaid_transaction_id` (M21 will add multi-allocation support).
+- **`upsert_transaction()` seeding** — every new transaction automatically gets a
+  blank allocation row (`amount = transaction.amount`, semantic fields null).
+  A startup migration backfills allocations for any transaction that lacks one.
+- **Double-write** — `PUT /annotations/{id}` writes to both `annotations` and
+  `allocations`. The `annotations` table is preserved for backward compatibility
+  and decommissioned in M23.
+- **Response shape** — all transaction endpoints (`GET /transactions`,
+  `GET /transactions/{id}`, `PUT /annotations/{id}`) now return an `allocation`
+  key (never null) instead of `annotation`. The `allocation` object contains
+  `id`, `amount`, `category`, `tags`, `note`, and `updated_at`.
+- **Spend uses allocation amounts** — `GET /spend` and `GET /spend/trends` sum
+  `allocations.amount`. Numerically identical to transaction amounts for M20;
+  future-proofs multi-allocation math.
+- **Vocabulary from allocations** — `GET /categories` and `GET /tags` draw from
+  `allocations` (not `annotations`).
+- **Skill bundles updated** — both `skills/hestia-ledger/` and
+  `skills/athena-ledger/` reflect the allocation model; no skill file references
+  `annotation.category`, `annotation.tags`, or `annotation.note`.
+
 ---
 
 ## Upcoming Milestones
-
-### M20 — Allocation Model for Multi-Purpose Transactions
-
-**Goal:** support one Plaid transaction being budgeted across multiple categories without mutating imported transaction data.
-
-#### Problem
-
-Plaid transactions represent settlement events, not necessarily a single budgeting intent. Merchants like Amazon commonly bundle unrelated purchases into one bank transaction, which breaks one-transaction / one-category assumptions.
-
-#### Design
-
-- Keep `transactions` as immutable imported Plaid data.
-- Introduce `allocations` as the budgeting layer.
-- Each Plaid transaction will map to one or more allocation rows.
-- A normal transaction is represented by exactly one allocation.
-- A mixed-purpose transaction (for example, an Amazon order containing household, toiletries, and kids items) can have multiple allocations.
-- `annotations` remains transaction-level metadata only and no longer stores category/tag information.
-
-#### Invariants
-
-- Every categorized transaction must be represented through `allocations`.
-- Sum of allocation amounts for a transaction must equal the transaction amount.
-- Plaid-synced transaction rows remain the source of truth for imported banking data.
-- Allocation logic is independent from duplicate-account canonicalization.
-
-#### Deliverables
-
-- Add `allocations` table keyed to `plaid_transaction_id`.
-- Migrate existing categorized transactions so each one gets a single allocation row.
-- Remove category/tag ownership from `annotations`.
-- Update transaction detail flows to read/write allocations.
-- Update reporting, budgeting, and category summaries to read from allocations only.
-- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles to reflect the new `allocations`-based categorization model: remove references to category/tag fields on `annotations`, document the `allocations` table and any new API endpoints, and update query playbooks accordingly.
-
-#### Acceptance criteria
-
-- Existing categorized transactions continue to work after migration through their single allocation row.
-- A single Plaid transaction can be decomposed into multiple category allocations.
-- Reports and rollups use allocations as the sole source of budgeting truth.
-- Plaid import and sync logic does not change its ownership boundaries.
-
----
 
 ### M21 — Manual Allocation Editing
 
