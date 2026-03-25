@@ -48,6 +48,18 @@ CREATE TABLE IF NOT EXISTS annotations (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS allocations (
+    id           INTEGER PRIMARY KEY,
+    plaid_transaction_id TEXT NOT NULL
+        REFERENCES transactions(plaid_transaction_id),
+    amount       NUMERIC NOT NULL,
+    category     TEXT,
+    tags         TEXT,
+    note         TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account_labels (
     id INTEGER PRIMARY KEY,
     plaid_account_id TEXT NOT NULL UNIQUE,

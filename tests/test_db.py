@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from claw_plaid_ledger.db import (
+    AllocationRow,
     AnnotationRow,
     LedgerErrorQuery,
     LedgerErrorRow,
@@ -17,6 +18,7 @@ from claw_plaid_ledger.db import (
     TransactionQuery,
     apply_account_precedence,
     get_all_sync_state,
+    get_allocations_for_transaction,
     get_annotation,
     get_sync_cursor,
     get_transaction,
@@ -28,6 +30,7 @@ from claw_plaid_ledger.db import (
     query_transactions,
     upsert_account,
     upsert_annotation,
+    upsert_single_allocation,
     upsert_sync_state,
     upsert_transaction,
 )
@@ -1363,3 +1366,334 @@ class TestLedgerErrors:
             rows, total = query_ledger_errors(conn, LedgerErrorQuery())
         assert rows == []
         assert total == 0
+
+
+# ---------------------------------------------------------------------------
+# AllocationRow and allocation DB helpers
+# ---------------------------------------------------------------------------
+
+
+class TestAllocationRow:
+    """AllocationRow construction and default values."""
+
+    def test_required_fields(self) -> None:
+        """AllocationRow can be constructed with only required fields."""
+        row = AllocationRow(
+            plaid_transaction_id="tx-1",
+            amount=12.34,
+            created_at="2024-01-01T00:00:00+00:00",
+            updated_at="2024-01-01T00:00:00+00:00",
+        )
+        assert row.plaid_transaction_id == "tx-1"
+        assert row.amount == pytest.approx(12.34)
+        assert row.id is None
+        assert row.category is None
+        assert row.tags is None
+        assert row.note is None
+
+    def test_optional_fields(self) -> None:
+        """AllocationRow stores all optional fields when provided."""
+        expected_id = 5
+        row = AllocationRow(
+            id=expected_id,
+            plaid_transaction_id="tx-2",
+            amount=50.0,
+            category="groceries",
+            tags='["food"]',
+            note="weekly shop",
+            created_at="2024-02-01T00:00:00+00:00",
+            updated_at="2024-02-01T00:00:00+00:00",
+        )
+        assert row.id == expected_id
+        assert row.category == "groceries"
+        assert row.tags == '["food"]'
+        assert row.note == "weekly shop"
+
+
+class TestUpsertSingleAllocation:
+    """upsert_single_allocation insert and update paths."""
+
+    def _db(self, tmp_path: Path) -> Path:
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+        return db_path
+
+    def _seed_transaction(
+        self, connection: sqlite3.Connection, tx_id: str = "tx-1"
+    ) -> None:
+        connection.execute(
+            TRANSACTION_INSERT_SQL,
+            (
+                tx_id,
+                "acct_1",
+                25.0,
+                "Coffee",
+                0,
+                "2024-01-01T00:00:00+00:00",
+                "2024-01-01T00:00:00+00:00",
+            ),
+        )
+
+    def test_insert_path_returns_id(self, tmp_path: Path) -> None:
+        """upsert_single_allocation returns a positive integer id on insert."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            row = AllocationRow(
+                plaid_transaction_id="tx-1",
+                amount=25.0,
+                created_at="2024-01-01T00:00:00+00:00",
+                updated_at="2024-01-01T00:00:00+00:00",
+            )
+            alloc_id = upsert_single_allocation(conn, row)
+        assert isinstance(alloc_id, int)
+        assert alloc_id > 0
+
+    def test_insert_path_stores_fields(self, tmp_path: Path) -> None:
+        """Inserted allocation fields are persisted correctly."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            row = AllocationRow(
+                plaid_transaction_id="tx-1",
+                amount=25.0,
+                category="dining",
+                tags='["food", "discretionary"]',
+                note="lunch",
+                created_at="2024-01-01T00:00:00+00:00",
+                updated_at="2024-01-01T00:00:00+00:00",
+            )
+            upsert_single_allocation(conn, row)
+            allocs = get_allocations_for_transaction(conn, "tx-1")
+
+        assert len(allocs) == 1
+        assert allocs[0].amount == pytest.approx(25.0)
+        assert allocs[0].category == "dining"
+        assert allocs[0].tags == '["food", "discretionary"]'
+        assert allocs[0].note == "lunch"
+
+    def test_update_path_updates_existing_row(self, tmp_path: Path) -> None:
+        """upsert_single_allocation updates the existing row on second call."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            first = AllocationRow(
+                plaid_transaction_id="tx-1",
+                amount=25.0,
+                created_at="2024-01-01T00:00:00+00:00",
+                updated_at="2024-01-01T00:00:00+00:00",
+            )
+            first_id = upsert_single_allocation(conn, first)
+
+            second = AllocationRow(
+                plaid_transaction_id="tx-1",
+                amount=25.0,
+                category="groceries",
+                note="updated note",
+                updated_at="2024-01-02T00:00:00+00:00",
+                created_at="2024-01-01T00:00:00+00:00",
+            )
+            second_id = upsert_single_allocation(conn, second)
+
+            allocs = get_allocations_for_transaction(conn, "tx-1")
+
+        assert first_id == second_id
+        assert len(allocs) == 1
+        assert allocs[0].category == "groceries"
+        assert allocs[0].note == "updated note"
+        assert allocs[0].updated_at == "2024-01-02T00:00:00+00:00"
+
+
+class TestGetAllocationsForTransaction:
+    """get_allocations_for_transaction return values."""
+
+    def _db(self, tmp_path: Path) -> Path:
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+        return db_path
+
+    def _seed_transaction(
+        self, connection: sqlite3.Connection, tx_id: str = "tx-1"
+    ) -> None:
+        connection.execute(
+            TRANSACTION_INSERT_SQL,
+            (
+                tx_id,
+                "acct_1",
+                10.0,
+                "Test",
+                0,
+                "2024-01-01T00:00:00+00:00",
+                "2024-01-01T00:00:00+00:00",
+            ),
+        )
+
+    def test_empty_when_no_allocations(self, tmp_path: Path) -> None:
+        """Returns an empty list when no allocations exist."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            result = get_allocations_for_transaction(conn, "tx-1")
+        assert result == []
+
+    def test_returns_one_row(self, tmp_path: Path) -> None:
+        """Returns the single allocation row when one exists."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            row = AllocationRow(
+                plaid_transaction_id="tx-1",
+                amount=10.0,
+                category="transport",
+                created_at="2024-01-01T00:00:00+00:00",
+                updated_at="2024-01-01T00:00:00+00:00",
+            )
+            upsert_single_allocation(conn, row)
+            result = get_allocations_for_transaction(conn, "tx-1")
+
+        assert len(result) == 1
+        assert result[0].plaid_transaction_id == "tx-1"
+        assert result[0].category == "transport"
+        assert result[0].id is not None
+
+    def test_ordered_by_id_asc(self, tmp_path: Path) -> None:
+        """Multiple rows are returned ordered by id ascending."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            # Insert two rows directly to bypass the 1:1 upsert logic.
+            conn.execute(
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    "tx-1",
+                    5.0,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.execute(
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    "tx-1",
+                    5.0,
+                    "2024-01-02T00:00:00+00:00",
+                    "2024-01-02T00:00:00+00:00",
+                ),
+            )
+            result = get_allocations_for_transaction(conn, "tx-1")
+
+        first, second = result  # unpacking asserts exactly two rows
+        assert first.id is not None
+        assert second.id is not None
+        assert first.id < second.id
+
+
+class TestUpsertTransactionSeedsAllocation:
+    """upsert_transaction creates a blank allocation for new transactions."""
+
+    def _db(self, tmp_path: Path) -> Path:
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+        return db_path
+
+    def test_creates_allocation_on_insert(self, tmp_path: Path) -> None:
+        """New transaction gets a blank allocation row with matching amount."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            upsert_transaction(
+                conn,
+                _transaction(tx_id="tx-new", amount=42.0),
+                now_iso="2024-01-01T00:00:00+00:00",
+            )
+            allocs = get_allocations_for_transaction(conn, "tx-new")
+
+        assert len(allocs) == 1
+        assert allocs[0].amount == pytest.approx(42.0)
+        assert allocs[0].category is None
+        assert allocs[0].tags is None
+        assert allocs[0].note is None
+
+    def test_does_not_duplicate_allocation_on_update(
+        self, tmp_path: Path
+    ) -> None:
+        """Upserting an existing transaction does not add a second row."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            upsert_transaction(
+                conn,
+                _transaction(tx_id="tx-dup", amount=10.0),
+                now_iso="2024-01-01T00:00:00+00:00",
+            )
+            upsert_transaction(
+                conn,
+                _transaction(tx_id="tx-dup", amount=10.0),
+                now_iso="2024-01-02T00:00:00+00:00",
+            )
+            allocs = get_allocations_for_transaction(conn, "tx-dup")
+
+        assert len(allocs) == 1
+
+
+class TestStartupBackfill:
+    """Startup backfill populates allocations for existing transactions."""
+
+    def test_backfill_is_idempotent(self, tmp_path: Path) -> None:
+        """Running initialize_database twice keeps allocation count stable."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        # Seed a transaction directly (bypassing upsert_transaction so no
+        # allocation is created by that path).
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO accounts "
+                "(plaid_account_id, name, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    "acct_bf",
+                    "Backfill Acct",
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.execute(
+                TRANSACTION_INSERT_SQL,
+                (
+                    "tx-bf",
+                    "acct_bf",
+                    99.0,
+                    "Backfill",
+                    0,
+                    "2024-01-01T00:00:00+00:00",
+                    "2024-01-01T00:00:00+00:00",
+                ),
+            )
+            # Remove the allocation created by initialize_database's backfill
+            # so we can test the second call idempotency cleanly.
+            conn.execute(
+                "DELETE FROM allocations WHERE plaid_transaction_id = 'tx-bf'"
+            )
+
+        # First backfill: should create the missing allocation.
+        initialize_database(db_path)
+        with sqlite3.connect(db_path) as conn:
+            count_after_first = conn.execute(
+                "SELECT COUNT(*) FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-bf'"
+            ).fetchone()[0]
+
+        assert count_after_first == 1
+
+        # Second backfill: count must not grow.
+        initialize_database(db_path)
+        with sqlite3.connect(db_path) as conn:
+            count_after_second = conn.execute(
+                "SELECT COUNT(*) FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-bf'"
+            ).fetchone()[0]
+
+        assert count_after_second == 1
