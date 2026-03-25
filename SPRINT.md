@@ -214,7 +214,7 @@ now contains `allocation` instead of `annotation`.
 
 ---
 
-## Task 3: GET /transactions list joins allocations
+## Task 3: GET /transactions list joins allocations ✅ DONE
 
 ### What
 

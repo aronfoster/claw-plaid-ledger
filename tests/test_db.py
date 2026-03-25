@@ -602,7 +602,7 @@ def test_query_transactions_filters_and_paginates(tmp_path: Path) -> None:
         "merchant_name": "Starbucks",
         "pending": False,
         "date": "2024-01-15",
-        "annotation": None,
+        "allocation": None,
     }
 
     expected_total = 3
