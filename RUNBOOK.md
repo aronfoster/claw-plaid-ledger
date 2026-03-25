@@ -29,6 +29,7 @@ durably on a home server.
 - Account labels and enriched spend queries (Section 17)
 - Month-over-month spend trends via `GET /spend/trends` (Section 18)
 - Ledger error log monitoring via `GET /errors` (Section 19)
+- Allocation model and budgeting layer (Section 20)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -2005,14 +2006,14 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123" | jq .
 ```
 
-**By annotation category (case-insensitive):**
+**By allocation category (case-insensitive):**
 
 ```bash
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend?range=last_month&category=software" | jq .
 ```
 
-**By annotation tag (case-insensitive, singular):**
+**By allocation tag (case-insensitive, singular):**
 
 ```bash
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
@@ -2106,14 +2107,14 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend/trends?months=6&account_id=acc_abc123" | jq .
 ```
 
-**By annotation category (case-insensitive):**
+**By allocation category (case-insensitive):**
 
 ```bash
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend/trends?months=6&category=software" | jq .
 ```
 
-**By annotation tag (case-insensitive, singular):**
+**By allocation tag (case-insensitive, singular):**
 
 ```bash
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
@@ -2260,3 +2261,90 @@ See also Section 9.5 for the full request-tracing walkthrough.
   background sync, scheduled sync loop, and API request handlers.
 - CLI sync commands (`ledger sync`, `ledger sync --all`) are intentionally out
   of scope — they are interactive and print to the terminal.
+
+---
+
+## 20. Allocation model and budgeting layer
+
+As of Sprint 22 (M20), every transaction carries an `allocation` object in all
+API responses. Allocations are the sole budgeting layer: spend totals,
+category/tag vocabulary, and note search all read from `allocations`, not
+`annotations`.
+
+### How allocations are seeded
+
+Every transaction automatically receives a blank allocation row at two points:
+
+1. **On sync** — `upsert_transaction()` inserts a blank allocation
+   (`amount = transaction.amount`, `category`/`tags`/`note` null) for any new
+   transaction that does not already have one.
+2. **On startup** — `initialize_database()` backfills an allocation for any
+   transaction that has no allocation row yet. This handles transactions synced
+   before M20 and is idempotent.
+
+### Reading allocations
+
+All transaction responses include an `allocation` key (never null):
+
+```json
+{
+  "id": "txn_abc123",
+  "amount": 12.34,
+  ...
+  "allocation": {
+    "id": 1,
+    "amount": 12.34,
+    "category": "groceries",
+    "tags": ["household"],
+    "note": "weekly shopping",
+    "updated_at": "2026-03-25T10:00:00+00:00"
+  }
+}
+```
+
+`category`, `tags`, and `note` within `allocation` may be null for
+uncategorized transactions. The `allocation` object itself is always present.
+
+### Writing allocations
+
+Use `PUT /annotations/{transaction_id}` — the request body is unchanged:
+
+```bash
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"category": "groceries", "tags": ["household"], "note": "weekly shopping"}' \
+  http://127.0.0.1:8000/annotations/txn_abc123 | jq .
+```
+
+The response contains an `allocation` key (not `annotation`) reflecting the
+values just written.
+
+`PUT /annotations/{id}` double-writes to both `annotations` and `allocations`
+during M20–M22. The `annotations` table is decommissioned in M23.
+
+### Filtering spend by allocation category or tag
+
+`GET /spend` and `GET /spend/trends` filter against allocation fields:
+
+```bash
+# Spend for a specific allocation category this month
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&category=groceries" | jq .
+
+# Trends filtered to a single allocation tag
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&tag=recurring" | jq .
+```
+
+### Notes
+
+- M20 is a 1:1 allocation model — one transaction maps to one allocation.
+  Multi-allocation editing (splitting one transaction across categories) is
+  deferred to M21.
+- The `allocations` table has no UNIQUE constraint on `plaid_transaction_id`
+  by design, to allow M21 to add multiple rows per transaction without a
+  schema change.
+- `GET /categories` and `GET /tags` return vocabulary from `allocations`, not
+  `annotations`. The vocabulary is identical for any transaction annotated via
+  `PUT /annotations/{id}` because the double-write keeps both tables in sync.
