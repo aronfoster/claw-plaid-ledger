@@ -84,25 +84,31 @@ class TestListTransactionsEndpoint:
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
 
+        expected_limit = 10  # matches ?limit=10 in the request above
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json() == {
-            "transactions": [
-                {
-                    "id": "tx_1",
-                    "account_id": "acct_1",
-                    "amount": 12.34,
-                    "iso_currency_code": "USD",
-                    "name": "Starbucks",
-                    "merchant_name": "Starbucks",
-                    "pending": False,
-                    "date": "2024-01-15",
-                    "annotation": None,
-                }
-            ],
-            "total": 1,
-            "limit": 10,
-            "offset": 0,
-        }
+        body = response.json()
+        assert body["total"] == 1
+        assert body["limit"] == expected_limit
+        assert body["offset"] == 0
+        assert len(body["transactions"]) == 1
+        tx = body["transactions"][0]
+        assert tx["id"] == "tx_1"
+        assert tx["account_id"] == "acct_1"
+        assert tx["amount"] == _TX_1_AMOUNT
+        assert tx["iso_currency_code"] == "USD"
+        assert tx["name"] == "Starbucks"
+        assert tx["merchant_name"] == "Starbucks"
+        assert tx["pending"] is False
+        assert tx["date"] == "2024-01-15"
+        assert "annotation" not in tx
+        alloc = tx["allocation"]
+        assert alloc is not None
+        assert alloc["amount"] == _TX_1_AMOUNT
+        assert alloc["category"] is None
+        assert alloc["note"] is None
+        assert alloc["tags"] is None
+        assert "id" in alloc
+        assert "updated_at" in alloc
 
         page_response = client.get(
             "/transactions",
@@ -538,12 +544,12 @@ def _seed_annotation_list_data(db_path: pathlib.Path) -> None:
 
 
 class TestListTransactionsAnnotations:
-    """Tests for annotation data in GET /transactions results (BUG-013)."""
+    """Tests for allocation data in GET /transactions results (BUG-013)."""
 
-    def test_unannotated_transaction_has_null_annotation(
+    def test_unannotated_transaction_has_blank_allocation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Unannotated transactions return annotation: null in list results."""
+        """Unannotated transactions get a blank allocation object."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -558,12 +564,17 @@ class TestListTransactionsAnnotations:
         assert response.status_code == http.HTTPStatus.OK
         tx = response.json()["transactions"][0]
         assert tx["id"] == "tx_bare"
-        assert tx["annotation"] is None
+        assert "annotation" not in tx
+        alloc = tx["allocation"]
+        assert alloc is not None
+        assert alloc["category"] is None
+        assert alloc["note"] is None
+        assert alloc["tags"] is None
 
-    def test_annotated_transaction_includes_annotation_fields(
+    def test_annotated_transaction_includes_allocation_fields(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotated transactions include the full annotation object."""
+        """Categorised transactions include the full allocation object."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -578,17 +589,18 @@ class TestListTransactionsAnnotations:
         assert response.status_code == http.HTTPStatus.OK
         tx = response.json()["transactions"][0]
         assert tx["id"] == "tx_ann"
-        assert tx["annotation"] == {
-            "category": "coffee",
-            "note": "morning latte",
-            "tags": ["coffee", "recurring"],
-            "updated_at": "2024-06-01T10:00:00+00:00",
-        }
+        assert "annotation" not in tx
+        alloc = tx["allocation"]
+        assert alloc is not None
+        assert alloc["category"] == "coffee"
+        assert alloc["note"] == "morning latte"
+        assert alloc["tags"] == ["coffee", "recurring"]
+        assert alloc["updated_at"] == "2024-06-01T10:00:00+00:00"
 
-    def test_list_annotation_shape_matches_detail_endpoint(
+    def test_list_allocation_shape_matches_detail_endpoint(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """List has annotation key; detail has allocation key; same data."""
+        """List and detail both return allocation key with consistent data."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -606,22 +618,22 @@ class TestListTransactionsAnnotations:
 
         assert list_resp.status_code == http.HTTPStatus.OK
         assert detail_resp.status_code == http.HTTPStatus.OK
-        # List still returns annotation key (updated to allocation in Task 3)
-        list_annotation = list_resp.json()["transactions"][0]["annotation"]
-        assert list_annotation["category"] == "coffee"
-        assert list_annotation["note"] == "morning latte"
-        assert list_annotation["tags"] == ["coffee", "recurring"]
-        # Detail returns allocation key since Task 2
+        # Both list and detail return allocation key since Task 3
+        list_alloc = list_resp.json()["transactions"][0]["allocation"]
+        assert list_alloc is not None
+        assert list_alloc["category"] == "coffee"
+        assert list_alloc["note"] == "morning latte"
+        assert list_alloc["tags"] == ["coffee", "recurring"]
         detail_allocation = detail_resp.json()["allocation"]
         assert detail_allocation is not None
         assert detail_allocation["category"] == "coffee"
         assert detail_allocation["note"] == "morning latte"
         assert detail_allocation["tags"] == ["coffee", "recurring"]
 
-    def test_mixed_page_has_annotation_and_null(
+    def test_mixed_page_both_rows_have_allocation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Mixed page sets annotation or null correctly per row."""
+        """Both annotated and bare transactions have an allocation object."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -634,8 +646,55 @@ class TestListTransactionsAnnotations:
 
         assert response.status_code == http.HTTPStatus.OK
         txs = {t["id"]: t for t in response.json()["transactions"]}
-        assert txs["tx_ann"]["annotation"] is not None
-        assert txs["tx_bare"]["annotation"] is None
+        # tx_ann has semantic allocation data
+        assert txs["tx_ann"]["allocation"] is not None
+        assert txs["tx_ann"]["allocation"]["category"] == "coffee"
+        # tx_bare has a blank allocation (null semantics, not null object)
+        assert txs["tx_bare"]["allocation"] is not None
+        assert txs["tx_bare"]["allocation"]["category"] is None
+
+    def test_list_rows_have_allocation_not_annotation_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """List rows expose 'allocation' key and no 'annotation' key."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        for tx in response.json()["transactions"]:
+            assert "allocation" in tx
+            assert "annotation" not in tx
+
+    def test_tag_filter_uses_allocation_tags(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Tag filter matches allocation.tags, not annotation.tags."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_annotation_list_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params={"tags": "coffee"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert body["transactions"][0]["id"] == "tx_ann"
+        assert body["transactions"][0]["allocation"]["tags"] == [
+            "coffee",
+            "recurring",
+        ]
 
 
 class TestGetTransactionDetailEndpoint:
@@ -918,6 +977,42 @@ def _seed_tag_notes_data(db_path: pathlib.Path) -> None:
             ),
         )
         # tx_t3 has no annotation
+        # Seed allocations mirroring the annotation data above so that tag
+        # and search_notes filters (which now query alloc.tags / alloc.note)
+        # work correctly.
+        connection.executemany(
+            (
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, note, tags, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_t1",
+                    5.0,
+                    "morning coffee habit",
+                    '["coffee", "recurring"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t2",
+                    12.0,
+                    "nothing special",
+                    '["groceries"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t3",
+                    20.0,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+            ],
+        )
 
 
 class TestListTransactionsTagsAndSearchNotes:

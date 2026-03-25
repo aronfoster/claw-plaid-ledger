@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from claw_plaid_ledger.items_config import ItemConfig
@@ -477,33 +477,38 @@ def _apply_tag_filters(
     """
     Append an EXISTS clause and param for each required tag (AND semantics).
 
-    An unannotated transaction (ann.tags IS NULL) never matches because
+    A transaction with no allocation or null alloc.tags never matches because
     json_each(NULL) returns zero rows.
     """
     for tag in tags:
         where_parts.append(
-            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+            "EXISTS (SELECT 1 FROM json_each(alloc.tags) WHERE value = ?)"
         )
         params.append(tag)
 
 
-def _annotation_from_joined_row(
-    ann_id: object,
-    category: object,
-    note: object,
-    tags_json: object,
-    updated_at: object,
+def _allocation_from_joined_row(
+    cols: tuple[Any, ...],
 ) -> dict[str, object] | None:
-    """Build an annotation payload from LEFT-JOIN columns, or return None."""
-    if ann_id is None:
+    """
+    Build an allocation payload from LEFT-JOIN columns, or return None.
+
+    *cols* must contain six elements in this order:
+    alloc.id, alloc.amount, alloc.category, alloc.note,
+    alloc.tags (JSON string), alloc.updated_at.
+    """
+    alloc_id, amount, category, note, tags_json, updated_at = cols
+    if alloc_id is None:
         return None
-    ann_tags: list[str] | None = None
+    alloc_tags: list[str] | None = None
     if tags_json is not None:
-        ann_tags = [str(t) for t in json.loads(str(tags_json))]
+        alloc_tags = [str(t) for t in json.loads(str(tags_json))]
     return {
+        "id": int(alloc_id),
+        "amount": float(amount) if amount is not None else None,
         "category": str(category) if category is not None else None,
         "note": str(note) if note is not None else None,
-        "tags": ann_tags,
+        "tags": alloc_tags,
         "updated_at": str(updated_at) if updated_at is not None else None,
     }
 
@@ -520,11 +525,11 @@ def query_transactions(
         if query.canonical_only
         else ""
     )
-    # Always LEFT JOIN annotations so transactions without annotations are
+    # Always LEFT JOIN allocations so transactions without allocations are
     # still returned when no tag filter or search_notes is active.
-    annotations_join = (
-        "LEFT JOIN annotations ann "
-        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
+    allocations_join = (
+        "LEFT JOIN allocations alloc "
+        "ON alloc.plaid_transaction_id = t.plaid_transaction_id "
     )
 
     where_parts: list[str] = []
@@ -558,7 +563,8 @@ def query_transactions(
         keyword_like = f"%{query.keyword}%"
         if query.search_notes:
             where_parts.append(
-                "(t.name LIKE ? OR t.merchant_name LIKE ? OR ann.note LIKE ?)"
+                "(t.name LIKE ? OR t.merchant_name LIKE ?"
+                " OR alloc.note LIKE ?)"
             )
             params.extend([keyword_like, keyword_like, keyword_like])
         else:
@@ -571,7 +577,7 @@ def query_transactions(
     _apply_tag_filters(query.tags, where_parts, params)
 
     where_sql = " AND ".join(where_parts) if where_parts else "1=1"
-    from_clause = f"FROM transactions t {accounts_join}{annotations_join}"
+    from_clause = f"FROM transactions t {accounts_join}{allocations_join}"
 
     total_row = connection.execute(
         f"SELECT COUNT(*) {from_clause}WHERE {where_sql}",
@@ -584,8 +590,8 @@ def query_transactions(
             f"SELECT t.plaid_transaction_id, t.plaid_account_id, t.amount, "
             "t.iso_currency_code, t.name, t.merchant_name, t.pending, "
             f"{effective_date_sql} AS effective_date, "
-            "ann.category, ann.note, ann.tags, ann.updated_at, "
-            "ann.plaid_transaction_id AS ann_id "
+            "alloc.id, alloc.amount, alloc.category, alloc.note, "
+            "alloc.tags, alloc.updated_at "
             f"{from_clause}"
             f"WHERE {where_sql} "
             "ORDER BY effective_date DESC, t.plaid_transaction_id ASC "
@@ -604,9 +610,7 @@ def query_transactions(
             "merchant_name": str(row[5]) if row[5] is not None else None,
             "pending": bool(row[6]),
             "date": str(row[7]) if row[7] is not None else None,
-            "annotation": _annotation_from_joined_row(
-                row[12], row[8], row[9], row[10], row[11]
-            ),
+            "allocation": _allocation_from_joined_row(row[8:14]),
         }
         for row in rows
     ]
