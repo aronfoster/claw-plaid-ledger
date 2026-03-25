@@ -31,7 +31,7 @@ def _insert_one_annotation_row(
     tags: str | None,
     note: str | None = None,
 ) -> None:
-    """Insert a single account, transaction, and annotation row for tests."""
+    """Insert a single account, transaction, and allocation row for tests."""
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             "INSERT OR IGNORE INTO accounts "
@@ -47,10 +47,10 @@ def _insert_one_annotation_row(
             " '2024-01-01', NULL, '2024-01-01', '2024-01-01')"
         )
         connection.execute(
-            "INSERT INTO annotations "
-            "(plaid_transaction_id, category, note, tags,"
+            "INSERT INTO allocations "
+            "(plaid_transaction_id, amount, category, note, tags,"
             " created_at, updated_at)"
-            " VALUES ('tx_1', ?, ?, ?, '2024-01-01', '2024-01-01')",
+            " VALUES ('tx_1', 5.0, ?, ?, ?, '2024-01-01', '2024-01-01')",
             (category, note, tags),
         )
 
@@ -144,14 +144,15 @@ def _seed_annotations(db_path: pathlib.Path) -> None:
         )
         connection.executemany(
             (
-                "INSERT INTO annotations ("
-                "plaid_transaction_id, category, note, tags, "
+                "INSERT INTO allocations ("
+                "plaid_transaction_id, amount, category, note, tags, "
                 "created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?)"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)"
             ),
             [
                 (
                     "tx_1",
+                    10.0,
                     "food",
                     "morning coffee",
                     json.dumps(["discretionary", "recurring"]),
@@ -160,6 +161,7 @@ def _seed_annotations(db_path: pathlib.Path) -> None:
                 ),
                 (
                     "tx_2",
+                    20.0,
                     "Food",  # duplicate with different case
                     None,
                     json.dumps(["needs-review", "recurring"]),
@@ -168,6 +170,7 @@ def _seed_annotations(db_path: pathlib.Path) -> None:
                 ),
                 (
                     "tx_3",
+                    30.0,
                     "software",
                     None,
                     json.dumps(["subscription"]),
@@ -176,6 +179,7 @@ def _seed_annotations(db_path: pathlib.Path) -> None:
                 ),
                 (
                     "tx_4",
+                    40.0,
                     "transport",
                     None,
                     None,  # no tags

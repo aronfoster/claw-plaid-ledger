@@ -679,9 +679,9 @@ def query_spend(
         if need_accounts_join
         else ""
     )
-    annotations_join = (
-        "LEFT JOIN annotations ann "
-        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
+    allocations_join = (
+        "LEFT JOIN allocations alloc "
+        "ON alloc.plaid_transaction_id = t.plaid_transaction_id "
     )
 
     where_parts: list[str] = [
@@ -702,7 +702,7 @@ def query_spend(
 
     for tag in query.tags:
         where_parts.append(
-            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+            "EXISTS (SELECT 1 FROM json_each(alloc.tags) WHERE value = ?)"
         )
         params.append(tag)
 
@@ -711,19 +711,19 @@ def query_spend(
         params.append(query.account_id)
 
     if query.category is not None:
-        where_parts.append("LOWER(ann.category) = LOWER(?)")
+        where_parts.append("LOWER(alloc.category) = LOWER(?)")
         params.append(query.category)
 
     if query.tag is not None:
         where_parts.append(
             "EXISTS ("
-            "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
+            "SELECT 1 FROM json_each(alloc.tags) WHERE LOWER(value) = LOWER(?)"
             ")"
         )
         params.append(query.tag)
 
     where_sql = " AND ".join(where_parts)
-    # S608: accounts_join, annotations_join, and where_sql are built from
+    # S608: accounts_join, allocations_join, and where_sql are built from
     # hard-coded SQL strings only.  Every user-supplied value (dates, owner,
     # tag strings) is bound via the params list as a `?` placeholder, so
     # there is no injection risk.  Ruff cannot prove the fragments are safe
@@ -731,10 +731,10 @@ def query_spend(
     # The same rationale applies to query_spend_trends() below.
     row = connection.execute(
         (
-            "SELECT COALESCE(SUM(t.amount), 0.0), COUNT(*) "  # noqa: S608
+            "SELECT COALESCE(SUM(alloc.amount), 0.0), COUNT(*) "  # noqa: S608
             "FROM transactions t "
             f"{accounts_join}"
-            f"{annotations_join}"
+            f"{allocations_join}"
             f"WHERE {where_sql}"
         ),
         params,
@@ -787,9 +787,9 @@ def query_spend_trends(
         if need_accounts_join
         else ""
     )
-    annotations_join = (
-        "LEFT JOIN annotations ann "
-        "ON ann.plaid_transaction_id = t.plaid_transaction_id "
+    allocations_join = (
+        "LEFT JOIN allocations alloc "
+        "ON alloc.plaid_transaction_id = t.plaid_transaction_id "
     )
 
     where_parts: list[str] = [
@@ -810,7 +810,7 @@ def query_spend_trends(
 
     for tag in query.tags:
         where_parts.append(
-            "EXISTS (SELECT 1 FROM json_each(ann.tags) WHERE value = ?)"
+            "EXISTS (SELECT 1 FROM json_each(alloc.tags) WHERE value = ?)"
         )
         params.append(tag)
 
@@ -819,13 +819,13 @@ def query_spend_trends(
         params.append(query.account_id)
 
     if query.category is not None:
-        where_parts.append("LOWER(ann.category) = LOWER(?)")
+        where_parts.append("LOWER(alloc.category) = LOWER(?)")
         params.append(query.category)
 
     if query.tag is not None:
         where_parts.append(
             "EXISTS ("
-            "SELECT 1 FROM json_each(ann.tags) WHERE LOWER(value) = LOWER(?)"
+            "SELECT 1 FROM json_each(alloc.tags) WHERE LOWER(value) = LOWER(?)"
             ")"
         )
         params.append(query.tag)
@@ -835,10 +835,10 @@ def query_spend_trends(
     rows = connection.execute(
         (
             f"SELECT {month_expr} AS month, "  # noqa: S608
-            "COALESCE(SUM(t.amount), 0.0), COUNT(*) "
+            "COALESCE(SUM(alloc.amount), 0.0), COUNT(*) "
             "FROM transactions t "
             f"{accounts_join}"
-            f"{annotations_join}"
+            f"{allocations_join}"
             f"WHERE {where_sql} "
             "GROUP BY month "
             "ORDER BY month ASC"
@@ -967,22 +967,21 @@ def upsert_account_label(
 def get_distinct_categories(connection: sqlite3.Connection) -> list[str]:
     """Return distinct non-null category values sorted alphabetically."""
     rows = connection.execute(
-        "SELECT DISTINCT category FROM annotations "
-        "WHERE category IS NOT NULL "
-        "ORDER BY category COLLATE NOCASE"
+        "SELECT DISTINCT category FROM allocations "
+        "WHERE category IS NOT NULL ORDER BY category COLLATE NOCASE"
     ).fetchall()
     return [str(row[0]) for row in rows]
 
 
 def get_distinct_tags(connection: sqlite3.Connection) -> list[str]:
     """
-    Return distinct tag values unnested from all annotation rows.
+    Return distinct tag values unnested from all allocation rows.
 
     Results are sorted alphabetically (case-insensitive).
     """
     rows = connection.execute(
         "SELECT DISTINCT j.value "
-        "FROM annotations a, json_each(a.tags) j "
+        "FROM allocations a, json_each(a.tags) j "
         "WHERE a.tags IS NOT NULL "
         "ORDER BY j.value COLLATE NOCASE"
     ).fetchall()

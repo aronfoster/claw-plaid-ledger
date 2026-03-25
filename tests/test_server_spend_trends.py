@@ -228,16 +228,80 @@ def _seed_trends_data(db_path: pathlib.Path) -> None:
         )
         connection.executemany(
             (
-                "INSERT INTO annotations (plaid_transaction_id, category, "
-                "note, tags, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO allocations (plaid_transaction_id, amount, "
+                "category, note, tags, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
             ),
             [
                 (
+                    "tx_t1",
+                    100.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t2",
+                    200.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t3",
+                    150.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
                     "tx_t4",
+                    80.0,
                     "Software",
                     None,
                     '["software","subscription"]',
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t5",
+                    300.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_t6",
+                    50.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_tp",
+                    75.0,
+                    None,
+                    None,
+                    None,
+                    "2025-01-01T00:00:00+00:00",
+                    "2025-01-01T00:00:00+00:00",
+                ),
+                (
+                    "tx_dup",
+                    999.0,
+                    None,
+                    None,
+                    None,
                     "2025-01-01T00:00:00+00:00",
                     "2025-01-01T00:00:00+00:00",
                 ),
