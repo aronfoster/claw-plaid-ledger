@@ -13,12 +13,14 @@ from pydantic import BaseModel, ConfigDict
 
 from claw_plaid_ledger.config import load_config
 from claw_plaid_ledger.db import (
+    AllocationRow,
     AnnotationRow,
     TransactionQuery,
-    get_annotation,
+    get_allocations_for_transaction,
     get_transaction,
     query_transactions,
     upsert_annotation,
+    upsert_single_allocation,
 )
 from claw_plaid_ledger.middleware.auth import require_bearer_token
 from claw_plaid_ledger.routers.utils import (
@@ -128,32 +130,30 @@ def list_transactions(
     }
 
 
-def _fetch_transaction_with_annotation(
+def _fetch_transaction_with_allocation(
     connection: sqlite3.Connection,
     transaction_id: str,
 ) -> dict[str, object] | None:
-    """Return a transaction merged with its annotation, or None if absent."""
+    """Return a transaction merged with its first allocation, or None."""
     transaction = get_transaction(connection, transaction_id)
     if transaction is None:
         return None
 
-    annotation = get_annotation(connection, transaction_id)
+    allocs = get_allocations_for_transaction(connection, transaction_id)
+    alloc = allocs[0] if allocs else None
 
-    annotation_payload: dict[str, object] | None = None
-    if annotation is not None:
-        tags: list[str] | None = None
-        if annotation.tags is not None:
-            tags_raw = json.loads(annotation.tags)
-            tags = [str(tag) for tag in tags_raw]
-
-        annotation_payload = {
-            "category": annotation.category,
-            "note": annotation.note,
-            "tags": tags,
-            "updated_at": annotation.updated_at,
+    allocation_payload: dict[str, object] | None = None
+    if alloc is not None:
+        allocation_payload = {
+            "id": alloc.id,
+            "amount": alloc.amount,
+            "category": alloc.category,
+            "note": alloc.note,
+            "tags": json.loads(alloc.tags) if alloc.tags else None,
+            "updated_at": alloc.updated_at,
         }
 
-    return {**transaction, "annotation": annotation_payload}
+    return {**transaction, "allocation": allocation_payload}
 
 
 @router.get(
@@ -164,7 +164,7 @@ def get_transaction_detail(transaction_id: str) -> dict[str, object]:
     """Return one transaction with optional merged annotation."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
-        result = _fetch_transaction_with_annotation(connection, transaction_id)
+        result = _fetch_transaction_with_allocation(connection, transaction_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
@@ -190,30 +190,47 @@ def put_annotation(
     """Create or fully replace an annotation for a transaction."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
-        if get_transaction(connection, transaction_id) is None:
+        transaction = get_transaction(connection, transaction_id)
+        if transaction is None:
             raise HTTPException(
                 status_code=404, detail="Transaction not found"
             )
         now = datetime.now(tz=UTC).isoformat()
-        existing = get_annotation(connection, transaction_id)
-        created_at = existing.created_at if existing is not None else now
         tags_json = json.dumps(body.tags) if body.tags is not None else None
-        row = AnnotationRow(
+        ann_row = AnnotationRow(
             plaid_transaction_id=transaction_id,
             category=body.category,
             note=body.note,
             tags=tags_json,
-            created_at=created_at,
+            created_at=now,
             updated_at=now,
         )
-        upsert_annotation(connection, row)
+        upsert_annotation(connection, ann_row)
+        # Fetch the transaction amount via a direct SELECT so it is typed as
+        # Any (sqlite3 cursor row element) rather than object (dict value),
+        # avoiding a type-narrowing issue without a type: ignore bypass.
+        amount_row = connection.execute(
+            "SELECT amount FROM transactions WHERE plaid_transaction_id = ?",
+            (transaction_id,),
+        ).fetchone()
+        tx_amount = float(amount_row[0]) if amount_row is not None else 0.0
+        alloc_row = AllocationRow(
+            plaid_transaction_id=transaction_id,
+            amount=tx_amount,
+            category=body.category,
+            tags=tags_json,
+            note=body.note,
+            created_at=now,
+            updated_at=now,
+        )
+        upsert_single_allocation(connection, alloc_row)
         logger.debug(
             "annotation upserted transaction_id=%s category=%r tags=%s",
             transaction_id,
             body.category,
             body.tags,
         )
-        result = _fetch_transaction_with_annotation(connection, transaction_id)
+        result = _fetch_transaction_with_allocation(connection, transaction_id)
     if result is None:
         # Should not happen: we verified the transaction exists above.
         raise HTTPException(status_code=404, detail="Transaction not found")

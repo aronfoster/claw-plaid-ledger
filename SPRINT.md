@@ -143,7 +143,7 @@ the `allocations` table existed and any transactions synced between
 
 ---
 
-## Task 2: PUT /annotations double-write; transaction detail response shape
+## Task 2: PUT /annotations double-write; transaction detail response shape ✅ DONE
 
 ### What
 
