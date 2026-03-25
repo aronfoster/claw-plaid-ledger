@@ -68,7 +68,8 @@ Hestia may call only:
 3. `GET /categories` — discover existing category vocabulary before writing
 4. `GET /tags` — discover existing tag vocabulary before writing
 5. `PUT /annotations/{transaction_id}` — returns the full transaction record
-   (no follow-up `GET /transactions/{id}` needed to confirm the written state)
+   with `allocation` (not `annotation`) in the response; no follow-up
+   `GET /transactions/{id}` needed to confirm the written state
 6. `GET /accounts` — retrieve all known accounts with human-readable labels
 7. `PUT /accounts/{account_id}` — write or update a label for an account
 8. `GET /errors` — recent ledger warnings and errors; use as a pre-run
@@ -76,6 +77,28 @@ Hestia may call only:
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
+
+## Allocation object shape
+
+Every transaction response (`GET /transactions`, `GET /transactions/{id}`,
+`PUT /annotations/{id}`) includes an `allocation` key. It is always present
+(never null). `category`, `tags`, and `note` may be null for uncategorized
+transactions.
+
+```json
+"allocation": {
+  "id": 1,
+  "amount": 50.00,
+  "category": "groceries",
+  "tags": ["household"],
+  "note": "weekly shopping",
+  "updated_at": "2026-03-25T10:00:00+00:00"
+}
+```
+
+`PUT /annotations/{id}` is the write surface for `category`, `tags`, and
+`note`. Its request body is unchanged (`{ "category": ..., "tags": [...],
+"note": ... }`). The response contains `allocation` instead of `annotation`.
 
 ## Pagination
 
@@ -119,9 +142,11 @@ For each run:
    flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
 2. Query `GET /transactions` in `view=canonical` and paginate to completion.
-   Each row now includes a nested `annotation` field (`category`, `note`,
-   `tags`, `updated_at`) or `null` for unannotated rows. Use this to screen
-   for missing/stale annotations without extra requests.
+   Each row includes a nested `allocation` field. Use `allocation.category`,
+   `allocation.tags`, and `allocation.note` to screen for missing or stale
+   categorization. The `allocation` object is always present (never null);
+   `category`, `tags`, and `note` within it may be null for uncategorized
+   transactions.
 3. Identify candidates that are pending, missing expected tags/notes, or marked
    for re-review.
 4. Re-fetch each candidate with `GET /transactions/{id}` before any write.
@@ -170,19 +195,21 @@ For each run:
 
 1. Run `GET /transactions` with a fixed recent window and deterministic paging.
 2. Focus on newest records first.
-3. Queue records that are unannotated (list `annotation` is `null`),
-   stale-annotated, or uncertain. The `annotation` field is included in every
-   list row — no drill-down needed to detect missing annotations.
+3. Queue records where `allocation.category`, `allocation.tags`, and
+   `allocation.note` are null or stale, or where categorization shows
+   uncertainty. The `allocation` field is included in every list row —
+   no drill-down needed for initial screening.
 
 ### 2) Drill-down before annotation write
 
 1. Run `GET /transactions/{id}`.
 2. Verify amount, date, pending/posting state, owner context, and existing
-   annotation.
+   `allocation` fields (`allocation.category`, `allocation.tags`,
+   `allocation.note`).
 3. If conflicting context remains, run a filtered `GET /transactions` query.
 4. Write annotation only when evidence is sufficient.
 5. `PUT /annotations/{transaction_id}` returns the full transaction record
-   including the updated annotation block — no follow-up GET required.
+   including the updated `allocation` block — no follow-up GET required.
 
 ### 3) Orphaned/discrepancy triage
 

@@ -8,10 +8,12 @@ Use this sheet for deterministic analysis and reporting workflows.
 - Pair any `view=raw` call with an identical canonical query.
 - Always set explicit `start_date` + `end_date`, or use a `range` shorthand.
   Both `GET /spend` and `GET /transactions` accept `range`.
-- `GET /transactions` list results include nested `annotation` data (or `null`
-  for unannotated rows). Use list results for initial triage; drill into
-  `GET /transactions/{id}` only when quoting amounts or annotation details in a
-  final report.
+- `GET /transactions` list results include nested `allocation` data. The
+  `allocation` object is always present (never null); `category`, `tags`, and
+  `note` within it may be null for uncategorized transactions. Use
+  `allocation.category`, `allocation.tags`, and `allocation.note` for initial
+  triage; drill into `GET /transactions/{id}` only when quoting amounts or
+  allocation details in a final report.
 - Paginate `GET /transactions` deterministically.
 - Label partial coverage when pagination/calls fail.
 
@@ -27,10 +29,10 @@ Response shape for `GET /transactions`:
 
 ## Vocabulary discovery
 
-Before annotating, retrieve the current vocabulary:
+Before annotating, retrieve the current allocation vocabulary:
 
-- `GET /categories` — returns sorted list of distinct category values.
-- `GET /tags` — returns sorted flat list of distinct tag values.
+- `GET /categories` — returns sorted list of distinct allocation category values.
+- `GET /tags` — returns sorted flat list of distinct allocation tag values.
 
 Use these to avoid creating near-duplicate labels across runs.
 
@@ -50,7 +52,7 @@ Option B — range shorthand (interactive / quick queries):
    `last_7_days`).
 2. Confirm the resolved `start_date`/`end_date` in the response.
 3. Run `GET /transactions?range=last_month` (same shorthand accepted) for
-   evidence. List results include `annotation` — no drill-down needed for
+   evidence. List results include `allocation` — no drill-down needed for
    triage.
 
 Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.

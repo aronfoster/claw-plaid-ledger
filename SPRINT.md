@@ -347,7 +347,7 @@ No changes required in `routers/spend.py`, `routers/accounts.py`, or the
 
 ---
 
-## Task 5: Skill bundle updates
+## Task 5: Skill bundle updates ✅ DONE
 
 ### What
 
