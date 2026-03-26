@@ -451,6 +451,50 @@ def get_allocations_for_transaction(
     ]
 
 
+def replace_allocations(
+    connection: sqlite3.Connection,
+    plaid_transaction_id: str,
+    rows: list[AllocationRow],
+) -> list[int]:
+    """
+    Atomically replace all allocations for a transaction.
+
+    Raises ValueError if rows is empty (guard against accidental data loss).
+    Deletes all existing allocations for plaid_transaction_id and inserts
+    each row in order. Returns the list of inserted id values.
+    """
+    if not rows:
+        msg = "rows must not be empty; at least one allocation is required"
+        raise ValueError(msg)
+    connection.execute(
+        "DELETE FROM allocations WHERE plaid_transaction_id = ?",
+        (plaid_transaction_id,),
+    )
+    ids: list[int] = []
+    for row in rows:
+        cursor = connection.execute(
+            "INSERT INTO allocations "
+            "(plaid_transaction_id, amount, category, tags, note, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                row.plaid_transaction_id,
+                row.amount,
+                row.category,
+                row.tags,
+                row.note,
+                row.created_at,
+                row.updated_at,
+            ),
+        )
+        row_id = cursor.lastrowid
+        if row_id is None:
+            msg = "INSERT INTO allocations produced no lastrowid"
+            raise RuntimeError(msg)
+        ids.append(row_id)
+    return ids
+
+
 @dataclass(frozen=True)
 class TransactionQuery:
     """Transaction list filters and pagination controls for DB queries."""

@@ -51,7 +51,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: DB layer — `replace_allocations` and all-allocation fetching
+## Task 1: DB layer — `replace_allocations` and all-allocation fetching ✅ DONE
 
 ### What
 
