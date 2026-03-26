@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
+from claw_plaid_ledger.routers.transactions import (
+    _fetch_transaction_with_allocations,
+)
 from claw_plaid_ledger.server import app
 from tests.helpers import _RANGE_TODAY, _patch_today, _seed_transactions
 
@@ -1298,3 +1301,61 @@ class TestListTransactionsStrictParams:
         )
 
         assert response.status_code == http.HTTPStatus.OK
+
+
+# ---------------------------------------------------------------------------
+# _fetch_transaction_with_allocations helper
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTransactionWithAllocations:
+    """_fetch_transaction_with_allocations returns allocations in id order."""
+
+    _NOW = "2024-01-01T00:00:00+00:00"
+    _EXPECTED_SPLIT_COUNT = 2
+    _EXPECTED_SINGLE_COUNT = 1
+
+    def test_returns_all_allocations_ordered_by_id(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Helper returns 'allocations' list with all rows in id ASC order."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        # Add a second allocation for tx_1 directly.
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, category, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("tx_1", 5.0, "coffee", self._NOW, self._NOW),
+            )
+            result = _fetch_transaction_with_allocations(conn, "tx_1")
+
+        assert result is not None
+        allocs = result["allocations"]
+        assert isinstance(allocs, list)
+        assert len(allocs) == self._EXPECTED_SPLIT_COUNT
+        ids = [a["id"] for a in allocs]
+        assert ids == sorted(ids)
+
+    def test_returns_none_for_unknown_id(self, tmp_path: pathlib.Path) -> None:
+        """Helper returns None when the transaction does not exist."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as conn:
+            result = _fetch_transaction_with_allocations(conn, "tx_unknown")
+        assert result is None
+
+    def test_single_allocation_returns_one_element_list(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Unsplit transaction yields 'allocations' with one element."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as conn:
+            result = _fetch_transaction_with_allocations(conn, "tx_1")
+
+        assert result is not None
+        allocs = result["allocations"]
+        assert isinstance(allocs, list)
+        assert len(allocs) == self._EXPECTED_SINGLE_COUNT

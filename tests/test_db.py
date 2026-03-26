@@ -28,6 +28,7 @@ from claw_plaid_ledger.db import (
     normalize_transaction_for_db,
     query_ledger_errors,
     query_transactions,
+    replace_allocations,
     upsert_account,
     upsert_annotation,
     upsert_single_allocation,
@@ -1697,3 +1698,141 @@ class TestStartupBackfill:
             ).fetchone()[0]
 
         assert count_after_second == 1
+
+
+# ---------------------------------------------------------------------------
+# replace_allocations
+# ---------------------------------------------------------------------------
+
+
+class TestReplaceAllocations:
+    """replace_allocations insert, replace, and guard paths."""
+
+    _NOW = "2024-01-01T00:00:00+00:00"
+    _EXPECTED_INSERT_COUNT = 2
+    _EXPECTED_REPLACE_COUNT = 3
+
+    def _db(self, tmp_path: Path) -> Path:
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+        return db_path
+
+    def _seed_transaction(
+        self, connection: sqlite3.Connection, tx_id: str = "tx-r"
+    ) -> None:
+        connection.execute(
+            "INSERT OR IGNORE INTO accounts "
+            "(plaid_account_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("acct_r", "Acct R", self._NOW, self._NOW),
+        )
+        connection.execute(
+            TRANSACTION_INSERT_SQL,
+            (tx_id, "acct_r", 100.0, "Shop", 0, self._NOW, self._NOW),
+        )
+
+    def _row(self, tx_id: str = "tx-r", amount: float = 60.0) -> AllocationRow:
+        return AllocationRow(
+            plaid_transaction_id=tx_id,
+            amount=amount,
+            created_at=self._NOW,
+            updated_at=self._NOW,
+        )
+
+    def test_insert_path_returns_correct_ids(self, tmp_path: Path) -> None:
+        """replace_allocations with no prior rows returns positive int IDs."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            rows = [self._row(amount=60.0), self._row(amount=40.0)]
+            ids = replace_allocations(conn, "tx-r", rows)
+
+        assert len(ids) == self._EXPECTED_INSERT_COUNT
+        assert all(isinstance(i, int) and i > 0 for i in ids)
+        assert ids[0] < ids[1]
+
+    def test_replace_path_replaces_and_count_is_new_count(
+        self, tmp_path: Path
+    ) -> None:
+        """replace_allocations replaces prior rows; count matches new set."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            # Seed 2 initial allocations
+            replace_allocations(
+                conn, "tx-r", [self._row(amount=50.0), self._row(amount=50.0)]
+            )
+            # Replace with 3 allocations
+            new_ids = replace_allocations(
+                conn,
+                "tx-r",
+                [
+                    self._row(amount=40.0),
+                    self._row(amount=30.0),
+                    self._row(amount=30.0),
+                ],
+            )
+            allocs = get_allocations_for_transaction(conn, "tx-r")
+
+        assert len(allocs) == self._EXPECTED_REPLACE_COUNT
+        assert len(new_ids) == self._EXPECTED_REPLACE_COUNT
+        # Returned IDs match the actual allocation rows in the DB
+        db_ids = {a.id for a in allocs}
+        assert db_ids == set(new_ids)
+
+    def test_raises_value_error_for_empty_list(self, tmp_path: Path) -> None:
+        """replace_allocations raises ValueError when passed an empty list."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            with pytest.raises(ValueError, match="empty"):
+                replace_allocations(conn, "tx-r", [])
+
+
+# ---------------------------------------------------------------------------
+# query_transactions — allocation-row pagination
+# ---------------------------------------------------------------------------
+
+
+def test_query_transactions_total_counts_allocation_rows(
+    tmp_path: Path,
+) -> None:
+    """Total reflects allocation rows; a split transaction counts as N rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    expected_alloc_count = 2
+    now = "2024-01-01T00:00:00+00:00"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO accounts "
+            "(plaid_account_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("acct_s", "Acct S", now, now),
+        )
+        conn.execute(
+            TRANSACTION_INSERT_SQL,
+            ("tx-split", "acct_s", 100.0, "Shop", 0, now, now),
+        )
+        # Insert 2 allocations directly (bypassing the 1:1 upsert).
+        conn.execute(
+            "INSERT INTO allocations "
+            "(plaid_transaction_id, amount, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("tx-split", 60.0, now, now),
+        )
+        conn.execute(
+            "INSERT INTO allocations "
+            "(plaid_transaction_id, amount, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("tx-split", 40.0, now, now),
+        )
+
+        rows, total = query_transactions(
+            conn, TransactionQuery(canonical_only=False)
+        )
+
+    assert total == expected_alloc_count
+    assert len(rows) == expected_alloc_count
+    ids = {r["id"] for r in rows}
+    assert ids == {"tx-split"}

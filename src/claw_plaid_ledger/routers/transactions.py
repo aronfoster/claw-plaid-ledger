@@ -156,6 +156,30 @@ def _fetch_transaction_with_allocation(
     return {**transaction, "allocation": allocation_payload}
 
 
+def _fetch_transaction_with_allocations(
+    connection: sqlite3.Connection,
+    transaction_id: str,
+) -> dict[str, object] | None:
+    """Return a transaction merged with all its allocations, or None."""
+    transaction = get_transaction(connection, transaction_id)
+    if transaction is None:
+        return None
+
+    allocs = get_allocations_for_transaction(connection, transaction_id)
+    allocations_payload: list[dict[str, object]] = [
+        {
+            "id": alloc.id,
+            "amount": alloc.amount,
+            "category": alloc.category,
+            "note": alloc.note,
+            "tags": json.loads(alloc.tags) if alloc.tags else None,
+            "updated_at": alloc.updated_at,
+        }
+        for alloc in allocs
+    ]
+    return {**transaction, "allocations": allocations_payload}
+
+
 @router.get(
     "/transactions/{transaction_id}",
     dependencies=[Depends(require_bearer_token)],
