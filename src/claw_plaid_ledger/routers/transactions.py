@@ -185,10 +185,12 @@ def _fetch_transaction_with_allocations(
     dependencies=[Depends(require_bearer_token)],
 )
 def get_transaction_detail(transaction_id: str) -> dict[str, object]:
-    """Return one transaction with optional merged annotation."""
+    """Return one transaction with all its allocations."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
-        result = _fetch_transaction_with_allocation(connection, transaction_id)
+        result = _fetch_transaction_with_allocations(
+            connection, transaction_id
+        )
     if result is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
@@ -218,6 +220,19 @@ def put_annotation(
         if transaction is None:
             raise HTTPException(
                 status_code=404, detail="Transaction not found"
+            )
+        allocs = get_allocations_for_transaction(connection, transaction_id)
+        if len(allocs) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "transaction has multiple allocations",
+                    "message": (
+                        "Use PUT /transactions/{id}/allocations "
+                        "to edit split transactions."
+                    ),
+                    "allocation_count": len(allocs),
+                },
             )
         now = datetime.now(tz=UTC).isoformat()
         tags_json = json.dumps(body.tags) if body.tags is not None else None
@@ -254,7 +269,9 @@ def put_annotation(
             body.category,
             body.tags,
         )
-        result = _fetch_transaction_with_allocation(connection, transaction_id)
+        result = _fetch_transaction_with_allocations(
+            connection, transaction_id
+        )
     if result is None:
         # Should not happen: we verified the transaction exists above.
         raise HTTPException(status_code=404, detail="Transaction not found")

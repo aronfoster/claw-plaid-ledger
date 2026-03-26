@@ -126,7 +126,7 @@ Fix if it currently counts only transactions.
 
 ---
 
-## Task 2: Response shape — `allocation` → `allocations`; spend field rename
+## Task 2: Response shape — `allocation` → `allocations`; spend field rename ✅ DONE
 
 ### What
 

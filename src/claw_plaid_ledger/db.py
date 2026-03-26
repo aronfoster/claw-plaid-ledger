@@ -714,7 +714,7 @@ def query_spend(
     connection: sqlite3.Connection,
     query: SpendQuery,
 ) -> tuple[float, int]:
-    """Return (total_spend, transaction_count) for matching transactions."""
+    """Return (total_spend, allocation_count) for matching allocations."""
     effective_date_sql = "COALESCE(t.posted_date, t.authorized_date)"
 
     need_accounts_join = query.canonical_only or query.owner is not None
@@ -898,7 +898,7 @@ def query_spend_trends(
         {
             "month": label,
             "total_spend": results.get(label, (0.0, 0))[0],
-            "transaction_count": results.get(label, (0.0, 0))[1],
+            "allocation_count": results.get(label, (0.0, 0))[1],
             "partial": label == current_month,
         }
         for label in labels
