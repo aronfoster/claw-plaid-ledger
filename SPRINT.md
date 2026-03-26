@@ -1,449 +1,507 @@
-# Sprint 22 — M20: Allocation Model for Multi-Purpose Transactions
+# Sprint 23 — M21: Manual Allocation Editing
 
 ## Sprint goal
 
-Introduce `allocations` as the budgeting layer. Every Plaid transaction maps
-to exactly one allocation row in this sprint (multi-allocation editing and
-management come in M21). Spend reporting, vocabulary discovery, and all
-transaction views switch to reading from `allocations` as the sole source of
-budgeting truth. The `annotations` table continues to exist and receive
-double-writes through this sprint; it is decommissioned in M23.
+Make multi-allocation transactions fully usable. An operator can split one
+imported transaction across multiple categories, with the system enforcing
+that allocation amounts always reconcile to the transaction total. Unmodified
+(single-allocation) transactions continue to work exactly as before.
 
 ## Design decisions
 
 The following decisions were made during sprint planning and must not be
 re-litigated during implementation:
 
-- **Allocation schema** — `id`, `plaid_transaction_id`, `amount`, `category`,
-  `tags` (JSON array, same encoding as `annotations.tags`), `note`,
-  `created_at`, `updated_at`. No UNIQUE constraint on `plaid_transaction_id`
-  so M21 can add multiple rows per transaction.
-- **Every transaction gets an allocation row** — unannotated transactions get
-  an allocation with `amount = transaction.amount` and all semantic fields
-  null. This ensures LEFT JOINs never drop transactions from results.
-- **Double-write in M20** — `PUT /annotations/{id}` continues to write
-  `category`, `tags`, and `note` to `annotations` AND upserts a single
-  allocation row. The `annotations` table is not removed until M23.
-- **Response shape** — the `annotation` key on transaction responses is
-  replaced by an `allocation` key. The `allocation` object contains `id`,
-  `amount`, `category`, `tags`, `note`, `updated_at`.
-- **Spend uses allocation amounts** — `GET /spend` and `GET /spend/trends`
-  sum `allocations.amount`, not `transactions.amount`. For M20 (1:1), totals
-  are numerically identical; the change future-proofs multi-allocation math.
-- **One list row per allocation** — `GET /transactions` returns one row per
-  allocation. For M20, this is identical to one row per transaction.
-  In M21+, a transaction with multiple allocations will appear multiple times.
+- **Response shape — breaking change** — all transaction responses change from
+  `"allocation": {...}` (single object) to `"allocations": [...]` (array). The
+  array is always present and never null. List rows (`GET /transactions`) always
+  carry a single-element array (one list row = one allocation). Detail views
+  (`GET /transactions/{id}`, `PUT /annotations/{id}`, and the new
+  `PUT /transactions/{id}/allocations`) carry all allocations.
+- **Replace-all API only** — `PUT /transactions/{id}/allocations` accepts an
+  array and atomically replaces all existing allocations. No individual
+  create/patch/delete sub-operations in this sprint.
+- **Amount validation with auto-correction** — amounts are compared after
+  rounding to 2 decimal places. If the difference between `sum(allocation amounts)`
+  and `transaction.amount` is ≤ $1.00, the server silently adjusts the last
+  allocation to balance exactly. If the difference is > $1.00, the server
+  returns HTTP 422 with `transaction_amount`, `allocation_total`, and
+  `difference` in the error body.
+- **`PUT /annotations/{id}` restriction** — if the transaction has more than one
+  allocation, this endpoint returns HTTP 409 directing the caller to use
+  `PUT /transactions/{id}/allocations` instead. Single-allocation transactions
+  continue to work as before.
+- **`transaction_count` → `allocation_count`** — the spend and spend/trends
+  response field is renamed (deferred from Sprint 22). This is a breaking change
+  on `GET /spend` and `GET /spend/trends`.
+- **CLI** — `ledger allocations show <transaction_id>` and
+  `ledger allocations set <transaction_id> --file <path>` are both required.
 
 ## Working agreements
 
-- Tasks are **sequential** — each must leave the quality gate green before
-  the next starts.
-- Zero sync/import ownership changes — Plaid transaction rows stay immutable.
+- Tasks are **sequential** — each must leave the quality gate green before the
+  next starts.
+- Zero sync/import ownership changes — `transactions` table remains immutable.
 - Mark completed tasks `✅ DONE` before committing.
-- Apply `_strict_params` to any new parameterised GET endpoint
-  (per the Sprint 21 deferred note).
+- Apply `_strict_params` to any new parameterised GET endpoint.
 
 ---
 
-## Task 1: Allocations schema, DB layer, and transaction seeding ✅ DONE
+## Task 1: DB layer — `replace_allocations` and all-allocation fetching
 
 ### What
 
-Introduce the `allocations` table and all DB-layer primitives that the
-remaining tasks depend on. Also ensure every transaction always has an
-allocation row via two complementary mechanisms.
+Add the `replace_allocations()` primitive, update the transaction-detail helper
+to return all allocations (not just the first), and verify that
+`query_transactions()` pagination counts allocation rows.
 
-### Schema addition (`schema.sql`)
+### `replace_allocations` (`db.py`)
 
-```sql
-CREATE TABLE IF NOT EXISTS allocations (
-    id           INTEGER PRIMARY KEY,
-    plaid_transaction_id TEXT NOT NULL
-        REFERENCES transactions(plaid_transaction_id),
-    amount       NUMERIC NOT NULL,
-    category     TEXT,
-    tags         TEXT,
-    note         TEXT,
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
-);
+```python
+def replace_allocations(
+    connection: sqlite3.Connection,
+    plaid_transaction_id: str,
+    rows: list[AllocationRow],
+) -> list[int]:
+    ...
 ```
 
-Note: no UNIQUE constraint on `plaid_transaction_id` — a future sprint will
-add multiple allocations per transaction.
+- Execute inside a single `BEGIN`/`COMMIT` block.
+- `DELETE FROM allocations WHERE plaid_transaction_id = ?`
+- INSERT each row in order; collect and return the list of inserted `id` values.
+- The caller is responsible for validation (non-empty list, amounts balanced).
+- Raise `ValueError` if `rows` is empty (guard against accidental data loss).
 
-### DB layer (`db.py`)
+### `_fetch_transaction_with_allocations` (`routers/transactions.py`)
 
-Add:
+Rename `_fetch_transaction_with_allocation()` (singular) to
+`_fetch_transaction_with_allocations()` (plural). Update it to build the full
+list instead of taking only the first element:
 
-- **`AllocationRow`** dataclass — fields: `id: int | None`, `plaid_transaction_id: str`,
-  `amount: float`, `category: str | None`, `tags: str | None`,
-  `note: str | None`, `created_at: str`, `updated_at: str`.
-- **`upsert_single_allocation(connection, row: AllocationRow) -> int`** —
-  updates the first/only allocation for `plaid_transaction_id` if one exists,
-  otherwise inserts. Returns the allocation `id`. This is the write surface
-  for M20's 1:1 case; M21 will add separate functions for multi-allocation
-  management.
-- **`get_allocations_for_transaction(connection, plaid_transaction_id: str) -> list[AllocationRow]`** —
-  returns all allocation rows for the transaction, ordered by `id ASC`.
-  Returns an empty list if none exist.
-
-### Seeding mechanism 1 — new transactions
-
-Update **`upsert_transaction()`** in `db.py` to also execute an
-`INSERT OR IGNORE INTO allocations ...` immediately after the transaction
-upsert. This creates a blank allocation (amount = transaction amount, all
-semantic fields NULL) for every new transaction that doesn't yet have one.
-Existing allocations are not touched (the `OR IGNORE` handles idempotency
-via the rowid primary key — if any allocation already exists for the
-transaction, the insert is skipped via a pre-check, not a UNIQUE constraint).
-
-Implementation note: because there is no UNIQUE constraint on
-`plaid_transaction_id`, raw `INSERT OR IGNORE` cannot be used. Instead,
-insert only when `NOT EXISTS (SELECT 1 FROM allocations WHERE plaid_transaction_id = ?)`.
-
-### Seeding mechanism 2 — startup backfill
-
-Add an idempotent migration in **`initialize_database()`** (alongside the
-existing `ALTER TABLE` migrations) that backfills an allocation for every
-transaction that has no allocation row yet:
-
-```sql
-INSERT INTO allocations (plaid_transaction_id, amount, created_at, updated_at)
-SELECT t.plaid_transaction_id, t.amount, ?, ?
-FROM transactions t
-WHERE NOT EXISTS (
-    SELECT 1 FROM allocations a
-    WHERE a.plaid_transaction_id = t.plaid_transaction_id
-)
+```python
+allocations_payload = [
+    {
+        "id": alloc.id,
+        "amount": alloc.amount,
+        "category": alloc.category,
+        "note": alloc.note,
+        "tags": json.loads(alloc.tags) if alloc.tags else None,
+        "updated_at": alloc.updated_at,
+    }
+    for alloc in allocs   # allocs = get_allocations_for_transaction(...)
+]
+return {**transaction, "allocations": allocations_payload}
 ```
 
-This runs once per startup. It catches transactions that were synced before
-the `allocations` table existed and any transactions synced between
-`upsert_transaction` and a restart.
+### Pagination in `query_transactions()` (`db.py`)
+
+`total` in the list response must count allocation rows, not transaction rows.
+With `LEFT JOIN allocations`, a transaction split into N allocations produces N
+result rows — `total` must reflect this so callers can paginate correctly.
+
+Verify the `SELECT COUNT(*)` sub-query used for `total` includes the same
+`LEFT JOIN allocations` and produces the same row count as the main SELECT.
+Fix if it currently counts only transactions.
 
 ### Tests
 
-- `AllocationRow` construction and default values.
-- `upsert_single_allocation` — insert path (no prior row) and update path
-  (existing row).
-- `get_allocations_for_transaction` — empty, one row, ordered.
-- `upsert_transaction` now creates a blank allocation alongside the
-  transaction (verify with `get_allocations_for_transaction`).
-- Startup backfill is idempotent (runs twice; count stays the same).
+- `replace_allocations` — insert path: no prior rows, returns correct IDs.
+- `replace_allocations` — replace path: 2 prior allocations → replace with 3 →
+  count is 3, old IDs absent.
+- `replace_allocations` raises `ValueError` for empty list.
+- `_fetch_transaction_with_allocations` returns all rows ordered by `id ASC`.
+- `query_transactions` — create a transaction with 2 allocations; verify `total`
+  is 2 and both rows appear.
 
 ### Done when
 
-- `allocations` table is in `schema.sql`.
-- `AllocationRow`, `upsert_single_allocation`, `get_allocations_for_transaction`
-  are in `db.py`.
-- `upsert_transaction` creates a blank allocation for new transactions.
-- Startup migration backfills missing allocations.
+- `replace_allocations` is in `db.py`.
+- `_fetch_transaction_with_allocations()` returns `"allocations": [...]` (all).
+- Pagination `total` reflects allocation-row count.
 - Quality gate passes.
 
 ---
 
-## Task 2: PUT /annotations double-write; transaction detail response shape ✅ DONE
+## Task 2: Response shape — `allocation` → `allocations`; spend field rename
 
 ### What
 
-`PUT /annotations/{id}` writes to both `annotations` (as today) and
-`allocations` (as the new budgeting layer). The transaction detail and
-annotation-write responses replace the `annotation` key with `allocation`.
+Breaking change across all transaction and spend endpoints. No new DB writes;
+pure response-shape and field-name updates.
 
-### `PUT /annotations/{id}` (`routers/transactions.py`)
+### Transaction list (`db.py` — `_allocation_from_joined_row`)
 
-After writing to `annotations` (unchanged), also call
-`upsert_single_allocation()` with:
+Rename `_allocation_from_joined_row` to `_allocation_list_from_joined_row` (or
+similar). Update it to return the allocation wrapped in a single-element list:
 
-- `plaid_transaction_id` = transaction id
-- `amount` = the transaction's `amount` (fetch from `get_transaction()`, which
-  is already called to verify existence)
-- `category` = `body.category`
-- `tags` = `body.tags` serialised to JSON (same encoding as annotations)
-- `note` = `body.note`
-- `created_at` / `updated_at` = same timestamps used for the annotation
+```python
+# Old shape per list row:
+"allocation": {"id": 5, "amount": ..., ...}
 
-The request body shape (`AnnotationRequest`) does **not** change — it still
-accepts `category`, `note`, and `tags`.
+# New shape per list row:
+"allocations": [{"id": 5, "amount": ..., ...}]
+```
 
-### Transaction detail helper (`routers/transactions.py` and `db.py`)
+The allocation object fields (id, amount, category, tags, note, updated_at)
+are unchanged.
 
-Rename `_fetch_transaction_with_annotation()` to
-`_fetch_transaction_with_allocation()`. Update it to:
+### Transaction detail (`routers/transactions.py`)
 
-1. Call `get_transaction()` as before.
-2. Call `get_allocations_for_transaction()` and take the first row (if any).
-3. Build the `allocation` payload from that row:
+- `GET /transactions/{id}`: call `_fetch_transaction_with_allocations()` (Task 1).
+  Response now has `"allocations": [...]`.
+- `PUT /annotations/{id}`:
+  - After verifying the transaction exists, count its allocations:
+    ```python
+    allocs = get_allocations_for_transaction(connection, transaction_id)
+    if len(allocs) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "transaction has multiple allocations",
+                "message": (
+                    "Use PUT /transactions/{id}/allocations "
+                    "to edit split transactions."
+                ),
+                "allocation_count": len(allocs),
+            },
+        )
+    ```
+  - Replace the `_fetch_transaction_with_allocation()` call in the response with
+    `_fetch_transaction_with_allocations()`. Response now has `"allocations": [...]`.
+
+### Spend field rename (`routers/spend.py`, `db.py`)
+
+In `query_spend()` and `query_spend_trends()`, rename the response field:
+
+```python
+# Old:
+"transaction_count": row["count"]
+
+# New:
+"allocation_count": row["count"]
+```
+
+Update the field name in both the `SpendResult` / `SpendTrendBucket` response
+models (or dicts) and in both router handlers. The underlying SQL `COUNT(*)`
+is unchanged — only the JSON key name changes.
+
+### Tests
+
+- `GET /transactions/{id}` — response has `"allocations"` key (array), not
+  `"allocation"`.
+- `GET /transactions` list — each row has `"allocations"` key (single-element
+  array for the default 1:1 case).
+- `PUT /annotations/{id}` — response has `"allocations"` key.
+- `PUT /annotations/{id}` — returns HTTP 409 when the transaction has 2
+  allocations; response body contains `"allocation_count": 2`.
+- `GET /spend` — response has `"allocation_count"`, not `"transaction_count"`.
+- `GET /spend/trends` — each bucket has `"allocation_count"`.
+- Update **all** existing tests that check `response["allocation"]` or
+  `result["transaction_count"]` to use the new key names.
+
+### Done when
+
+- No response body anywhere contains `"allocation"` (singular object key) or
+  `"transaction_count"`.
+- `PUT /annotations/{id}` returns 409 for split transactions.
+- Quality gate passes.
+
+---
+
+## Task 3: `PUT /transactions/{id}/allocations` endpoint
+
+### What
+
+New endpoint to atomically replace a transaction's allocations with validation
+and auto-correction.
+
+### Pydantic model
+
+```python
+class AllocationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount: float
+    category: str | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+```
+
+### Endpoint spec
+
+**`PUT /transactions/{id}/allocations`**
+Auth: bearer token required.
+Path param: `transaction_id: str`
+Request body: `list[AllocationItem]` (JSON array)
+
+**Validation steps (in order):**
+
+1. If the list is empty → HTTP 422:
+   `{"error": "at least one allocation is required"}`
+
+2. Fetch the transaction; if not found → HTTP 404.
+
+3. Compute balance:
    ```python
+   tx_amount = round(transaction["amount"], 2)
+   total = round(sum(item.amount for item in body), 2)
+   diff = round(tx_amount - total, 2)
+   ```
+
+4. If `abs(diff) > 1.00` → HTTP 422:
+   ```json
    {
-       "id": alloc.id,
-       "amount": alloc.amount,
-       "category": alloc.category,
-       "note": alloc.note,
-       "tags": json.loads(alloc.tags) if alloc.tags else None,
-       "updated_at": alloc.updated_at,
+     "error": "allocation amounts do not balance",
+     "transaction_amount": <tx_amount>,
+     "allocation_total": <total>,
+     "difference": <diff>
    }
    ```
-4. Return `{**transaction, "allocation": allocation_payload}`.
 
-Remove all references to `get_annotation()` and `AnnotationRow` from
-`routers/transactions.py`. Those imports are no longer needed in the router
-(the DB-level annotation write still uses `upsert_annotation` from `db.py`).
+5. If `diff != 0.0` (but `abs(diff) <= 1.00`) → silently adjust last item:
+   ```python
+   body[-1].amount = round(body[-1].amount + diff, 2)
+   ```
 
-The response from both `GET /transactions/{id}` and `PUT /annotations/{id}`
-now contains `allocation` instead of `annotation`.
+6. Build `AllocationRow` objects (with `created_at` / `updated_at` = now UTC ISO
+   string; `tags` serialised as JSON if not None) and call `replace_allocations()`.
+
+7. Return `_fetch_transaction_with_allocations(connection, transaction_id)`.
+
+**Response shape** — same as `GET /transactions/{id}`:
+```json
+{
+  "id": "txn_abc123",
+  "amount": 100.00,
+  "name": "AMAZON.COM",
+  ...,
+  "allocations": [
+    {"id": 7, "amount": 60.00, "category": "groceries", "tags": ["household"],
+     "note": "food", "updated_at": "..."},
+    {"id": 8, "amount": 40.00, "category": "household", "tags": null,
+     "note": null, "updated_at": "..."}
+  ]
+}
+```
+
+### Router wiring
+
+Add the route to `routers/transactions.py`. The endpoint path is
+`/transactions/{transaction_id}/allocations`.
+
+No `_strict_params` needed (PUT endpoint, no query parameters accepted).
+`AllocationItem` already has `extra="forbid"` via Pydantic.
+
+Update `_TRANSACTIONS_ALLOWED_PARAMS` only if the constant covers this path —
+it should not, since this is a PUT, not a GET.
 
 ### Tests
 
-- `PUT /annotations/{id}` — verify the allocation row is created/updated with
-  the correct `amount`, `category`, `tags`, and `note`.
-- `GET /transactions/{id}` — verify the response has an `allocation` key and
-  no `annotation` key.
-- `PUT /annotations/{id}` — verify response has `allocation` key (no follow-up
-  GET needed).
-- Existing annotation round-trip tests: update assertions to use `allocation.*`
-  field paths instead of `annotation.*`.
+- 200: valid two-allocation split with exact amounts → both allocations returned.
+- 200: single allocation (degenerate case) — works, returns one-element array.
+- 200: amounts short by $0.50 → last allocation auto-corrected; no 422.
+- 200: amounts over by $0.01 → last allocation auto-corrected; no 422.
+- 422: amounts differ by $1.50 → error body includes `transaction_amount`,
+  `allocation_total`, `difference`.
+- 422: empty array.
+- 422: extra field in body item (Pydantic `extra="forbid"`).
+- 404: unknown `transaction_id`.
+- 401: missing bearer token.
+- After a successful PUT, `GET /transactions/{id}` returns the same
+  `allocations` array (round-trip verification).
+- After a split, `PUT /annotations/{id}` on the same transaction returns 409
+  (integration of Task 2 restriction).
 
 ### Done when
 
-- `PUT /annotations/{id}` writes to both tables.
-- `GET /transactions/{id}` and `PUT /annotations/{id}` return `allocation`
-  in their response, not `annotation`.
+- `PUT /transactions/{id}/allocations` is live.
+- All validation and auto-correction paths tested.
 - Quality gate passes.
 
 ---
 
-## Task 3: GET /transactions list joins allocations ✅ DONE
+## Task 4: CLI `ledger allocations`
 
 ### What
 
-`query_transactions()` in `db.py` switches its LEFT JOIN from `annotations`
-to `allocations`. Each result row contains `allocation` data (same shape as
-Task 2's detail response). Pagination counts allocations, not annotation rows
-(in M20, identical; M21+ will see the difference for multi-allocation
-transactions).
+Two sub-operations under a new `allocations` command group: `show` (read-only
+view of current allocation state) and `set` (replace-all via the new endpoint).
 
-### `query_transactions()` (`db.py`)
+Both commands require the API base URL and API secret. Use the same config
+loading and HTTP client pattern as any other CLI command that calls the server.
 
-Replace:
-```python
-annotations_join = (
-    "LEFT JOIN annotations ann "
-    "ON ann.plaid_transaction_id = t.plaid_transaction_id "
-)
+### `ledger allocations show <transaction_id>`
+
+Calls `GET /transactions/{transaction_id}` and formats the result:
+
 ```
-with:
-```python
-allocations_join = (
-    "LEFT JOIN allocations alloc "
-    "ON alloc.plaid_transaction_id = t.plaid_transaction_id "
-)
+Transaction: txn_abc123
+  Date:     2026-03-15
+  Merchant: AMAZON.COM
+  Amount:   $100.00
+
+Allocations (2):
+  #1   $60.00   groceries     [household]   food
+  #2   $40.00   household     (no tags)     (no note)
+  ──────────────────────────────────────────────
+  Total: $100.00   ✓ Balanced
 ```
 
-Update the SELECT projection to use `alloc.*` columns instead of `ann.*`.
-Build the `allocation` dict in the result rows using the same shape as
-Task 2's detail response (id, amount, category, tags, note, updated_at).
+If allocation total ≠ transaction amount (edge case; should not occur in
+normal operation), show:
+```
+  Total: $99.00   ⚠ Unbalanced (diff: $1.00)
+```
 
-The tag filter (`_apply_tag_filters`) currently checks `ann.tags`; update to
-`alloc.tags`.
+Exits non-zero on HTTP error (404, 401, etc.) with a clear message.
 
-The `search_notes` keyword filter (`ann.note LIKE ?`) updates to `alloc.note LIKE ?`.
+### `ledger allocations set <transaction_id> --file <path>`
 
-Remove `_annotation_from_joined_row()` and replace with an equivalent
-`_allocation_from_joined_row()` helper.
+Reads a JSON file (array of allocation items matching `AllocationItem` schema)
+and calls `PUT /transactions/{transaction_id}/allocations`. On success, renders
+the result using the same format as `show`.
 
-### `TransactionQuery` (`db.py`)
+Pass `--file -` to read from stdin.
 
-No field changes needed. The `tags` and `search_notes` filters work the same
-way; only the column reference changes.
+Example usage:
+```bash
+ledger allocations set txn_abc123 --file allocations.json
+echo '[{"amount": 100.00, "category": "groceries"}]' \
+  | ledger allocations set txn_abc123 --file -
+```
 
-### `_TRANSACTIONS_ALLOWED_PARAMS` (`routers/transactions.py`)
-
-No change required — the `tags` filter continues to work; it now targets
-`alloc.tags`.
+Handle API error responses clearly:
+- 404 → `"Transaction not found: <id>"`
+- 409 → print the server message (shouldn't occur via this path, but be safe)
+- 422 → print the validation error detail, including amounts if present
+- 401 → `"Authentication failed — check CLAW_API_SECRET"`
 
 ### Tests
 
-- List result rows contain `allocation` key (not `annotation`).
-- Tag filter works against allocation tags.
-- `search_notes=true` keyword filter works against `alloc.note`.
-- Pagination `total` is correct (matches allocation count, same as transaction
-  count for M20).
-- Existing list-endpoint tests: update assertions from `annotation.*` to
-  `allocation.*`.
+- `show` — formats balanced state correctly (amounts, tags, note, totals).
+- `show` — formats single-allocation transaction correctly.
+- `show` — displays unbalanced warning when totals differ.
+- `show` — exits non-zero and prints message on 404.
+- `set` — reads file, calls PUT endpoint, renders result.
+- `set` — reads from stdin when `--file -`.
+- `set` — prints 422 validation detail (amounts don't balance) without traceback.
+- `set` — exits non-zero on 404.
 
 ### Done when
 
-- `query_transactions()` JOINs `allocations`, not `annotations`.
-- List rows contain `allocation`, not `annotation`.
-- All tag and note-search filters work correctly.
+- `ledger allocations show <id>` and `ledger allocations set <id> --file <path>`
+  work end-to-end.
 - Quality gate passes.
 
 ---
 
-## Task 4: Spend, trends, categories, and tags switch to allocations ✅ DONE
+## Task 5: Skill bundle updates
 
 ### What
 
-All remaining read paths that currently JOIN `annotations` are updated to
-JOIN `allocations`. Spend totals use `allocations.amount`.
+Update both skill bundles for the new response shape, new endpoint, and
+`PUT /annotations/{id}` restriction. No behavior changes to the agents; this
+is documentation only.
 
-### `query_spend()` and `query_spend_trends()` (`db.py`)
+### Changes required in both skill bundles
 
-Replace `LEFT JOIN annotations ann` with `LEFT JOIN allocations alloc` in
-both functions.
+**Response shape update (all files that reference `allocation.*`):**
 
-Replace `SUM(t.amount)` with `SUM(alloc.amount)` in `query_spend()`.
-Replace `COALESCE(SUM(t.amount), 0.0)` with `COALESCE(SUM(alloc.amount), 0.0)`
-in `query_spend_trends()`.
+- Replace every reference to `allocation.category`, `allocation.tags`,
+  `allocation.note`, `allocation.amount`, `allocation.id` with the indexed
+  form: `allocations[0].category`, `allocations[0].tags`, etc.
+- Note that `"allocations"` is always an array, never null. For unmodified
+  (single-allocation) transactions, `allocations` has exactly one element.
 
-Category filter: `LOWER(ann.category) = LOWER(?)` → `LOWER(alloc.category) = LOWER(?)`.
-
-Tag filters (`EXISTS (SELECT 1 FROM json_each(ann.tags) ...)`) → change
-column reference to `alloc.tags`.
-
-`transaction_count` in the spend and trends responses is semantically
-"allocation count" after this change, but the field name is preserved for
-backward compatibility. (A rename can be done in M21 alongside multi-allocation
-management if desired.)
-
-### `get_distinct_categories()` and `get_distinct_tags()` (`db.py`)
-
-Update both functions to query `allocations` instead of `annotations`:
-
-```python
-# categories
-"SELECT DISTINCT category FROM allocations "
-"WHERE category IS NOT NULL ORDER BY category COLLATE NOCASE"
-
-# tags
-"SELECT DISTINCT j.value "
-"FROM allocations a, json_each(a.tags) j "
-"WHERE a.tags IS NOT NULL ORDER BY j.value COLLATE NOCASE"
-```
-
-No changes required in `routers/spend.py`, `routers/accounts.py`, or the
-`SpendQuery` / `SpendTrendsQuery` dataclasses — the router layer is unaffected.
-
-### Tests
-
-- `GET /spend` — totals match allocation amounts (in M20, same as transaction
-  amounts; write a test that verifies the JOIN is on allocations, e.g. by
-  creating a transaction + allocation with a different amount and confirming
-  spend reflects the allocation amount).
-- `GET /spend?category=...` — filters against allocation category.
-- `GET /spend/trends` — monthly buckets use allocation amounts.
-- `GET /categories` — returns distinct values from `allocations.category`.
-- `GET /tags` — returns distinct values from `allocations.tags`.
-- Existing spend and trends tests: verify no regressions; update category/tag
-  fixture setup to write to `allocations` (not `annotations`) where relevant.
-
-### Done when
-
-- All spend/trends queries JOIN `allocations` and sum `alloc.amount`.
-- `GET /categories` and `GET /tags` read from `allocations`.
-- Quality gate passes.
-
----
-
-## Task 5: Skill bundle updates ✅ DONE
-
-### What
-
-Both `skills/hestia-ledger/` and `skills/athena-ledger/` are updated to
-reflect the allocation model. Agents reading stale skill docs would otherwise
-reference `annotation.category` / `annotation.tags` fields that no longer
-exist in the response.
-
-### Changes required across both skill bundles
-
-**In `SKILL.md` and any checklist/playbook that references annotations as a
-category/tag store:**
-
-- Replace all references to `annotation.category`, `annotation.tags`, and
-  `annotation.note` with `allocation.category`, `allocation.tags`,
-  `allocation.note`.
-- Document the `allocation` object shape returned by `GET /transactions` and
-  `GET /transactions/{id}`:
-  ```json
-  "allocation": {
-    "id": 1,
-    "amount": 50.00,
+Document the updated `allocation` object shape:
+```json
+"allocations": [
+  {
+    "id": 5,
+    "amount": 60.00,
     "category": "groceries",
     "tags": ["household"],
     "note": "weekly shopping",
     "updated_at": "2026-03-25T10:00:00+00:00"
   }
-  ```
-- Note that `allocation` is always present on a transaction response
-  (never null); `category`, `tags`, and `note` within it may be null for
-  uncategorized transactions.
-- Note that `PUT /annotations/{id}` continues to be the write surface for
-  category, tags, and note. Its request body is unchanged
-  (`{ "category": ..., "tags": [...], "note": ... }`). The response now
-  contains `allocation` instead of `annotation`.
+]
+```
 
-**In Hestia's `SKILL.md` (ingestion loop):**
+**`PUT /transactions/{id}/allocations` (new endpoint — add to approved API
+calls in both SKILL.md files):**
 
-- Update the "Deterministic ingestion loop" step 2 to read:
-  "Each row includes a nested `allocation` field. Use `allocation.category`,
-  `allocation.tags`, and `allocation.note` to screen for missing or stale
-  categorization."
-- Update the "Drill-down before annotation write" playbook to reference
-  `allocation.*` fields.
+- Request: JSON array of `{amount, category?, tags?, note?}` items.
+- Validation: amounts must sum to transaction amount; auto-corrects within
+  $1.00; returns 422 if off by more.
+- Response: full transaction with `"allocations": [...]`.
+- Use when splitting a transaction across categories.
 
-**In Hestia's `checklists/annotation_write_checklist.md` and
-`checklists/query_playbooks.md`:**
+**`PUT /annotations/{id}` restriction:**
 
-- Update field references as above.
+- Note that this endpoint returns **HTTP 409** if the transaction has more
+  than one allocation.
+- For split transactions, agents must use `PUT /transactions/{id}/allocations`.
+- For single-allocation transactions, `PUT /annotations/{id}` continues to
+  work as before (request body unchanged).
 
-**In Athena's `SKILL.md` (vocabulary discovery, spend rollups):**
+**`GET /spend` and `GET /spend/trends` field rename:**
 
-- Vocabulary discovery section: `GET /categories` and `GET /tags` now draw
-  from `allocations`; agent behavior is unchanged (same API call), but the
-  note that these reflect "annotation vocabulary" should be updated to
-  "allocation vocabulary".
-- Spend rollup section: note that `GET /spend` sums allocation amounts.
-  For M20, this is numerically identical to transaction amounts. In future
-  sprints, a multi-allocation transaction will contribute only its matching
-  allocation amount when filtered by category.
+- The field is now `allocation_count` (was `transaction_count`).
+- Update any playbook or example response that references `transaction_count`.
 
-**In Athena's `checklists/query_playbooks.md`:**
+### Hestia-specific additions
 
-- Update all playbook entries that reference `annotation.*` fields.
+- Ingestion loop step 2: transactions with `allocations.length > 1` have
+  already been split by an operator; Hestia should read (not overwrite)
+  existing allocations on those transactions. Hestia should not call
+  `PUT /annotations/{id}` on a split transaction (it will 409); use
+  `PUT /transactions/{id}/allocations` if re-categorisation is needed.
+- Annotation write checklist: add a pre-flight step — check
+  `allocations.length`; if > 1, route to allocation endpoint instead.
+
+### Athena-specific additions
+
+- Spend rollup note: for split transactions, `GET /spend?category=groceries`
+  correctly sums only the grocery allocation amounts (not the full transaction
+  amount), because spend queries join and filter on `allocations`.
+- Add playbook entry: "Reviewing split transactions" — query
+  `GET /transactions?limit=500` and identify rows where the same `id` appears
+  multiple times (each appearance is one allocation).
 
 ### Done when
 
-- No skill file references `annotation.category`, `annotation.tags`, or
-  `annotation.note`.
-- Both `SKILL.md` files document the `allocation` object shape.
-- `PUT /annotations/{id}` request contract is clearly documented as unchanged.
+- No skill file references `allocation.` (singular dot-access) or
+  `transaction_count`.
+- Both SKILL.md files list `PUT /transactions/{id}/allocations` in approved
+  API calls.
+- `PUT /annotations/{id}` 409 behaviour is documented.
 - Quality gate passes.
 
 ---
 
-## Acceptance criteria for Sprint 22
+## Acceptance criteria for Sprint 23
 
-- `allocations` table exists and is populated for every transaction on
-  startup.
-- `upsert_transaction()` seeds a blank allocation for every new sync.
-- `PUT /annotations/{id}` writes to both `annotations` and `allocations`.
-- All transaction responses (`GET /transactions`, `GET /transactions/{id}`,
-  `PUT /annotations/{id}`) carry `allocation` (not `annotation`).
-- `GET /spend`, `GET /spend/trends` sum `allocations.amount`.
-- `GET /categories` and `GET /tags` draw vocabulary from `allocations`.
-- Existing categorized transactions surface their category/tags through the
-  `allocation` object after migration.
-- Plaid sync logic is unchanged; `transactions` table remains immutable.
+- A transaction can be split into multiple allocations via
+  `PUT /transactions/{id}/allocations`.
+- Allocation amounts always reconcile to the transaction total (auto-corrected
+  within $1.00; rejected if off by more).
+- `GET /transactions/{id}` returns `"allocations": [...]` for all transactions,
+  including split ones.
+- `GET /transactions` list returns one row per allocation; each row has
+  `"allocations": [<one item>]`.
+- `PUT /annotations/{id}` returns 409 for split transactions.
+- `ledger allocations show <id>` displays the current allocation state.
+- `ledger allocations set <id> --file <path>` replaces allocations and
+  confirms the result.
+- `GET /spend` and `GET /spend/trends` responses use `allocation_count`.
+- Both skill bundles reflect the new shape, new endpoint, and restriction.
+- Unmodified (single-allocation) transactions behave identically to Sprint 22.
 - Full quality gate passes with no regressions.
 
 ## Explicitly deferred
 
-- Multi-allocation creation, editing, and deletion (M21).
-- Enforcement of the sum-equals-transaction-amount invariant (M21).
-- Removal of `annotations` table (M23).
-- Renaming `transaction_count` to `allocation_count` in spend responses
-  (revisit in M21 alongside multi-allocation work).
-- Adding a `category` filter to `GET /transactions` (low-priority; revisit
-  after M21 when the allocation model stabilizes).
+- Individual allocation create/patch/delete sub-operations (replace-all is the
+  only write path in M21).
+- `DELETE /transactions/{id}/allocations` to reset to a single seed allocation.
+- `category` filter on `GET /transactions` (revisit after allocation model
+  stabilises).
+- Removal of `annotations` table (M22).
