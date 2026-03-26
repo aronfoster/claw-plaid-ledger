@@ -12,12 +12,16 @@ that allocation amounts always reconcile to the transaction total. Unmodified
 The following decisions were made during sprint planning and must not be
 re-litigated during implementation:
 
-- **Response shape — breaking change** — all transaction responses change from
-  `"allocation": {...}` (single object) to `"allocations": [...]` (array). The
-  array is always present and never null. List rows (`GET /transactions`) always
-  carry a single-element array (one list row = one allocation). Detail views
-  (`GET /transactions/{id}`, `PUT /annotations/{id}`, and the new
-  `PUT /transactions/{id}/allocations`) carry all allocations.
+- **Response shape — breaking change** — two distinct shapes, intentionally
+  different:
+  - `GET /transactions` list: `"allocation": {...}` (singular object). Each list
+    row *is* one (transaction, allocation) pair, so the singular key is accurate.
+    The allocation fields (id, amount, category, tags, note, updated_at) are
+    unchanged; only the key name changes from the M20 shape.
+  - `GET /transactions/{id}` detail, `PUT /annotations/{id}` response, and the
+    new `PUT /transactions/{id}/allocations` response: `"allocations": [...]`
+    (array, never null). For unsplit transactions this array has one element;
+    for split transactions it has all allocations ordered by `id ASC`.
 - **Replace-all API only** — `PUT /transactions/{id}/allocations` accepts an
   array and atomically replaces all existing allocations. No individual
   create/patch/delete sub-operations in this sprint.
@@ -131,16 +135,10 @@ pure response-shape and field-name updates.
 
 ### Transaction list (`db.py` — `_allocation_from_joined_row`)
 
-Rename `_allocation_from_joined_row` to `_allocation_list_from_joined_row` (or
-similar). Update it to return the allocation wrapped in a single-element list:
-
-```python
-# Old shape per list row:
-"allocation": {"id": 5, "amount": ..., ...}
-
-# New shape per list row:
-"allocations": [{"id": 5, "amount": ..., ...}]
-```
+The list endpoint keeps `"allocation": {...}` (singular). Each list row is one
+(transaction, allocation) pair, so the singular key accurately describes what
+the row carries. The field name is **unchanged from M20** — `_allocation_from_joined_row`
+and the projection stay as-is. No edits needed here.
 
 The allocation object fields (id, amount, category, tags, note, updated_at)
 are unchanged.
@@ -189,20 +187,22 @@ is unchanged — only the JSON key name changes.
 
 - `GET /transactions/{id}` — response has `"allocations"` key (array), not
   `"allocation"`.
-- `GET /transactions` list — each row has `"allocations"` key (single-element
-  array for the default 1:1 case).
-- `PUT /annotations/{id}` — response has `"allocations"` key.
+- `GET /transactions` list — each row still has `"allocation"` key (singular,
+  unchanged from M20); verify no regression.
+- `PUT /annotations/{id}` — response has `"allocations"` key (array).
 - `PUT /annotations/{id}` — returns HTTP 409 when the transaction has 2
   allocations; response body contains `"allocation_count": 2`.
 - `GET /spend` — response has `"allocation_count"`, not `"transaction_count"`.
 - `GET /spend/trends` — each bucket has `"allocation_count"`.
-- Update **all** existing tests that check `response["allocation"]` or
-  `result["transaction_count"]` to use the new key names.
+- Update all existing tests that check `response["allocation"]` on the detail
+  endpoint (not the list) or `result["transaction_count"]` to use the new keys.
 
 ### Done when
 
-- No response body anywhere contains `"allocation"` (singular object key) or
-  `"transaction_count"`.
+- `GET /transactions/{id}` and `PUT /annotations/{id}` responses contain
+  `"allocations"` (array); `GET /transactions` list retains `"allocation"`
+  (singular, unchanged).
+- `"transaction_count"` is gone from spend responses.
 - `PUT /annotations/{id}` returns 409 for split transactions.
 - Quality gate passes.
 
@@ -398,21 +398,50 @@ Handle API error responses clearly:
 
 ### What
 
-Update both skill bundles for the new response shape, new endpoint, and
-`PUT /annotations/{id}` restriction. No behavior changes to the agents; this
-is documentation only.
+Update both skill bundles: remove stale annotation-centric guidance, update
+response field references for the detail-view shape change, add the new
+endpoint, and document the `PUT /annotations/{id}` restriction. This is
+documentation-only — no code changes.
 
-### Changes required in both skill bundles
+### Step 1 — Remove annotation-centric skill definitions
 
-**Response shape update (all files that reference `allocation.*`):**
+The skill bundles currently frame `PUT /annotations/{id}` as the primary write
+surface for categorisation. That framing is now obsolete. Remove or replace:
 
-- Replace every reference to `allocation.category`, `allocation.tags`,
-  `allocation.note`, `allocation.amount`, `allocation.id` with the indexed
-  form: `allocations[0].category`, `allocations[0].tags`, etc.
-- Note that `"allocations"` is always an array, never null. For unmodified
-  (single-allocation) transactions, `allocations` has exactly one element.
+- Any checklist or playbook step that positions `PUT /annotations/{id}` as the
+  default or recommended path for writing category/tags/note.
+- Any section header, workflow description, or example that uses the word
+  "annotation" to describe what is now an allocation operation.
+- Any example response body that shows an `"annotation"` key.
 
-Document the updated `allocation` object shape:
+Replace removed content with allocation-first equivalents (see Steps 2–3).
+
+`PUT /annotations/{id}` must still appear in the approved API calls list as a
+**narrow compatibility shim** with a clear caveat: single-allocation
+transactions only; returns 409 if the transaction has been split.
+
+### Step 2 — Response shape update (detail view only)
+
+The list endpoint (`GET /transactions`) retains `"allocation": {...}` (singular,
+unchanged from M20). Only the detail-view endpoints change:
+
+- `GET /transactions/{id}` and `PUT /transactions/{id}/allocations` return
+  `"allocations": [...]` (array).
+
+Update all skill file references to allocation fields that appear in a **detail
+view context**:
+
+- `allocation.category` → `allocations[0].category`
+- `allocation.tags` → `allocations[0].tags`
+- `allocation.note` → `allocations[0].note`
+- `allocation.amount` → `allocations[0].amount`
+- `allocation.id` → `allocations[0].id`
+
+For the list view, `allocation.category` etc. remain correct (singular object).
+Make the context explicit in the skill docs so agents know which shape to
+expect in each context.
+
+Document the detail-view `"allocations"` shape:
 ```json
 "allocations": [
   {
@@ -425,55 +454,62 @@ Document the updated `allocation` object shape:
   }
 ]
 ```
+`"allocations"` is always present and never null. For unsplit transactions it
+has exactly one element.
 
-**`PUT /transactions/{id}/allocations` (new endpoint — add to approved API
-calls in both SKILL.md files):**
+### Step 3 — Document new and changed endpoints
+
+**Add `PUT /transactions/{id}/allocations` to approved API calls:**
 
 - Request: JSON array of `{amount, category?, tags?, note?}` items.
 - Validation: amounts must sum to transaction amount; auto-corrects within
-  $1.00; returns 422 if off by more.
-- Response: full transaction with `"allocations": [...]`.
-- Use when splitting a transaction across categories.
+  $1.00; returns 422 if off by more (error body includes `transaction_amount`,
+  `allocation_total`, `difference`).
+- Response: full transaction detail with `"allocations": [...]`.
+- This is the primary write surface for categorisation going forward.
 
-**`PUT /annotations/{id}` restriction:**
+**Update `PUT /annotations/{id}` entry:**
 
-- Note that this endpoint returns **HTTP 409** if the transaction has more
-  than one allocation.
-- For split transactions, agents must use `PUT /transactions/{id}/allocations`.
-- For single-allocation transactions, `PUT /annotations/{id}` continues to
-  work as before (request body unchanged).
+- Returns HTTP 409 if the transaction has more than one allocation. Do not
+  call this endpoint on split transactions.
+- For all practical purposes, agents should use
+  `PUT /transactions/{id}/allocations` for all allocation writes (it works
+  for both split and unsplit transactions). `PUT /annotations/{id}` is a
+  compatibility shim.
 
 **`GET /spend` and `GET /spend/trends` field rename:**
 
-- The field is now `allocation_count` (was `transaction_count`).
-- Update any playbook or example response that references `transaction_count`.
+- `transaction_count` is now `allocation_count`. Update any example response
+  or playbook that references the old name.
 
-### Hestia-specific additions
+### Step 4 — Hestia-specific guidance
 
-- Ingestion loop step 2: transactions with `allocations.length > 1` have
-  already been split by an operator; Hestia should read (not overwrite)
-  existing allocations on those transactions. Hestia should not call
-  `PUT /annotations/{id}` on a split transaction (it will 409); use
-  `PUT /transactions/{id}/allocations` if re-categorisation is needed.
-- Annotation write checklist: add a pre-flight step — check
-  `allocations.length`; if > 1, route to allocation endpoint instead.
+- Replace the annotation write checklist with an allocation write checklist.
+  The new pre-flight step: check `allocations.length` from the detail view;
+  use `PUT /transactions/{id}/allocations` for all writes (it handles both
+  cases correctly).
+- Ingestion loop: a transaction with `allocations.length > 1` has been split
+  by an operator. Hestia should not overwrite an operator-defined split;
+  flag for Athena review instead.
 
-### Athena-specific additions
+### Step 5 — Athena-specific guidance
 
-- Spend rollup note: for split transactions, `GET /spend?category=groceries`
-  correctly sums only the grocery allocation amounts (not the full transaction
-  amount), because spend queries join and filter on `allocations`.
-- Add playbook entry: "Reviewing split transactions" — query
-  `GET /transactions?limit=500` and identify rows where the same `id` appears
-  multiple times (each appearance is one allocation).
+- Spend rollup: for split transactions, `GET /spend?category=groceries`
+  correctly sums only grocery allocation amounts, not the full transaction
+  amount.
+- Add playbook entry "Reviewing split transactions": in `GET /transactions`
+  list results, the same transaction `id` appears once per allocation; grouping
+  by `id` reveals split transactions and their per-category breakdown.
 
 ### Done when
 
-- No skill file references `allocation.` (singular dot-access) or
-  `transaction_count`.
+- No skill file positions `PUT /annotations/{id}` as the primary write path.
+- No skill file contains stale "annotation" framing for category/tags/note
+  operations.
+- List-view vs. detail-view shape distinction is clearly documented.
 - Both SKILL.md files list `PUT /transactions/{id}/allocations` in approved
   API calls.
-- `PUT /annotations/{id}` 409 behaviour is documented.
+- `allocation_count` replaces `transaction_count` in all examples.
 - Quality gate passes.
 
 ---
@@ -487,7 +523,7 @@ calls in both SKILL.md files):**
 - `GET /transactions/{id}` returns `"allocations": [...]` for all transactions,
   including split ones.
 - `GET /transactions` list returns one row per allocation; each row has
-  `"allocations": [<one item>]`.
+  `"allocation": {...}` (singular, unchanged from M20).
 - `PUT /annotations/{id}` returns 409 for split transactions.
 - `ledger allocations show <id>` displays the current allocation state.
 - `ledger allocations set <id> --file <path>` replaces allocations and
