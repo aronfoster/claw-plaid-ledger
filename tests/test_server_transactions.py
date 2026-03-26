@@ -603,7 +603,10 @@ class TestListTransactionsAnnotations:
     def test_list_allocation_shape_matches_detail_endpoint(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """List and detail both return allocation key with consistent data."""
+        # NOTE (Task 2): detail assertions below check "allocation" (singular).
+        # Task 2 changes the detail endpoint to return "allocations" (array);
+        # update this test at that point.
+        """List and detail return allocation key with consistent data."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -1359,3 +1362,59 @@ class TestFetchTransactionWithAllocations:
         allocs = result["allocations"]
         assert isinstance(allocs, list)
         assert len(allocs) == self._EXPECTED_SINGLE_COUNT
+
+    def test_allocation_fields_present(self, tmp_path: pathlib.Path) -> None:
+        """Each allocation dict contains id, amount, category, note, tags."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE allocations SET category = ?, note = ?, tags = ? "
+                "WHERE plaid_transaction_id = ?",
+                ("food", "lunch", '["dining"]', "tx_1"),
+            )
+            result = _fetch_transaction_with_allocations(conn, "tx_1")
+
+        assert result is not None
+        allocs = result["allocations"]
+        assert isinstance(allocs, list)
+        a = allocs[0]
+        assert "id" in a
+        assert "amount" in a
+        assert a["category"] == "food"
+        assert a["note"] == "lunch"
+        assert a["updated_at"] is not None
+
+    def test_tags_json_parsed_to_list(self, tmp_path: pathlib.Path) -> None:
+        """Tags stored as a JSON string are returned as a Python list."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE allocations SET tags = ? "
+                "WHERE plaid_transaction_id = ?",
+                ('["food","recurring"]', "tx_1"),
+            )
+            result = _fetch_transaction_with_allocations(conn, "tx_1")
+
+        assert result is not None
+        allocs = result["allocations"]
+        assert isinstance(allocs, list)
+        assert allocs[0]["tags"] == ["food", "recurring"]
+
+    def test_null_tags_returned_as_none(self, tmp_path: pathlib.Path) -> None:
+        """Allocations with NULL tags are returned with tags: null."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE allocations SET tags = NULL "
+                "WHERE plaid_transaction_id = ?",
+                ("tx_1",),
+            )
+            result = _fetch_transaction_with_allocations(conn, "tx_1")
+
+        assert result is not None
+        allocs = result["allocations"]
+        assert isinstance(allocs, list)
+        assert allocs[0]["tags"] is None

@@ -1788,6 +1788,45 @@ class TestReplaceAllocations:
             with pytest.raises(ValueError, match="empty"):
                 replace_allocations(conn, "tx-r", [])
 
+    def test_does_not_touch_other_transactions(self, tmp_path: Path) -> None:
+        """Replacing tx-r allocations leaves tx-other allocations intact."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn, tx_id="tx-r")
+            self._seed_transaction(conn, tx_id="tx-other")
+            replace_allocations(
+                conn, "tx-other", [self._row("tx-other", 99.0)]
+            )
+            replace_allocations(conn, "tx-r", [self._row("tx-r", 60.0)])
+            other_allocs = get_allocations_for_transaction(conn, "tx-other")
+
+        assert len(other_allocs) == 1
+        assert other_allocs[0].amount == pytest.approx(99.0)
+
+    def test_fields_are_persisted(self, tmp_path: Path) -> None:
+        """replace_allocations stores category, tags, note, and amount."""
+        db_path = self._db(tmp_path)
+        with sqlite3.connect(db_path) as conn:
+            self._seed_transaction(conn)
+            row = AllocationRow(
+                plaid_transaction_id="tx-r",
+                amount=75.5,
+                category="groceries",
+                tags='["food","weekly"]',
+                note="big shop",
+                created_at=self._NOW,
+                updated_at=self._NOW,
+            )
+            replace_allocations(conn, "tx-r", [row])
+            allocs = get_allocations_for_transaction(conn, "tx-r")
+
+        assert len(allocs) == 1
+        a = allocs[0]
+        assert a.amount == pytest.approx(75.5)
+        assert a.category == "groceries"
+        assert a.tags == '["food","weekly"]'
+        assert a.note == "big shop"
+
 
 # ---------------------------------------------------------------------------
 # query_transactions — allocation-row pagination
