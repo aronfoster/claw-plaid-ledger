@@ -300,7 +300,7 @@ Sprint 22 is complete. The `allocations` table is now the budgeting layer:
   A startup migration backfills allocations for any transaction that lacks one.
 - **Double-write** — `PUT /annotations/{id}` writes to both `annotations` and
   `allocations`. The `annotations` table is preserved for backward compatibility
-  and decommissioned in M23.
+  and decommissioned in M22.
 - **Response shape** — all transaction endpoints (`GET /transactions`,
   `GET /transactions/{id}`, `PUT /annotations/{id}`) now return an `allocation`
   key (never null) instead of `annotation`. The `allocation` object contains
@@ -337,32 +337,7 @@ Sprint 22 is complete. The `allocations` table is now the budgeting layer:
 
 ---
 
-### M22 — Receipt-Assisted Amazon Allocation
-
-**Goal:** use forwarded receipts to propose allocations for mixed Amazon purchases.
-
-#### Deliverables
-
-- Parse forwarded Amazon receipts into candidate line items.
-- Map receipt totals back to the imported Plaid transaction.
-- Convert parsed line items into proposed allocations.
-- Allow review/edit before final save when needed.
-- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles to document receipt-assisted allocation flows, any new endpoints or CLI commands introduced, and when agents should use or surface proposed allocations.
-
-#### Notes
-
-- Receipt parsing proposes allocation structure; it does not replace immutable Plaid transaction data.
-- Automation should build on the allocation model, not invent a second categorization path.
-
-#### Acceptance criteria
-
-- An Amazon transaction can be expanded into multiple allocations derived from receipt contents.
-- Users can correct allocations before committing them.
-- Final saved budgeting data still lives only in `allocations`.
-
----
-
-### M23 — Remove Annotations Table
+### M22 — Remove Annotations Table
 
 **Goal:** simplify the data model by eliminating the now-redundant `annotations`
 table after the allocation migration is complete.
@@ -372,7 +347,7 @@ model (`annotations` + `allocations`) into a single semantic table. In practice,
 transaction-level metadata stored in `annotations` (category, tags, notes) has not
 been pulling its weight as a separate layer — the same information belongs in
 `allocations`, which is already the authoritative budgeting surface. Keeping both
-tables creates dual-write complexity with no benefit. After M20–M22 fully migrate
+tables creates dual-write complexity with no benefit. After M20–M21 fully migrate
 that data, `annotations` becomes dead weight and should be removed entirely.
 
 #### Deliverables
