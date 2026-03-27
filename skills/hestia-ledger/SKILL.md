@@ -67,23 +67,32 @@ Hestia may call only:
 2. `GET /transactions/{id}`
 3. `GET /categories` — discover existing category vocabulary before writing
 4. `GET /tags` — discover existing tag vocabulary before writing
-5. `PUT /annotations/{transaction_id}` — returns the full transaction record
-   with `allocation` (not `annotation`) in the response; no follow-up
-   `GET /transactions/{id}` needed to confirm the written state
-6. `GET /accounts` — retrieve all known accounts with human-readable labels
-7. `PUT /accounts/{account_id}` — write or update a label for an account
-8. `GET /errors` — recent ledger warnings and errors; use as a pre-run
+5. `PUT /transactions/{transaction_id}/allocations` — **primary write surface
+   for category/tags/note.** Atomically replaces all allocations. Works for
+   both unsplit and split transactions. Request body is a JSON array of
+   `{amount, category?, tags?, note?}` items. Response is the full transaction
+   detail with `"allocations": [...]` — no follow-up GET needed to confirm
+   written state.
+6. `PUT /annotations/{transaction_id}` — **compatibility shim: single-allocation
+   transactions only.** Returns HTTP 409 if the transaction has been split.
+   Prefer item 5 (`PUT /transactions/{id}/allocations`) for all writes.
+7. `GET /accounts` — retrieve all known accounts with human-readable labels
+8. `PUT /accounts/{account_id}` — write or update a label for an account
+9. `GET /errors` — recent ledger warnings and errors; use as a pre-run
    health check before each ingestion run
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
 
-## Allocation object shape
+## Allocation response shapes
 
-Every transaction response (`GET /transactions`, `GET /transactions/{id}`,
-`PUT /annotations/{id}`) includes an `allocation` key. It is always present
-(never null). `category`, `tags`, and `note` may be null for uncategorized
-transactions.
+The list and detail endpoints return different shapes. Always check context.
+
+### List view — `GET /transactions`
+
+Each row includes `"allocation": {...}` (singular object). One row per
+(transaction, allocation) pair. `category`, `tags`, and `note` may be null
+for uncategorized transactions.
 
 ```json
 "allocation": {
@@ -96,9 +105,33 @@ transactions.
 }
 ```
 
-`PUT /annotations/{id}` is the write surface for `category`, `tags`, and
-`note`. Its request body is unchanged (`{ "category": ..., "tags": [...],
-"note": ... }`). The response contains `allocation` instead of `annotation`.
+Use `allocation.category`, `allocation.tags`, `allocation.note` when working
+with list results. The `allocation` key is always present (never null).
+
+For split transactions, the same transaction `id` appears once per allocation
+in list results.
+
+### Detail view — `GET /transactions/{id}` and `PUT /transactions/{id}/allocations`
+
+These endpoints return `"allocations": [...]` (array, never null). For unsplit
+transactions the array has exactly one element; for split transactions it
+contains all allocations ordered by `id ASC`.
+
+```json
+"allocations": [
+  {
+    "id": 5,
+    "amount": 60.00,
+    "category": "groceries",
+    "tags": ["household"],
+    "note": "weekly shopping",
+    "updated_at": "2026-03-25T10:00:00+00:00"
+  }
+]
+```
+
+Use `allocations[0].category` etc. when working with detail-view results.
+Check `allocations.length` to detect split transactions.
 
 ## Pagination
 
@@ -142,16 +175,23 @@ For each run:
    flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
 2. Query `GET /transactions` in `view=canonical` and paginate to completion.
-   Each row includes a nested `allocation` field. Use `allocation.category`,
-   `allocation.tags`, and `allocation.note` to screen for missing or stale
-   categorization. The `allocation` object is always present (never null);
-   `category`, `tags`, and `note` within it may be null for uncategorized
-   transactions.
+   Each row includes a nested `allocation` field (singular, list-view shape).
+   Use `allocation.category`, `allocation.tags`, and `allocation.note` to
+   screen for missing or stale categorization. The `allocation` object is
+   always present (never null); `category`, `tags`, and `note` within it may
+   be null for uncategorized transactions. If the same transaction `id` appears
+   in multiple rows, it has been split — drill down before writing.
 3. Identify candidates that are pending, missing expected tags/notes, or marked
    for re-review.
 4. Re-fetch each candidate with `GET /transactions/{id}` before any write.
-5. Write `PUT /annotations/{transaction_id}` only when evidence is specific.
-6. If confidence is low, annotate with `needs-athena-review` and continue.
+   The detail response contains `"allocations": [...]`. Check
+   `allocations.length`: if `> 1`, the transaction has been split by an
+   operator — **do not overwrite the split; flag for Athena review instead.**
+5. Write `PUT /transactions/{transaction_id}/allocations` only when evidence
+   is specific. This endpoint works for both unsplit and split transactions.
+   Do not use `PUT /annotations/{id}` — it returns 409 for split transactions.
+6. If confidence is low, set the allocation with `needs-athena-review` in
+   `tags` and continue.
 
 ## API guardrails
 
@@ -197,19 +237,26 @@ For each run:
 2. Focus on newest records first.
 3. Queue records where `allocation.category`, `allocation.tags`, and
    `allocation.note` are null or stale, or where categorization shows
-   uncertainty. The `allocation` field is included in every list row —
-   no drill-down needed for initial screening.
+   uncertainty. The `allocation` field (singular, list-view shape) is included
+   in every list row — no drill-down needed for initial screening.
+   Note: if the same transaction `id` appears in multiple list rows, it has
+   been split. Drill down with `GET /transactions/{id}` before any write.
 
-### 2) Drill-down before annotation write
+### 2) Drill-down before allocation write
 
 1. Run `GET /transactions/{id}`.
 2. Verify amount, date, pending/posting state, owner context, and existing
-   `allocation` fields (`allocation.category`, `allocation.tags`,
-   `allocation.note`).
-3. If conflicting context remains, run a filtered `GET /transactions` query.
-4. Write annotation only when evidence is sufficient.
-5. `PUT /annotations/{transaction_id}` returns the full transaction record
-   including the updated `allocation` block — no follow-up GET required.
+   allocations: check `allocations.length` and fields on each element
+   (`allocations[0].category`, `allocations[0].tags`, `allocations[0].note`).
+3. **If `allocations.length > 1`**: the transaction has been split by an
+   operator. Do not overwrite. Flag for Athena review with
+   `needs-athena-review` on the existing allocation (use
+   `PUT /transactions/{id}/allocations` preserving all existing allocations
+   plus the new tag). Or escalate without writing.
+4. If conflicting context remains, run a filtered `GET /transactions` query.
+5. Write `PUT /transactions/{transaction_id}/allocations` only when evidence
+   is sufficient. The response contains the full transaction record with the
+   updated `"allocations": [...]` array — no follow-up GET required.
 
 ### 3) Orphaned/discrepancy triage
 
@@ -224,25 +271,34 @@ For each run:
      `cross-source-discrepancy`, `sync-lag-suspected`, or
      `annotation-drift`.
 
-## Annotation policy
+## Allocation write policy
 
-Write annotations only when all are true:
+Write allocations only when all are true:
 
-- transaction was re-fetched in current run,
+- transaction was re-fetched in current run (`GET /transactions/{id}`),
+- `allocations.length == 1` OR the write intentionally preserves/extends
+  an operator-defined split (never silently discard split allocations),
 - note/tag is factual and evidence-based,
-- annotation improves downstream review.
+- allocation write improves downstream review.
 
 Abstain from non-escalation writes when:
 
 - evidence is ambiguous/conflicting,
 - the transaction cannot be re-fetched,
-- confidence is below threshold.
+- confidence is below threshold,
+- the transaction has `allocations.length > 1` and the intent is unclear
+  (flag for Athena instead).
 
-### Required annotation shape
+Always use `PUT /transactions/{id}/allocations` for writes. Do not use
+`PUT /annotations/{id}` — it is a compatibility shim that returns 409 for
+split transactions.
+
+### Required allocation shape
 
 - `tags`: lowercase kebab-case labels.
 - `note`: concise rationale with observed signal + timeframe.
-- optional `owner`: only when confidently known.
+- optional `category`: only when confidently known; use `GET /categories`
+  vocabulary.
 
 For uncertain cases, include `needs-athena-review` in `tags`.
 
@@ -257,5 +313,5 @@ Hestia outputs are operational and machine-checkable:
 
 ## Companion files
 
-- `checklists/annotation_write_checklist.md`
+- `checklists/allocation_write_checklist.md`
 - `checklists/query_playbooks.md`

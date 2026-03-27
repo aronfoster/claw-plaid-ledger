@@ -40,20 +40,30 @@ Reuse these values; do not create near-duplicates.
 
 1. `GET /transactions` with fixed window + `view=canonical`.
 2. Paginate to completion.
-3. Each row includes an `allocation` field. Use `allocation.category`,
-   `allocation.tags`, and `allocation.note` to screen for missing or stale
-   categorization. The `allocation` object is always present (never null);
-   fields within it may be null for uncategorized transactions. No
-   per-record drill-down needed for initial screening.
+3. Each row includes an `allocation` field (singular, list-view shape). Use
+   `allocation.category`, `allocation.tags`, and `allocation.note` to screen
+   for missing or stale categorization. The `allocation` object is always
+   present (never null); fields within it may be null for uncategorized
+   transactions. No per-record drill-down needed for initial screening.
+   If the same transaction `id` appears in multiple list rows, it has been
+   split — drill down with `GET /transactions/{id}` before any write.
 
 ### 2) Drill-down before write
 
-1. `GET /transactions/{id}` to verify current details.
+1. `GET /transactions/{id}` to verify current details. The response contains
+   `"allocations": [...]` (array). Check `allocations.length`:
+   - `== 1`: unsplit transaction, safe to write.
+   - `> 1`: operator-split transaction — **do not overwrite the split** unless
+     explicitly instructed; flag for Athena review instead.
 2. Optional filtered `GET /transactions` to resolve conflicting context.
-3. `PUT /annotations/{transaction_id}` only if evidence is sufficient.
+3. `PUT /transactions/{transaction_id}/allocations` only if evidence is
+   sufficient. This is the correct endpoint for all writes — it handles
+   both unsplit and split transactions.
 4. The PUT response contains the full updated transaction record with an
-   `allocation` block — use it directly to confirm the written state
+   `"allocations": [...]` array — use it directly to confirm the written state
    (no follow-up GET needed).
+5. Do **not** use `PUT /annotations/{transaction_id}` — it is a compatibility
+   shim that returns HTTP 409 for split transactions.
 
 ### 3) Orphan/discrepancy triage with Athena escalation
 
