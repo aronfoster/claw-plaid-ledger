@@ -394,7 +394,7 @@ Handle API error responses clearly:
 
 ---
 
-## Task 5: Skill bundle updates
+## Task 5: Skill bundle updates ✅ DONE
 
 ### What
 

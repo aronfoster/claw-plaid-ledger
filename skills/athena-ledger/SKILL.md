@@ -66,20 +66,33 @@ Athena must not:
 3. `GET /spend`
 4. `GET /categories` — discover the current allocation category vocabulary
 5. `GET /tags` — discover the current allocation tag vocabulary
-6. `PUT /annotations/{transaction_id}` (clarification-only, low volume)
+6. `PUT /annotations/{transaction_id}` — **compatibility shim: single-allocation
+   transactions only.** Returns HTTP 409 if the transaction has been split into
+   multiple allocations. For all practical purposes, use
+   `PUT /transactions/{id}/allocations` instead (it handles both split and unsplit
+   transactions correctly). Clarification-only, low volume.
 7. `GET /accounts` — retrieve all known accounts with human-readable labels
 8. `PUT /accounts/{account_id}` — write or update a label for an account
 9. `GET /spend/trends` — monthly spend buckets for a lookback window;
    supports the same filters as `GET /spend`
 10. `GET /errors` — recent ledger warnings and errors; use for proactive
     alerting and pre-analysis health checks
+11. `PUT /transactions/{id}/allocations` — **primary write surface for
+    category/tags/note.** Atomically replaces all allocations for a transaction.
+    Request body is a JSON array of `{amount, category?, tags?, note?}` items.
+    Amounts must sum to the transaction total (auto-corrects within $1.00; returns
+    422 with `transaction_amount`, `allocation_total`, `difference` if off by more).
+    Response is the full transaction detail with `"allocations": [...]`.
 
-## Allocation object shape
+## Allocation response shapes
 
-Every transaction response (`GET /transactions`, `GET /transactions/{id}`,
-`PUT /annotations/{id}`) includes an `allocation` key. It is always present
-(never null). `category`, `tags`, and `note` may be null for uncategorized
-transactions.
+The list and detail endpoints return different shapes. Always check context.
+
+### List view — `GET /transactions`
+
+Each row includes `"allocation": {...}` (singular object). One row per
+(transaction, allocation) pair. `category`, `tags`, and `note` may be null for
+uncategorized transactions.
 
 ```json
 "allocation": {
@@ -92,9 +105,33 @@ transactions.
 }
 ```
 
-`PUT /annotations/{id}` is the write surface for `category`, `tags`, and
-`note`. Its request body is unchanged (`{ "category": ..., "tags": [...],
-"note": ... }`). The response contains `allocation` instead of `annotation`.
+Use `allocation.category`, `allocation.tags`, `allocation.note` when working
+with list results. The `allocation` key is always present (never null).
+
+For split transactions, the same transaction `id` appears once per allocation
+in list results — grouping by `id` reveals split transactions.
+
+### Detail view — `GET /transactions/{id}` and `PUT /transactions/{id}/allocations`
+
+These endpoints return `"allocations": [...]` (array, never null). For unsplit
+transactions the array has exactly one element; for split transactions it
+contains all allocations ordered by `id ASC`.
+
+```json
+"allocations": [
+  {
+    "id": 5,
+    "amount": 60.00,
+    "category": "groceries",
+    "tags": ["household"],
+    "note": "weekly shopping",
+    "updated_at": "2026-03-25T10:00:00+00:00"
+  }
+]
+```
+
+Use `allocations[0].category` etc. when working with detail-view results.
+Check `allocations.length` to detect split transactions.
 
 ## Pagination
 
@@ -141,14 +178,15 @@ near-duplicate labels (e.g. `groceries` vs `grocery`).
 1. Query `GET /transactions` with `tags=needs-athena-review` + explicit window
    (or `range` shorthand — see workflow 2).
 2. Paginate to completion.
-3. Each transaction in the list response now includes a nested `allocation`
-   field (`id`, `amount`, `category`, `tags`, `note`, `updated_at`). It is
-   always present (never null); `category`, `tags`, and `note` may be null
-   for uncategorized transactions. Use `allocation.category`,
-   `allocation.tags`, and `allocation.note` to triage without a round-trip
-   to `GET /transactions/{id}`.
+3. Each transaction in the list response includes a nested `allocation` field
+   (singular object — list-view shape). It is always present (never null);
+   `category`, `tags`, and `note` may be null for uncategorized transactions.
+   Use `allocation.category`, `allocation.tags`, and `allocation.note` to
+   triage without a round-trip to `GET /transactions/{id}`.
 4. Drill into each priority record with `GET /transactions/{id}` before
-   quoting amounts or annotation details in a final report.
+   quoting amounts or allocation details in a final report. The detail
+   response contains `"allocations": [...]` (array); use `allocations[0]`
+   for unsplit transactions or iterate all elements for split ones.
 5. Classify issue type (spike, missing expected, duplicate, mismatch,
    orphan/discrepancy).
 6. Produce a human-facing assessment and next action.
@@ -175,10 +213,14 @@ Then run matching `GET /transactions` for representative evidence.
 query can use `range=last_month` to mirror the spend call without computing
 explicit dates. List results include `allocation` data directly (no
 drill-down required for initial evidence scanning).
-`GET /spend` sums `allocations.amount`. For M20 (1:1 allocation per
-transaction), totals are numerically identical to transaction amounts. In
-future sprints, a multi-allocation transaction will contribute only its
-matching allocation amount when filtered by category.
+`GET /spend` sums allocation amounts. For split transactions filtered by
+category, only the matching allocation amount is summed — not the full
+transaction amount. This gives accurate per-category totals even when a
+single transaction is split across multiple categories.
+
+`GET /spend` and `GET /spend/trends` responses include `allocation_count`
+(not `transaction_count`) — the count reflects allocation rows, not
+transaction rows.
 Separate posted vs pending observations.  Report totals only for the exact
 queried window (use the `start_date`/`end_date` fields in the response to
 confirm the resolved window).
@@ -220,16 +262,42 @@ If ERROR-level rows are present, include them in the summary and recommend
 the operator investigate. Warnings may be informational — note them but
 do not escalate unless they form a pattern.
 
-## Annotation policy (Athena)
+## Allocation write policy (Athena)
 
-Athena annotations are optional and minimal. Only annotate when:
+Athena allocation writes are optional and minimal. Only write when:
 
 - clarification materially improves future review,
-- transaction was re-fetched in the current run,
+- transaction was re-fetched in the current run (`GET /transactions/{id}`),
 - evidence is specific and confidence is at least medium.
 
-When uncertain, keep or add `needs-athena-review` and document unresolved
+**Pre-flight check before any write:**
+
+1. Re-fetch the transaction with `GET /transactions/{id}`.
+2. Check `allocations.length` in the response.
+3. Use `PUT /transactions/{id}/allocations` for all writes — it handles both
+   unsplit (`allocations.length == 1`) and split (`allocations.length > 1`)
+   transactions correctly.
+4. Do **not** call `PUT /annotations/{id}` on split transactions — it returns
+   HTTP 409.
+
+When uncertain, keep or add `needs-athena-review` tag and document unresolved
 questions instead of guessing.
+
+## Reviewing split transactions
+
+A transaction split by an operator appears once per allocation in
+`GET /transactions` list results. To identify split transactions:
+
+1. In list results, group rows by transaction `id`. Any `id` that appears more
+   than once is a split transaction; each row carries one allocation's category,
+   amount, and tags.
+2. Drill into `GET /transactions/{id}` to see all allocations together in the
+   `"allocations": [...]` array.
+3. For spend rollups: `GET /spend?category=groceries` correctly sums only
+   grocery allocation amounts — not the full transaction amount — so category
+   totals are accurate even for split transactions.
+4. Do not attempt to overwrite an operator-defined split unless explicitly
+   instructed. Flag unusual splits for operator review.
 
 ## Output contract
 
