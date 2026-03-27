@@ -319,7 +319,7 @@ it should not, since this is a PUT, not a GET.
 
 ---
 
-## Task 4: CLI `ledger allocations`
+## Task 4: CLI `ledger allocations` ✅ DONE
 
 ### What
 

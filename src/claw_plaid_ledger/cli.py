@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import http
+import json
 import logging
 import sqlite3
+import sys
 import uuid
 import webbrowser
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
 if TYPE_CHECKING:
     import os
-    from pathlib import Path
 
+import httpx
 import typer
 import uvicorn
 
@@ -20,6 +24,7 @@ from claw_plaid_ledger.config import (
     _VALID_LOG_LEVELS,
     Config,
     ConfigError,
+    load_api_secret,
     load_config,
     load_merged_env,
 )
@@ -876,6 +881,188 @@ def serve() -> None:
     )
 
     uvicorn.run("claw_plaid_ledger.server:app", host=host, port=port)
+
+
+allocations_app = typer.Typer(help="Manage transaction allocations.")
+app.add_typer(allocations_app, name="allocations")
+
+_ALLOC_SEPARATOR = "\u2500" * 46
+
+
+def _allocations_api_config() -> tuple[str, str]:
+    """Return (base_url, api_secret) for the allocations HTTP client."""
+    env = load_merged_env()
+    base_url = (
+        env.get("CLAW_API_BASE_URL") or "http://127.0.0.1:8000"
+    ).rstrip("/")
+    secret = load_api_secret() or ""
+    return base_url, secret
+
+
+def _alloc_amount(alloc: dict[str, object]) -> float:
+    """Safely extract the float amount from an allocation dict."""
+    raw = alloc.get("amount")
+    return float(raw) if isinstance(raw, (int, float)) else 0.0
+
+
+def _format_alloc_row(index: int, alloc: dict[str, object]) -> str:
+    """Format one allocation row for display."""
+    amount = _alloc_amount(alloc)
+    cat_raw = alloc.get("category")
+    category = str(cat_raw) if cat_raw else "(uncategorised)"
+    raw_tags = alloc.get("tags")
+    tags_str = (
+        "[" + ", ".join(str(t) for t in raw_tags) + "]"
+        if isinstance(raw_tags, list)
+        else "(no tags)"
+    )
+    note_raw = alloc.get("note")
+    note_str = str(note_raw) if note_raw else "(no note)"
+    return (
+        f"  #{index}   ${amount:.2f}   {category:<16}{tags_str:<16}{note_str}"
+    )
+
+
+def _format_transaction_allocations(data: dict[str, object]) -> str:
+    """Format a transaction detail response with allocations for display."""
+    tx_id = str(data.get("id") or "")
+    date_str = str(
+        data.get("posted_date") or data.get("authorized_date") or "N/A"
+    )
+    merchant = str(data.get("name") or data.get("merchant_name") or "Unknown")
+    raw_amount = data.get("amount")
+    tx_amount = round(
+        float(raw_amount) if isinstance(raw_amount, (int, float)) else 0.0, 2
+    )
+    raw_allocs = data.get("allocations")
+    allocations: list[dict[str, object]] = (
+        raw_allocs if isinstance(raw_allocs, list) else []
+    )
+
+    lines: list[str] = [
+        f"Transaction: {tx_id}",
+        f"  Date:     {date_str}",
+        f"  Merchant: {merchant}",
+        f"  Amount:   ${tx_amount:.2f}",
+        "",
+        f"Allocations ({len(allocations)}):",
+    ]
+    for i, alloc in enumerate(allocations, 1):
+        lines.append(_format_alloc_row(i, alloc))
+
+    lines.append(f"  {_ALLOC_SEPARATOR}")
+
+    alloc_total = round(sum(_alloc_amount(a) for a in allocations), 2)
+    diff = round(tx_amount - alloc_total, 2)
+    if diff == 0.0:
+        balance = "\u2713 Balanced"
+    else:
+        balance = f"\u26a0 Unbalanced (diff: ${abs(diff):.2f})"
+
+    lines.append(f"  Total: ${alloc_total:.2f}   {balance}")
+    return "\n".join(lines)
+
+
+@allocations_app.command("show")
+def allocations_show(
+    transaction_id: Annotated[
+        str, typer.Argument(help="Plaid transaction ID to inspect.")
+    ],
+) -> None:
+    """Show the current allocation state for a transaction."""
+    base_url, secret = _allocations_api_config()
+    with httpx.Client() as client:
+        response = client.get(
+            f"{base_url}/transactions/{transaction_id}",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+
+    if response.status_code == http.HTTPStatus.UNAUTHORIZED:
+        typer.echo("Authentication failed — check CLAW_API_SECRET")
+        raise SystemExit(1)
+    if response.status_code == http.HTTPStatus.NOT_FOUND:
+        typer.echo(f"Transaction not found: {transaction_id}")
+        raise SystemExit(1)
+    if response.status_code != http.HTTPStatus.OK:
+        typer.echo(
+            f"allocations show: HTTP {response.status_code}: {response.text}"
+        )
+        raise SystemExit(1)
+
+    typer.echo(_format_transaction_allocations(response.json()))
+
+
+@allocations_app.command("set")
+def allocations_set(
+    transaction_id: Annotated[
+        str, typer.Argument(help="Plaid transaction ID to update.")
+    ],
+    file: Annotated[
+        str,
+        typer.Option(
+            "--file",
+            help=(
+                "Path to a JSON file containing the allocation array. "
+                "Pass - to read from stdin."
+            ),
+        ),
+    ],
+) -> None:
+    """Replace all allocations for a transaction from a JSON file."""
+    if file == "-":
+        raw = sys.stdin.read()
+    else:
+        try:
+            raw = Path(file).read_text(encoding="utf-8")
+        except OSError as exc:
+            typer.echo(f"allocations set: could not read file: {exc}")
+            raise SystemExit(1) from exc
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"allocations set: invalid JSON: {exc}")
+        raise SystemExit(1) from exc
+
+    base_url, secret = _allocations_api_config()
+    with httpx.Client() as client:
+        response = client.put(
+            f"{base_url}/transactions/{transaction_id}/allocations",
+            json=body,
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+
+    if response.status_code == http.HTTPStatus.OK:
+        typer.echo(_format_transaction_allocations(response.json()))
+        return
+
+    if response.status_code == http.HTTPStatus.UNAUTHORIZED:
+        typer.echo("Authentication failed — check CLAW_API_SECRET")
+    elif response.status_code == http.HTTPStatus.NOT_FOUND:
+        typer.echo(f"Transaction not found: {transaction_id}")
+    elif response.status_code == http.HTTPStatus.CONFLICT:
+        detail = response.json().get("detail", {})
+        msg = (
+            detail.get("message") if isinstance(detail, dict) else str(detail)
+        )
+        typer.echo(f"allocations set: {msg}")
+    elif response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY:
+        detail = response.json().get("detail")
+        if isinstance(detail, dict) and "transaction_amount" in detail:
+            typer.echo(
+                f"allocations set: allocation amounts do not balance\n"
+                f"  transaction_amount: ${detail['transaction_amount']:.2f}\n"
+                f"  allocation_total:   ${detail['allocation_total']:.2f}\n"
+                f"  difference:         ${detail['difference']:.2f}"
+            )
+        else:
+            typer.echo(f"allocations set: validation error: {detail}")
+    else:
+        typer.echo(
+            f"allocations set: HTTP {response.status_code}: {response.text}"
+        )
+
+    raise SystemExit(1)
 
 
 def main() -> None:
