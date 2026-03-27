@@ -1420,3 +1420,250 @@ class TestFetchTransactionWithAllocations:
         allocs = result["allocations"]
         assert isinstance(allocs, list)
         assert allocs[0]["tags"] is None
+
+
+_TX_2_AMOUNT = 55.0
+
+
+class TestPutTransactionAllocations:
+    """Tests for PUT /transactions/{id}/allocations endpoint."""
+
+    def test_valid_split_returns_both_allocations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Two-allocation split with exact amounts returns both allocations."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/tx_2/allocations",
+            json=[
+                {"amount": 30.0, "category": "groceries"},
+                {"amount": 25.0, "category": "household"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["id"] == "tx_2"
+        allocs = body["allocations"]
+        assert len(allocs) == 2  # noqa: PLR2004
+        assert allocs[0]["category"] == "groceries"
+        assert allocs[1]["category"] == "household"
+
+    def test_single_allocation_degenerate_case(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Single allocation returns one-element allocations array."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[{"amount": _TX_1_AMOUNT, "category": "food"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        allocs = body["allocations"]
+        assert len(allocs) == 1
+        assert allocs[0]["category"] == "food"
+        assert allocs[0]["amount"] == _TX_1_AMOUNT
+
+    def test_autocorrect_short_by_50_cents(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Amounts short by $0.50 are auto-corrected; no 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_2 amount is $55.00; submit $54.50 total
+        response = client.put(
+            "/transactions/tx_2/allocations",
+            json=[
+                {"amount": 30.0, "category": "groceries"},
+                {"amount": 24.5, "category": "household"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        allocs = response.json()["allocations"]
+        # Last allocation auto-corrected from 24.5 to 25.0
+        total = round(sum(a["amount"] for a in allocs), 2)
+        assert total == _TX_2_AMOUNT
+
+    def test_autocorrect_over_by_1_cent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Amounts over by $0.01 are auto-corrected; no 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_1 amount is $12.34; submit $12.35 total
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[{"amount": 12.35, "category": "food"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        allocs = response.json()["allocations"]
+        total = round(sum(a["amount"] for a in allocs), 2)
+        assert total == _TX_1_AMOUNT
+
+    _DIFF_OVER_LIMIT = 1.50
+
+    def test_amounts_differ_by_1_50_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Amounts differ by $1.50 → 422 with error body."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # tx_1 is $12.34; submit $10.84 (diff = $1.50)
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[{"amount": 10.84, "category": "food"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        detail = response.json()["detail"]
+        assert "transaction_amount" in detail
+        assert "allocation_total" in detail
+        assert "difference" in detail
+
+    def test_empty_array_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Empty array body returns 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_extra_field_in_body_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Extra field in body item rejected by Pydantic extra='forbid'."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[{"amount": _TX_1_AMOUNT, "category": "food", "extra": "x"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_unknown_transaction_returns_404(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Unknown transaction_id returns 404."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/unknown_tx/allocations",
+            json=[{"amount": 10.0}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.NOT_FOUND
+
+    def test_missing_token_returns_401(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Missing Authorization header returns 401."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.put(
+            "/transactions/tx_1/allocations",
+            json=[{"amount": _TX_1_AMOUNT}],
+        )
+
+        assert response.status_code == http.HTTPStatus.UNAUTHORIZED
+
+    def test_round_trip_get_matches_put_response(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """After PUT, GET /transactions/{id} returns the same allocations."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        put_response = client.put(
+            "/transactions/tx_2/allocations",
+            json=[
+                {"amount": 30.0, "category": "groceries", "tags": ["food"]},
+                {"amount": 25.0, "category": "household", "note": "soap"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert put_response.status_code == http.HTTPStatus.OK
+        put_allocs = put_response.json()["allocations"]
+
+        get_response = client.get(
+            "/transactions/tx_2",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert get_response.status_code == http.HTTPStatus.OK
+        get_allocs = get_response.json()["allocations"]
+
+        assert get_allocs == put_allocs
+
+    def test_after_split_annotations_returns_409(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """After a split, PUT /annotations/{id} returns 409."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        split_response = client.put(
+            "/transactions/tx_2/allocations",
+            json=[
+                {"amount": 30.0, "category": "groceries"},
+                {"amount": 25.0, "category": "household"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert split_response.status_code == http.HTTPStatus.OK
+
+        ann_response = client.put(
+            "/annotations/tx_2",
+            json={"category": "food"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert ann_response.status_code == http.HTTPStatus.CONFLICT

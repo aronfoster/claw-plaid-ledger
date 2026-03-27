@@ -208,7 +208,7 @@ is unchanged — only the JSON key name changes.
 
 ---
 
-## Task 3: `PUT /transactions/{id}/allocations` endpoint
+## Task 3: `PUT /transactions/{id}/allocations` endpoint ✅ DONE
 
 ### What
 

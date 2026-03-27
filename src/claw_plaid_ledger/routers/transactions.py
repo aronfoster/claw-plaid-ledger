@@ -19,6 +19,7 @@ from claw_plaid_ledger.db import (
     get_allocations_for_transaction,
     get_transaction,
     query_transactions,
+    replace_allocations,
     upsert_annotation,
     upsert_single_allocation,
 )
@@ -274,5 +275,87 @@ def put_annotation(
         )
     if result is None:
         # Should not happen: we verified the transaction exists above.
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return result
+
+
+class AllocationItem(BaseModel):
+    """One allocation item in a PUT /transactions/{id}/allocations request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount: float
+    category: str | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+
+
+@router.put(
+    "/transactions/{transaction_id}/allocations",
+    dependencies=[Depends(require_bearer_token)],
+)
+def put_transaction_allocations(
+    transaction_id: str, body: list[AllocationItem]
+) -> dict[str, object]:
+    """Atomically replace all allocations for a transaction."""
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "at least one allocation is required"},
+        )
+
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        transaction = get_transaction(connection, transaction_id)
+        if transaction is None:
+            raise HTTPException(
+                status_code=404, detail="Transaction not found"
+            )
+
+        # Fetch amount via a direct SELECT so it is typed as Any (sqlite3
+        # cursor row element) rather than object (dict value), avoiding a
+        # type-narrowing issue without a type: ignore bypass.
+        amount_row = connection.execute(
+            "SELECT amount FROM transactions WHERE plaid_transaction_id = ?",
+            (transaction_id,),
+        ).fetchone()
+        tx_amount = round(float(amount_row[0]), 2)
+        total = round(sum(item.amount for item in body), 2)
+        diff = round(tx_amount - total, 2)
+
+        if abs(diff) > 1.00:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "allocation amounts do not balance",
+                    "transaction_amount": tx_amount,
+                    "allocation_total": total,
+                    "difference": diff,
+                },
+            )
+
+        if diff != 0.0:
+            body[-1].amount = round(body[-1].amount + diff, 2)
+
+        now = datetime.now(tz=UTC).isoformat()
+        alloc_rows = [
+            AllocationRow(
+                plaid_transaction_id=transaction_id,
+                amount=item.amount,
+                category=item.category,
+                tags=json.dumps(item.tags) if item.tags is not None else None,
+                note=item.note,
+                created_at=now,
+                updated_at=now,
+            )
+            for item in body
+        ]
+        replace_allocations(connection, transaction_id, alloc_rows)
+        result = _fetch_transaction_with_allocations(
+            connection, transaction_id
+        )
+
+    if result is None:
+        # Should not happen: transaction was verified above.
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
