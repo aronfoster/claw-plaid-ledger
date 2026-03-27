@@ -1933,6 +1933,74 @@ class TestStartupBackfill:
         assert count == 1
         assert row[0] == "Car"
 
+    def test_backfill_insert_copies_tags(self, tmp_path: Path) -> None:
+        """INSERT backfill carries tags JSON string from annotations table."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-tags-insert")
+            self._seed_annotation(
+                conn,
+                "tx-tags-insert",
+                category="Car",
+                note="E-470",
+                tags='["toll", "commute"]',
+            )
+            conn.execute(
+                "DELETE FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-insert'"
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-insert'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470"
+        assert row[2] == '["toll", "commute"]'
+
+    def test_update_migration_restores_tags(self, tmp_path: Path) -> None:
+        """UPDATE migration restores tags JSON string into null-stub allocation."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-tags-update")
+            conn.execute(
+                "INSERT OR REPLACE INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                ("tx-tags-update", 36.85, self._NOW, self._NOW),
+            )
+            self._seed_annotation(
+                conn,
+                "tx-tags-update",
+                category="Car",
+                note="E-470",
+                tags='["toll", "commute"]',
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-update'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470"
+        assert row[2] == '["toll", "commute"]'
+
 
 # ---------------------------------------------------------------------------
 # replace_allocations
