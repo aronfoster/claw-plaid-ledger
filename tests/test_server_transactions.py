@@ -603,10 +603,7 @@ class TestListTransactionsAnnotations:
     def test_list_allocation_shape_matches_detail_endpoint(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        # NOTE (Task 2): detail assertions below check "allocation" (singular).
-        # Task 2 changes the detail endpoint to return "allocations" (array);
-        # update this test at that point.
-        """List and detail return allocation key with consistent data."""
+        """List uses singular 'allocation'; detail uses 'allocations' array."""
         db_path = tmp_path / "db.sqlite"
         _seed_annotation_list_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -624,17 +621,18 @@ class TestListTransactionsAnnotations:
 
         assert list_resp.status_code == http.HTTPStatus.OK
         assert detail_resp.status_code == http.HTTPStatus.OK
-        # Both list and detail return allocation key since Task 3
+        # List returns singular "allocation" object per row
         list_alloc = list_resp.json()["transactions"][0]["allocation"]
         assert list_alloc is not None
         assert list_alloc["category"] == "coffee"
         assert list_alloc["note"] == "morning latte"
         assert list_alloc["tags"] == ["coffee", "recurring"]
-        detail_allocation = detail_resp.json()["allocation"]
-        assert detail_allocation is not None
-        assert detail_allocation["category"] == "coffee"
-        assert detail_allocation["note"] == "morning latte"
-        assert detail_allocation["tags"] == ["coffee", "recurring"]
+        # Detail returns "allocations" array; check first element
+        detail_alloc = detail_resp.json()["allocations"][0]
+        assert detail_alloc is not None
+        assert detail_alloc["category"] == "coffee"
+        assert detail_alloc["note"] == "morning latte"
+        assert detail_alloc["tags"] == ["coffee", "recurring"]
 
     def test_mixed_page_both_rows_have_allocation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -759,8 +757,12 @@ class TestGetTransactionDetailEndpoint:
         assert body["raw_json"] is None
         assert body["suppressed_by"] is None
         assert "annotation" not in body
-        allocation = body["allocation"]
-        assert allocation is not None
+        assert "allocations" in body
+        assert "allocation" not in body
+        allocations = body["allocations"]
+        assert isinstance(allocations, list)
+        assert len(allocations) == 1
+        allocation = allocations[0]
         assert allocation["amount"] == _TX_1_AMOUNT
         assert allocation["category"] is None
         assert allocation["note"] is None
@@ -794,7 +796,7 @@ class TestGetTransactionDetailEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        allocation = response.json()["allocation"]
+        allocation = response.json()["allocations"][0]
         assert allocation is not None
         assert allocation["category"] == "food"
         assert allocation["note"] == "Morning coffee"
@@ -822,7 +824,7 @@ class TestGetTransactionDetailEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json()["allocation"]["tags"] is None
+        assert response.json()["allocations"][0]["tags"] is None
 
     def test_suppressed_transaction_includes_suppressed_by(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path

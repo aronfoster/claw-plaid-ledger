@@ -59,10 +59,10 @@ class TestPutAnnotationEndpoint:
         assert body["account_id"] == "acct_1"
         assert "amount" in body
         assert body["name"] == "Starbucks"
-        assert "allocation" in body
+        assert "allocations" in body
         assert "annotation" not in body
         # Allocation block must reflect values just written
-        allocation = body["allocation"]
+        allocation = body["allocations"][0]
         assert allocation is not None
         assert allocation["category"] == "food"
         assert allocation["note"] == "Morning coffee"
@@ -132,7 +132,7 @@ class TestPutAnnotationEndpoint:
 
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
-        allocation = body["allocation"]
+        allocation = body["allocations"][0]
         assert allocation is not None
         assert allocation["category"] == "transport"
         assert allocation["note"] == "Updated note"
@@ -182,7 +182,7 @@ class TestPutAnnotationEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        assert response.json()["allocation"]["tags"] == []
+        assert response.json()["allocations"][0]["tags"] == []
 
     def test_put_unknown_transaction_returns_404(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -259,7 +259,7 @@ class TestPutAnnotationEndpoint:
         )
 
         assert response.status_code == http.HTTPStatus.OK
-        allocation = response.json()["allocation"]
+        allocation = response.json()["allocations"][0]
         assert allocation is not None
         assert allocation["category"] == "food"
         assert allocation["note"] == "Morning coffee"
@@ -310,7 +310,41 @@ class TestPutAnnotationEndpoint:
 
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
-        assert "allocation" in body
+        assert "allocations" in body
         assert "annotation" not in body
-        assert body["allocation"]["category"] == "food"
-        assert body["allocation"]["amount"] == _TX_1_AMOUNT
+        assert body["allocations"][0]["category"] == "food"
+        assert body["allocations"][0]["amount"] == _TX_1_AMOUNT
+
+    _EXPECTED_SPLIT_COUNT = 2
+
+    def test_put_returns_409_for_split_transaction(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """PUT /annotations/{id} returns 409 for a split transaction."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        # _seed_transactions inserts one allocation for tx_1; add a second
+        # to make it a split (>1 allocation triggers the 409).
+        now = "2024-01-01T00:00:00+00:00"
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "INSERT INTO allocations "
+                "(plaid_transaction_id, amount, "
+                "category, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("tx_1", 6.17, "drinks", now, now),
+            )
+
+        response = client.put(
+            "/annotations/tx_1",
+            json={"category": "food"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.CONFLICT
+        detail = response.json()["detail"]
+        assert detail["allocation_count"] == self._EXPECTED_SPLIT_COUNT
+        assert "allocation" in detail["message"].lower()

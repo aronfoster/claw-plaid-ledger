@@ -351,7 +351,7 @@ class TestGetSpendEndpoint:
     def test_basic_spend_in_window(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Basic window returns correct total_spend and transaction_count."""
+        """Basic window returns correct total_spend and allocation_count."""
         db_path = tmp_path / "db.sqlite"
         _seed_spend_data(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -369,7 +369,7 @@ class TestGetSpendEndpoint:
         assert body["start_date"] == "2025-01-01"
         assert body["end_date"] == "2025-01-31"
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_CANONICAL_COUNT
         assert body["includes_pending"] is False
         assert body["filters"]["owner"] is None
         assert body["filters"]["tags"] == []
@@ -392,7 +392,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == 0.0
-        assert body["transaction_count"] == 0
+        assert body["allocation_count"] == 0
 
     def test_single_tag_filter(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -417,7 +417,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_GROCERIES_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_GROCERIES_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_GROCERIES_COUNT
         assert body["filters"]["tags"] == ["groceries"]
 
     def test_two_tag_and_filter(
@@ -446,7 +446,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_two_tag_total)
-        assert body["transaction_count"] == _two_tag_count
+        assert body["allocation_count"] == _two_tag_count
 
     def test_tag_no_match_returns_zeros(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -470,7 +470,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == 0.0
-        assert body["transaction_count"] == 0
+        assert body["allocation_count"] == 0
 
     def test_include_pending_false_excludes_pending(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -495,7 +495,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_CANONICAL_COUNT
         assert body["includes_pending"] is False
 
     def test_include_pending_true_includes_pending(
@@ -521,7 +521,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_PENDING_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_PENDING_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_PENDING_COUNT
         assert body["includes_pending"] is True
 
     def test_owner_filter(
@@ -548,7 +548,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_ALICE_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_ALICE_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_ALICE_COUNT
         assert body["filters"]["owner"] == "alice"
 
     def test_view_raw_includes_suppressed_accounts(
@@ -574,7 +574,7 @@ class TestGetSpendEndpoint:
         assert response.status_code == http.HTTPStatus.OK
         body = response.json()
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_RAW_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_RAW_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_RAW_COUNT
 
     def test_view_canonical_excludes_suppressed_accounts(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -598,7 +598,7 @@ class TestGetSpendEndpoint:
 
         assert response.status_code == http.HTTPStatus.OK
         assert (
-            response.json()["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+            response.json()["allocation_count"] == _SPEND_JAN_CANONICAL_COUNT
         )
         assert response.json()["total_spend"] == pytest.approx(
             _SPEND_JAN_CANONICAL_TOTAL
@@ -831,7 +831,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_ACCT_ALICE_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
 
     def test_unknown_account_id_returns_zero(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -841,7 +841,7 @@ class TestGetSpendEnrichedFilters:
             monkeypatch, tmp_path, {"account_id": "acct_unknown"}
         )
         assert body["total_spend"] == 0.0
-        assert body["transaction_count"] == 0
+        assert body["allocation_count"] == 0
 
     def test_category_filter_restricts_spend(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -853,7 +853,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_CATEGORY_FOOD_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
 
     def test_category_filter_case_insensitive(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -865,7 +865,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_CATEGORY_FOOD_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
 
     def test_tag_filter_restricts_spend(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -877,7 +877,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_TAG_GROCERIES_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
 
     def test_tag_filter_case_insensitive(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -889,7 +889,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_TAG_GROCERIES_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_TAG_GROCERIES_COUNT
 
     def test_category_and_tag_and_semantics(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -899,7 +899,7 @@ class TestGetSpendEnrichedFilters:
             monkeypatch, tmp_path, {"category": "food", "tag": "food"}
         )
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_TAG_FOOD_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_TAG_FOOD_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_TAG_FOOD_COUNT
 
     def test_account_id_and_category_and_semantics(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -913,7 +913,7 @@ class TestGetSpendEnrichedFilters:
         assert body["total_spend"] == pytest.approx(
             _SPEND_JAN_ACCT_ALICE_TOTAL
         )
-        assert body["transaction_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_ACCT_ALICE_COUNT
 
     def test_no_new_filters_unchanged_behavior(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -921,7 +921,7 @@ class TestGetSpendEnrichedFilters:
         """Omitting new filters does not change existing behavior."""
         body = self.get_spend_response(monkeypatch, tmp_path, {})
         assert body["total_spend"] == pytest.approx(_SPEND_JAN_CANONICAL_TOTAL)
-        assert body["transaction_count"] == _SPEND_JAN_CANONICAL_COUNT
+        assert body["allocation_count"] == _SPEND_JAN_CANONICAL_COUNT
 
     def test_filters_field_always_includes_new_keys(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -1035,7 +1035,7 @@ class TestGetSpendUsesAllocationAmount:
         body = response.json()
         # Must reflect allocation amount (42.0), not transaction amount (100.0)
         assert body["total_spend"] == pytest.approx(42.0)
-        assert body["transaction_count"] == 1
+        assert body["allocation_count"] == 1
 
 
 # ---------------------------------------------------------------------------

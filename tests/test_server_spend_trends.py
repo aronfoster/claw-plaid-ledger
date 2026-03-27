@@ -411,9 +411,9 @@ class TestGetSpendTrendsEndpoint:
         )
         buckets = {b["month"]: b for b in response.json()}
         assert buckets["2025-10"]["total_spend"] == 0.0
-        assert buckets["2025-10"]["transaction_count"] == 0
+        assert buckets["2025-10"]["allocation_count"] == 0
         assert buckets["2025-11"]["total_spend"] == 0.0
-        assert buckets["2025-11"]["transaction_count"] == 0
+        assert buckets["2025-11"]["allocation_count"] == 0
 
     # --- Totals sanity ---
 
@@ -452,7 +452,7 @@ class TestGetSpendTrendsEndpoint:
         buckets = {b["month"]: b for b in response.json()}
         # Dec 2025: only tx_t1 (alice=100), not tx_t2 (bob=200)
         assert buckets["2025-12"]["total_spend"] == pytest.approx(100.0)
-        assert buckets["2025-12"]["transaction_count"] == 1
+        assert buckets["2025-12"]["allocation_count"] == 1
         # Feb 2026: only tx_t4 (alice=80), not tx_t5 (bob=300)
         assert buckets["2026-02"]["total_spend"] == pytest.approx(80.0)
 
@@ -468,9 +468,9 @@ class TestGetSpendTrendsEndpoint:
         )
         buckets = {b["month"]: b for b in response.json()}
         assert buckets["2025-12"]["total_spend"] == pytest.approx(200.0)
-        assert buckets["2025-12"]["transaction_count"] == 1
+        assert buckets["2025-12"]["allocation_count"] == 1
         assert buckets["2026-01"]["total_spend"] == 0.0
-        assert buckets["2026-01"]["transaction_count"] == 0
+        assert buckets["2026-01"]["allocation_count"] == 0
 
     def test_filter_category_case_insensitive(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -487,7 +487,7 @@ class TestGetSpendTrendsEndpoint:
             assert buckets["2026-02"]["total_spend"] == pytest.approx(80.0), (
                 f"category={cat_val!r} should match tx_t4"
             )
-            assert buckets["2026-02"]["transaction_count"] == 1
+            assert buckets["2026-02"]["allocation_count"] == 1
 
     def test_filter_tag_case_insensitive(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
@@ -517,7 +517,7 @@ class TestGetSpendTrendsEndpoint:
         )
         buckets = {b["month"]: b for b in response.json()}
         assert buckets["2026-02"]["total_spend"] == pytest.approx(80.0)
-        assert buckets["2026-02"]["transaction_count"] == 1
+        assert buckets["2026-02"]["allocation_count"] == 1
 
     def test_filter_view_raw_includes_suppressed(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path

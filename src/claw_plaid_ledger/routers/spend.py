@@ -128,12 +128,12 @@ def get_spend(
         tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:
-        total_spend, transaction_count = query_spend(connection, spend_query)
+        total_spend, allocation_count = query_spend(connection, spend_query)
     return {
         "start_date": resolved_start.isoformat(),
         "end_date": resolved_end.isoformat(),
         "total_spend": total_spend,
-        "transaction_count": transaction_count,
+        "allocation_count": allocation_count,
         "includes_pending": include_pending,
         "filters": {
             "owner": params.owner,
