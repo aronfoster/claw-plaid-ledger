@@ -1733,7 +1733,8 @@ class TestStartupBackfill:
     ) -> None:
         conn.execute(
             "INSERT INTO annotations "
-            "(plaid_transaction_id, category, note, tags, created_at, updated_at) "
+            "(plaid_transaction_id, category, note, tags, "
+            "created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (tx_id, category, note, tags, self._NOW, self._NOW),
         )
@@ -1745,7 +1746,7 @@ class TestStartupBackfill:
     def test_backfill_insert_copies_annotation_data(
         self, tmp_path: Path
     ) -> None:
-        """INSERT backfill carries category/note/tags from annotations table."""
+        """INSERT backfill carries annotation data into new allocation."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1776,7 +1777,7 @@ class TestStartupBackfill:
     def test_backfill_insert_no_annotation_leaves_fields_null(
         self, tmp_path: Path
     ) -> None:
-        """INSERT backfill without annotation produces null category/note/tags."""
+        """INSERT backfill with no annotation leaves fields null."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1784,7 +1785,8 @@ class TestStartupBackfill:
             self._seed_account(conn)
             self._seed_transaction(conn, "tx-no-ann")
             conn.execute(
-                "DELETE FROM allocations WHERE plaid_transaction_id = 'tx-no-ann'"
+                "DELETE FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-no-ann'"
             )
 
         initialize_database(db_path)
@@ -1807,7 +1809,7 @@ class TestStartupBackfill:
     def test_update_migration_restores_annotation_into_null_stub(
         self, tmp_path: Path
     ) -> None:
-        """UPDATE migration fills null-stub allocation from annotations table."""
+        """UPDATE migration restores annotation data into null stubs."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1819,7 +1821,8 @@ class TestStartupBackfill:
             conn.execute(
                 "INSERT OR REPLACE INTO allocations "
                 "(plaid_transaction_id, amount, category, note, tags, "
-                "created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
                 ("tx-restore", 36.85, self._NOW, self._NOW),
             )
             self._seed_annotation(conn, "tx-restore")
@@ -1839,7 +1842,7 @@ class TestStartupBackfill:
     def test_update_migration_does_not_overwrite_existing_allocation_data(
         self, tmp_path: Path
     ) -> None:
-        """UPDATE migration skips allocations that already have category data."""
+        """UPDATE migration skips allocations with existing data."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1851,7 +1854,14 @@ class TestStartupBackfill:
                 "(plaid_transaction_id, amount, category, note, tags, "
                 "created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, NULL, ?, ?)",
-                ("tx-has-data", 36.85, "Tolls", "manually set", self._NOW, self._NOW),
+                (
+                    "tx-has-data",
+                    36.85,
+                    "Tolls",
+                    "manually set",
+                    self._NOW,
+                    self._NOW,
+                ),
             )
             # Annotation exists but has different data
             self._seed_annotation(
@@ -1873,19 +1883,20 @@ class TestStartupBackfill:
     def test_update_migration_does_not_touch_split_allocations(
         self, tmp_path: Path
     ) -> None:
-        """UPDATE migration skips transactions with more than one allocation."""
+        """UPDATE migration skips split transactions (count > 1)."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
         with sqlite3.connect(db_path) as conn:
             self._seed_account(conn)
             self._seed_transaction(conn, "tx-split", amount=100.0)
-            # Two null-stub allocations (simulates a split whose data got wiped)
+            # Two null-stub allocations (bad-backfill on a split)
             for amt in (60.0, 40.0):
                 conn.execute(
                     "INSERT INTO allocations "
                     "(plaid_transaction_id, amount, category, note, tags, "
-                    "created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
                     ("tx-split", amt, self._NOW, self._NOW),
                 )
             self._seed_annotation(conn, "tx-split")
@@ -1902,7 +1913,7 @@ class TestStartupBackfill:
         assert all(row[0] is None for row in rows)
 
     def test_update_migration_is_idempotent(self, tmp_path: Path) -> None:
-        """Running initialize_database again after restore keeps count stable."""
+        """Second initialize_database keeps count and data stable."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1912,7 +1923,8 @@ class TestStartupBackfill:
             conn.execute(
                 "INSERT OR REPLACE INTO allocations "
                 "(plaid_transaction_id, amount, category, note, tags, "
-                "created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
                 ("tx-idem", 20.0, self._NOW, self._NOW),
             )
             self._seed_annotation(conn, "tx-idem")
@@ -1967,7 +1979,7 @@ class TestStartupBackfill:
         assert row[2] == '["toll", "commute"]'
 
     def test_update_migration_restores_tags(self, tmp_path: Path) -> None:
-        """UPDATE migration restores tags JSON string into null-stub allocation."""
+        """UPDATE migration restores tags JSON from annotations into stub."""
         db_path = tmp_path / "ledger.db"
         initialize_database(db_path)
 
@@ -1977,7 +1989,8 @@ class TestStartupBackfill:
             conn.execute(
                 "INSERT OR REPLACE INTO allocations "
                 "(plaid_transaction_id, amount, category, note, tags, "
-                "created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
                 ("tx-tags-update", 36.85, self._NOW, self._NOW),
             )
             self._seed_annotation(
