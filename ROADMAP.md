@@ -205,7 +205,7 @@ without manual stitching:
 - **BUG-011** — `GET /spend/trends` returns a plain JSON array of monthly
   bucket objects (oldest → newest), zero-filling months with no qualifying
   transactions. Each bucket contains `month` (YYYY-MM), `total_spend`,
-  `transaction_count`, and `partial` (true only on the current in-progress
+  `allocation_count`, and `partial` (true only on the current in-progress
   month). The `months` parameter (default 6, minimum 1, no upper bound)
   controls the lookback window. All seven filter parameters from `GET /spend`
   (`owner`, `tags`, `category`, `tag`, `account_id`, `view`,
@@ -294,7 +294,7 @@ Sprint 22 is complete. The `allocations` table is now the budgeting layer:
 
 - **`allocations` table** — `id`, `plaid_transaction_id`, `amount`, `category`,
   `tags`, `note`, `created_at`, `updated_at`. No UNIQUE constraint on
-  `plaid_transaction_id` (M21 will add multi-allocation support).
+  `plaid_transaction_id` (multi-allocation support added in M21).
 - **`upsert_transaction()` seeding** — every new transaction automatically gets a
   blank allocation row (`amount = transaction.amount`, semantic fields null).
   A startup migration backfills allocations for any transaction that lacks one.
@@ -314,28 +314,32 @@ Sprint 22 is complete. The `allocations` table is now the budgeting layer:
   `skills/athena-ledger/` reflect the allocation model; no skill file references
   `annotation.category`, `annotation.tags`, or `annotation.note`.
 
+### M21 — Manual Allocation Editing (Sprint 23)
+
+Sprint 23 is complete. Multi-allocation transactions are now fully usable:
+
+- **`PUT /transactions/{id}/allocations`** — atomically replaces all
+  allocations for a transaction with a validated set. Amounts are
+  auto-corrected within $1.00; returns HTTP 422 if the difference exceeds
+  $1.00. This is the primary write surface for all allocation edits.
+- **Response shape** — `GET /transactions/{id}` and
+  `PUT /transactions/{id}/allocations` return `"allocations": [...]` (array,
+  never null). The list endpoint (`GET /transactions`) retains
+  `"allocation": {...}` per row.
+- **`PUT /annotations/{id}` restriction** — returns HTTP 409 for split
+  transactions; single-allocation transactions continue to work as before.
+- **`allocation_count`** — `GET /spend` and `GET /spend/trends` rename the
+  count field from `transaction_count` to `allocation_count`.
+- **CLI** — `ledger allocations show <id>` displays the current allocation
+  state; `ledger allocations set <id> --file <path>` replaces allocations
+  from a JSON file (or stdin with `--file -`).
+- **Skill bundles** — both `skills/hestia-ledger/` and `skills/athena-ledger/`
+  updated with the new endpoint, response shapes, and allocation-first
+  write guidance.
+
 ---
 
 ## Upcoming Milestones
-
-### M21 — Manual Allocation Editing
-
-**Goal:** make multi-allocation transactions usable before any receipt automation exists.
-
-#### Deliverables
-
-- Add API and/or CLI support for creating, updating, and deleting allocations for a transaction.
-- Show raw transaction totals alongside allocation totals for validation.
-- Prevent saving allocations whose amounts do not reconcile to the parent transaction.
-- Update `skills/athena-ledger/` and `skills/hestia-ledger/` skill bundles with the new allocation editing endpoints, validation behavior, and relevant playbook entries.
-
-#### Acceptance criteria
-
-- A user can take one imported transaction and allocate it across multiple categories.
-- Validation prevents under- or over-allocation.
-- Unmodified transactions still behave as a single-allocation case.
-
----
 
 ### M22 — Remove Annotations Table
 

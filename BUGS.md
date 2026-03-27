@@ -378,10 +378,12 @@ following behaviour:
 
 **Fix:** Implemented `GET /spend/trends` as a GROUP BY month query over the
 same filtered transaction set used by `GET /spend`. Returns a plain JSON
-array of `{month, total_spend, transaction_count, partial}` objects ordered
+array of `{month, total_spend, allocation_count, partial}` objects ordered
 oldest → newest, zero-filled for months with no matching transactions. The
 `months` parameter (default 6, minimum 1) controls the lookback window.
 Supports all seven filters from `GET /spend`. No schema changes required.
+(Note: the count field was originally named `transaction_count`; renamed to
+`allocation_count` in M21/Sprint 23 to reflect allocation-row semantics.)
 
 ---
 
