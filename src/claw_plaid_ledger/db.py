@@ -47,18 +47,57 @@ def initialize_database(db_path: Path) -> None:
 
         # Backfill allocations for transactions that have no allocation row.
         # This catches transactions synced before the allocations table
-        # existed. The NOT EXISTS guard makes this idempotent on startups.
+        # existed. LEFT JOIN annotations so any existing category/note/tags
+        # are carried over rather than inserted as nulls. The NOT EXISTS
+        # guard makes this idempotent on startups.
         backfill_now = _utc_now_iso()
         connection.execute(
             "INSERT INTO allocations "
-            "(plaid_transaction_id, amount, created_at, updated_at) "
-            "SELECT t.plaid_transaction_id, t.amount, ?, ? "
+            "(plaid_transaction_id, amount, category, note, tags, "
+            "created_at, updated_at) "
+            "SELECT t.plaid_transaction_id, t.amount, "
+            "an.category, an.note, an.tags, ?, ? "
             "FROM transactions t "
+            "LEFT JOIN annotations an "
+            "ON an.plaid_transaction_id = t.plaid_transaction_id "
             "WHERE NOT EXISTS ("
             "SELECT 1 FROM allocations a "
             "WHERE a.plaid_transaction_id = t.plaid_transaction_id"
             ")",
             (backfill_now, backfill_now),
+        )
+
+        # Restore annotation data into allocation stubs that were created by
+        # the old backfill (which did not JOIN annotations). Only touches
+        # single-allocation rows where every annotatable field is still null
+        # but annotation data exists — safe to re-run on every startup.
+        connection.execute(
+            "UPDATE allocations "
+            "SET category = ("
+            "  SELECT an.category FROM annotations an"
+            "  WHERE an.plaid_transaction_id = allocations.plaid_transaction_id"
+            "), "
+            "note = ("
+            "  SELECT an.note FROM annotations an"
+            "  WHERE an.plaid_transaction_id = allocations.plaid_transaction_id"
+            "), "
+            "tags = ("
+            "  SELECT an.tags FROM annotations an"
+            "  WHERE an.plaid_transaction_id = allocations.plaid_transaction_id"
+            "), "
+            "updated_at = ? "
+            "WHERE category IS NULL AND note IS NULL AND tags IS NULL "
+            "AND EXISTS ("
+            "  SELECT 1 FROM annotations an"
+            "  WHERE an.plaid_transaction_id = allocations.plaid_transaction_id"
+            "  AND (an.category IS NOT NULL"
+            "       OR an.note IS NOT NULL"
+            "       OR an.tags IS NOT NULL)"
+            ") "
+            "AND (SELECT COUNT(*) FROM allocations a2"
+            "     WHERE a2.plaid_transaction_id = allocations.plaid_transaction_id"
+            ") = 1",
+            (backfill_now,),
         )
         connection.commit()
 
