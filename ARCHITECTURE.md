@@ -27,7 +27,8 @@
   (`WebhookIPAllowlistMiddleware`)
 - Router package (`routers/`) — domain-scoped `APIRouter` modules:
   `health.py` (`GET /health`, `GET /errors`), `transactions.py`
-  (`GET /transactions`, `GET /transactions/{id}`, `PUT /annotations/{id}`),
+  (`GET /transactions`, `GET /transactions/{id}`, `PUT /annotations/{id}`,
+  `PUT /transactions/{id}/allocations`),
   `spend.py` (`GET /spend`, `GET /spend/trends`), `accounts.py`
   (`GET /accounts`, `PUT /accounts/{id}`, `GET /categories`, `GET /tags`),
   `webhooks.py` (`POST /webhooks/plaid`, `_background_sync`, scheduled-sync
@@ -166,7 +167,7 @@ Zero-change syncs skip the notification entirely.
 - CLI commands orchestrate workflows but should not contain raw Plaid API setup.
 - The `annotations` table is entirely agent-owned; the sync engine must never
   read from or write to it.
-- The `allocations` table is the budgeting layer; `annotations` continues to receive double-writes and is decommissioned in M23.
+- The `allocations` table is the budgeting layer; `annotations` continues to receive double-writes (via `PUT /annotations/{id}`) and is decommissioned in M22.
 - Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) are immutable
   from the agent's perspective.
 
@@ -180,7 +181,7 @@ Zero-change syncs skip the notification entirely.
 - `account_label` (agent/operator-owned; sync engine never touches this)
 - `transaction`
 - `annotation` (agent-owned; sync engine never touches this; continues to receive double-writes until M23)
-- `allocation` (budgeting layer; seeded by sync engine via `upsert_transaction`; written via `PUT /annotations/{transaction_id}`)
+- `allocation` (budgeting layer; seeded by sync engine via `upsert_transaction`; written via `PUT /transactions/{id}/allocations` or the compatibility shim `PUT /annotations/{transaction_id}`)
 - `sync_state`
 - `ledger_errors` (server-owned; written by `LedgerDbHandler`; read via `GET /errors`)
 
@@ -607,7 +608,7 @@ supplied either as explicit ISO dates or as a named range shorthand.
   "start_date": "2025-01-01",
   "end_date": "2025-01-31",
   "total_spend": 1234.56,
-  "transaction_count": 42,
+  "allocation_count": 42,
   "includes_pending": false,
   "filters": {
     "owner": "alice",
@@ -620,8 +621,8 @@ supplied either as explicit ISO dates or as a named range shorthand.
 ```
 
 - `total_spend` is the arithmetic sum of `amount` (Plaid sign convention is preserved).
-- `transaction_count` is the number of matching rows before aggregation.
-- Empty windows return zeros (`total_spend=0`, `transaction_count=0`) not `null`.
+- `allocation_count` is the number of matching allocation rows before aggregation.
+- Empty windows return zeros (`total_spend=0`, `allocation_count=0`) not `null`.
 
 ### `GET /spend/trends`
 
@@ -646,16 +647,16 @@ month with no qualifying transactions.
 
 ```json
 [
-  {"month": "2025-10", "total_spend": 3241.50, "transaction_count": 47, "partial": false},
-  {"month": "2026-03", "total_spend": 850.00,  "transaction_count": 12, "partial": true}
+  {"month": "2025-10", "total_spend": 3241.50, "allocation_count": 47, "partial": false},
+  {"month": "2026-03", "total_spend": 850.00,  "allocation_count": 12, "partial": true}
 ]
 ```
 
 - `month` — `YYYY-MM` label for the calendar month.
-- `total_spend` — arithmetic sum of `amount` for matching transactions (Plaid sign convention preserved).
-- `transaction_count` — number of matching rows.
+- `total_spend` — arithmetic sum of `amount` for matching allocation rows (Plaid sign convention preserved).
+- `allocation_count` — number of matching allocation rows.
 - `partial` — `true` only on the current in-progress month; `false` on all complete prior months.
-- Months with no qualifying transactions appear as `{"total_spend": 0.0, "transaction_count": 0}` — they are never omitted.
+- Months with no qualifying transactions appear as `{"total_spend": 0.0, "allocation_count": 0}` — they are never omitted.
 - `?months=0` or `?months=-1` returns HTTP 422.
 
 All seven filter parameters produce results directly comparable to a matching
@@ -663,7 +664,7 @@ point-in-time `GET /spend` call over the same window and filters.
 
 ### `GET /transactions/{transaction_id}`
 
-Returns full detail for one transaction, including an allocation block.
+Returns full detail for one transaction, including all allocations.
 `transaction_id` in the path is the `plaid_transaction_id` string.
 
 Returns HTTP 404 if not found.
@@ -681,26 +682,62 @@ Returns HTTP 404 if not found.
   "pending": false,
   "date": "2024-01-15",
   "raw_json": "{...}",
-  "allocation": {
-    "id": 1,
-    "amount": 12.34,
-    "category": "food",
-    "note": "Morning coffee",
-    "tags": ["discretionary", "recurring"],
-    "updated_at": "2024-01-16T10:30:00Z"
-  }
+  "allocations": [
+    {
+      "id": 1,
+      "amount": 12.34,
+      "category": "food",
+      "note": "Morning coffee",
+      "tags": ["discretionary", "recurring"],
+      "updated_at": "2024-01-16T10:30:00Z"
+    }
+  ]
 }
 ```
 
-- `allocation` is always present (never null); `category`, `tags`, and `note` within it may be null for uncategorized transactions.
+- `allocations` is always present and never null. For unsplit transactions it
+  has exactly one element; for split transactions it has all allocations ordered
+  by `id ASC`.
+- `category`, `tags`, and `note` within each allocation element may be null for
+  uncategorized transactions.
 - `tags` in the response is a parsed JSON list (not the raw text stored in
   SQLite); if stored value is `null`, returns `null` for tags.
 - `raw_json` is the raw Plaid API payload stored at sync time; may be `null`
   for transactions synced before this field was populated.
 
+The list endpoint (`GET /transactions`) retains the singular `"allocation": {...}`
+key per row — each list row is one (transaction, allocation) pair.
+
+### `PUT /transactions/{transaction_id}/allocations`
+
+Atomically replaces all allocations for a transaction with a new set.
+`transaction_id` in the path is the `plaid_transaction_id` string.
+
+**Request body** — JSON array of allocation items:
+
+```json
+[
+  {"amount": 60.00, "category": "groceries", "tags": ["household"], "note": "food"},
+  {"amount": 40.00, "category": "household"}
+]
+```
+
+- Each item: `amount` (required), `category` / `tags` / `note` (optional).
+- Extra fields are rejected (Pydantic `extra="forbid"`).
+- Amounts are auto-corrected if the difference from `transaction.amount` is
+  ≤ $1.00 (last item silently adjusted). Returns HTTP 422 if the difference
+  exceeds $1.00.
+- Returns HTTP 422 for an empty array.
+- Returns HTTP 404 if `transaction_id` does not exist.
+- Returns HTTP 200 with the full transaction detail (same shape as
+  `GET /transactions/{transaction_id}`, including `"allocations": [...]`).
+- This is the **primary write surface** for allocation data (works for both
+  split and unsplit transactions).
+
 ### `PUT /annotations/{transaction_id}`
 
-Creates or fully replaces an annotation for a transaction.
+Compatibility shim — single-allocation transactions only. Creates or fully
+replaces the annotation and allocation for a transaction.
 `transaction_id` in the path is the `plaid_transaction_id` string.
 
 This is a **full replace**, not a partial PATCH: every PUT completely overwrites
@@ -718,11 +755,12 @@ the annotation row. Omitted fields are stored as `null`.
 
 - `tags` must be a JSON array of strings or `null`.
 - Returns HTTP 404 if `transaction_id` does not exist in `transactions`.
-  Agents cannot annotate phantom transactions.
+- Returns **HTTP 409** if the transaction has more than one allocation —
+  use `PUT /transactions/{id}/allocations` for split transactions.
 - Returns HTTP 200 with the full transaction record (same shape as
   `GET /transactions/{transaction_id}`) on successful create or update.
-  The `allocation` block in the response always reflects the values just
-  written — it is never `null` in a successful PUT response.
+  The `allocations` array in the response always reflects the values just
+  written.
 - `created_at` is preserved on updates; `updated_at` is refreshed.
 - No follow-up GET is needed to confirm the write.
 
