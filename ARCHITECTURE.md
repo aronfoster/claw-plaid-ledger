@@ -365,6 +365,14 @@ Current operator-facing CLI commands:
 - `sync` — fetches transactions from Plaid and persists them to SQLite;
   `sync --all` is the standard household ingestion path; `sync --item <id>`
   syncs a single item from `items.toml`
+- `refresh` — asks Plaid to re-check the institution and fire
+  `SYNC_UPDATES_AVAILABLE` to the registered webhook URL; `refresh --all`
+  covers every item in `items.toml`; `refresh --item <id>` targets a single
+  named item; exit-code conventions match `sync`
+- `allocations show <id>` — displays the current allocation state for a
+  transaction (amounts, categories, tags, notes, balance check)
+- `allocations set <id> --file <path>` — atomically replaces all allocations
+  for a transaction from a JSON file (or stdin with `--file -`)
 - `serve` — starts the FastAPI/uvicorn HTTP server; binds to
   `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`)
 
