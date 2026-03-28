@@ -483,3 +483,70 @@ def test_exchange_public_token_permanent_error_400() -> None:
 
     with pytest.raises(PlaidPermanentError):
         adapter.exchange_public_token("public-tok")
+
+
+# ---------------------------------------------------------------------------
+# refresh_transactions
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_transactions_success_returns_none() -> None:
+    """refresh_transactions returns None on success."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.return_value = MagicMock()
+
+    adapter.refresh_transactions("access-tok")
+
+    api_mock.transactions_refresh.assert_called_once()
+
+
+def test_refresh_transactions_calls_sdk_with_access_token() -> None:
+    """refresh_transactions passes the access_token to the SDK request."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.return_value = MagicMock()
+
+    with patch(
+        "claw_plaid_ledger.plaid_adapter.TransactionsRefreshRequest"
+    ) as mock_req_cls:
+        mock_req_cls.return_value = MagicMock()
+        adapter.refresh_transactions("access-tok-123")
+
+    mock_req_cls.assert_called_once_with(
+        access_token="access-tok-123"  # noqa: S106
+    )
+
+
+def test_refresh_transactions_transient_error_429() -> None:
+    """refresh_transactions raises PlaidTransientError on HTTP 429."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.side_effect = plaid.ApiException(status=429)
+
+    with pytest.raises(PlaidTransientError):
+        adapter.refresh_transactions("access-tok")
+
+
+def test_refresh_transactions_transient_error_500() -> None:
+    """refresh_transactions raises PlaidTransientError on HTTP 500."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.side_effect = plaid.ApiException(status=500)
+
+    with pytest.raises(PlaidTransientError):
+        adapter.refresh_transactions("access-tok")
+
+
+def test_refresh_transactions_permanent_error_400() -> None:
+    """refresh_transactions raises PlaidPermanentError on HTTP 400."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.side_effect = plaid.ApiException(status=400)
+
+    with pytest.raises(PlaidPermanentError):
+        adapter.refresh_transactions("access-tok")
+
+
+def test_refresh_transactions_network_error_is_transient() -> None:
+    """refresh_transactions raises PlaidTransientError on OSError."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_refresh.side_effect = OSError("connection refused")
+
+    with pytest.raises(PlaidTransientError):
+        adapter.refresh_transactions("access-tok")

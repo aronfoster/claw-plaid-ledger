@@ -32,6 +32,9 @@ from plaid.model.link_token_create_request_user import (  # type: ignore[import-
 from plaid.model.products import (  # type: ignore[import-untyped]
     Products,
 )
+from plaid.model.transactions_refresh_request import (  # type: ignore[import-untyped]
+    TransactionsRefreshRequest,
+)
 from plaid.model.transactions_sync_request import (  # type: ignore[import-untyped]
     TransactionsSyncRequest,
 )
@@ -281,6 +284,34 @@ class PlaidClientAdapter:
             self._api.item_webhook_update(request)
         except plaid.ApiException as exc:
             status = getattr(exc, "status", 0)
+            if (
+                status == _HTTP_TOO_MANY_REQUESTS
+                or status >= _HTTP_SERVER_ERROR_MIN
+            ):
+                msg = f"Plaid transient API error (HTTP {status}): {exc}"
+                raise PlaidTransientError(msg) from exc
+            msg = f"Plaid permanent API error (HTTP {status}): {exc}"
+            raise PlaidPermanentError(msg) from exc
+        except OSError as exc:
+            msg = f"Network error calling Plaid: {exc}"
+            raise PlaidTransientError(msg) from exc
+
+    def refresh_transactions(self, access_token: str) -> None:
+        """
+        Ask Plaid to re-check the institution and fire SYNC_UPDATES_AVAILABLE.
+
+        Calls the Plaid /transactions/refresh endpoint.  Returns None on
+        success (Plaid returns an empty 200 body).  Raises PlaidTransientError
+        for
+        rate-limit and server errors; PlaidPermanentError for all other API
+        errors (e.g. INVALID_ACCESS_TOKEN); PlaidTransientError for network
+        errors.
+        """
+        request = TransactionsRefreshRequest(access_token=access_token)
+        try:
+            self._api.transactions_refresh(request)
+        except plaid.ApiException as exc:
+            status: int = getattr(exc, "status", 0)
             if (
                 status == _HTTP_TOO_MANY_REQUESTS
                 or status >= _HTTP_SERVER_ERROR_MIN
