@@ -337,42 +337,29 @@ Sprint 23 is complete. Multi-allocation transactions are now fully usable:
   updated with the new endpoint, response shapes, and allocation-first
   write guidance.
 
+### M22 — On-demand Plaid Refresh (Sprint 24)
+
+Sprint 24 is complete. Operators can now trigger an immediate Plaid transaction
+refresh from the CLI:
+
+- **`PlaidClientAdapter.refresh_transactions(access_token)`** — thin adapter
+  method wrapping `/transactions/refresh`. Fire-and-forget; returns `None` on
+  success; raises `PlaidTransientError` for HTTP 429/5xx and network errors;
+  raises `PlaidPermanentError` for other 4xx errors.
+- **`ledger refresh`** — calls `/transactions/refresh` for the singleton
+  `PLAID_ACCESS_TOKEN` item; prints `refresh: OK` on success.
+- **`ledger refresh --item <id>`** — calls `/transactions/refresh` for the
+  named item from `items.toml`; prints `refresh[<id>]: OK` on success.
+- **`ledger refresh --all`** — calls `/transactions/refresh` for every item in
+  `items.toml`; prints per-item results and a `refresh --all: N items
+  refreshed, M failed` summary line; exits 1 if any item failed.
+- **Exit-code conventions** match `ledger sync`: missing config exits 2, adapter
+  errors exit 1, `--item` and `--all` together exits 2.
+- No API endpoint added, no schema changed, no skill bundles modified.
+
 ---
 
 ## Upcoming Milestones
-
-### M22 — On-demand Plaid refresh (`ledger refresh`)
-
-**Goal:** Give operators a CLI command to trigger an immediate Plaid
-transaction refresh and verify webhook delivery end-to-end in production.
-
-**Rationale:** After switching from scheduled polling to webhook-driven sync,
-there is no in-app way to force Plaid to re-check an institution and confirm
-that `SYNC_UPDATES_AVAILABLE` is being delivered. The Plaid
-`/transactions/refresh` endpoint does this in production (the sandbox
-fire-webhook equivalents are not available in production). Without a CLI
-command, operators must call the Plaid API directly with raw HTTP tooling.
-
-#### Deliverables
-
-- `ledger refresh` — calls `/transactions/refresh` for the single item
-  in `PLAID_ACCESS_TOKEN` (default, single-item mode).
-- `ledger refresh --all` — calls `/transactions/refresh` for every item in
-  `items.toml`, following the same pattern as `ledger sync --all`.
-- `ledger refresh --item <id>` — single named item from `items.toml`,
-  mutually exclusive with `--all`.
-- `PlaidClientAdapter.refresh_transactions(access_token)` — thin adapter
-  method wrapping the SDK call, consistent with existing adapter conventions.
-- Unit tests covering single-item, `--all`, and error paths.
-
-#### Acceptance criteria
-
-- Running `ledger refresh --all` causes Plaid to fire `SYNC_UPDATES_AVAILABLE`
-  to the registered webhook URL for each item (verifiable via Plaid dashboard
-  webhook logs).
-- Missing or invalid access tokens follow the same exit-code conventions as
-  `ledger sync`.
-- `--item` and `--all` are mutually exclusive; combined use exits 2.
 
 ### M23 — Remove Annotations Table
 

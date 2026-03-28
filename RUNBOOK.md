@@ -31,6 +31,7 @@ durably on a home server.
 - Ledger error log monitoring via `GET /errors` (Section 19)
 - Allocation model and budgeting layer (Section 20)
 - Multi-allocation editing and split transactions (Section 21)
+- On-demand Plaid refresh via `ledger refresh` (Section 22)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -717,6 +718,8 @@ ledger doctor --production-preflight
 | `ledger overlaps` | Verify suppression status and discover potential unconfirmed overlaps |
 | `ledger doctor --production-preflight` | Validate production-readiness config without external calls |
 | `ledger doctor` | Validate local DB/config health after syncs and changes |
+| `ledger refresh --all` | Ask Plaid to re-check all institutions and confirm `SYNC_UPDATES_AVAILABLE` webhook delivery |
+| `ledger refresh --item <id>` | Ask Plaid to re-check a single institution from `items.toml` |
 
 ---
 
@@ -2515,3 +2518,74 @@ transaction rows, so `offset`/`limit` pagination works correctly.
 `GET /spend?category=groceries` sums only the grocery allocation amounts —
 not the full transaction amount — so split-category filtering is always
 accurate.
+
+---
+
+## 22. On-demand Plaid refresh (`ledger refresh`)
+
+M22 (Sprint 24) adds a CLI command that tells Plaid to re-check an institution
+and fire `SYNC_UPDATES_AVAILABLE` to the registered webhook URL. Use this to
+confirm end-to-end webhook delivery in production without raw HTTP tooling.
+
+### When to use it
+
+- After configuring or rotating a webhook URL — confirm Plaid can reach the
+  new URL before waiting for a natural sync event.
+- During incident triage — rule out Plaid-side silence vs. a missed webhook
+  by forcing a refresh and checking the webhook delivery log in the Plaid
+  dashboard.
+- After setting up a new item — trigger an immediate refresh to confirm the
+  access token is valid and webhooks are flowing.
+
+### Commands
+
+```bash
+# Single item (PLAID_ACCESS_TOKEN)
+ledger refresh
+
+# Single named item from items.toml
+ledger refresh --item bank-alice
+
+# All items in items.toml
+ledger refresh --all
+```
+
+### Expected output
+
+```
+# Default mode (single item via PLAID_ACCESS_TOKEN)
+refresh: OK
+
+# --item mode
+refresh[bank-alice]: OK
+
+# --all mode
+refresh[bank-alice]: OK
+refresh[card-bob]: OK
+refresh --all: 2 items refreshed, 0 failed
+```
+
+On failure:
+
+```
+refresh[bank-alice]: ERROR Plaid permanent API error (HTTP 400): ...
+refresh --all: 1 items refreshed, 1 failed
+```
+
+### Exit codes
+
+| Exit code | Meaning |
+|---|---|
+| 0 | All items refreshed successfully |
+| 1 | One or more adapter errors (Plaid API or network) |
+| 2 | Missing required config, missing token, or `--item`+`--all` together |
+
+### Notes
+
+- `ledger refresh` does **not** immediately sync transactions. It instructs
+  Plaid to fire `SYNC_UPDATES_AVAILABLE`, which the server receives via
+  `POST /webhooks/plaid` and processes in the background.
+- The `/transactions/refresh` endpoint is available in both sandbox and
+  production. In sandbox, Plaid simulates the webhook; in production, it
+  triggers a real check against the institution.
+- `--item` and `--all` are mutually exclusive; using both together exits 2.

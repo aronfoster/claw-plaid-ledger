@@ -157,6 +157,7 @@ Notes:
 | `ledger apply-precedence` | Applies source-precedence mappings from `items.toml` (`suppressed_accounts`) into the DB and clears stale mappings |
 | `ledger overlaps` | Shows configured source-precedence status and potential unconfirmed overlaps across items |
 | `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path |
+| `ledger refresh` | Asks Plaid to re-check the institution and fire `SYNC_UPDATES_AVAILABLE`; `--all` covers every item in `items.toml`; `--item <id>` targets a single named item |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
 | `ledger allocations show <id>` | Display current allocation state for a transaction (amounts, categories, tags, notes, balance check) |
 | `ledger allocations set <id> --file <path>` | Replace all allocations for a transaction from a JSON file (or stdin with `--file -`) |
