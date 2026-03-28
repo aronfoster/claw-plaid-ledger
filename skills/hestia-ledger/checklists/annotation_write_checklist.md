@@ -7,5 +7,5 @@ Run before `PUT /annotations/{transaction_id}`.
       (`allocation.category`, `allocation.tags`, `allocation.note`).
 - [ ] Proposed tags are short, factual, and normalized.
 - [ ] Proposed note is evidence-based and privacy-safe.
-- [ ] If confidence is low, I sent a Discord message to Aron instead of writing.
+- [ ] If confidence is low, I messaged my human on Discord instead of annotating.
 - [ ] I am not attempting to override canonical precedence behavior.
