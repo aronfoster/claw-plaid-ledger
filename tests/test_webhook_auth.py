@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from typing import TYPE_CHECKING
 
 from claw_plaid_ledger.webhook_auth import verify_plaid_signature
@@ -75,3 +76,46 @@ class TestVerifyPlaidSignature:
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _SECRET)
         sig = _make_signature(_BODY, _SECRET)
         assert verify_plaid_signature(_BODY, {"plaid-verification": sig})
+
+    def test_missing_secret_logs_info(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Logs INFO when PLAID_WEBHOOK_SECRET is not set (passthrough)."""
+        monkeypatch.delenv("PLAID_WEBHOOK_SECRET", raising=False)
+        sig = _make_signature(_BODY, _SECRET)
+        with caplog.at_level(
+            logging.INFO, logger="claw_plaid_ledger.webhook_auth"
+        ):
+            verify_plaid_signature(_BODY, {"Plaid-Verification": sig})
+        assert any(
+            "skipping signature verification" in r.message
+            for r in caplog.records
+        )
+
+    def test_missing_header_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Logs WARNING when Plaid-Verification header is absent."""
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _SECRET)
+        with caplog.at_level(
+            logging.WARNING, logger="claw_plaid_ledger.webhook_auth"
+        ):
+            verify_plaid_signature(_BODY, {})
+        assert any("header absent" in r.message for r in caplog.records)
+
+    def test_digest_mismatch_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Logs WARNING on HMAC digest mismatch."""
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _SECRET)
+        with caplog.at_level(
+            logging.WARNING, logger="claw_plaid_ledger.webhook_auth"
+        ):
+            verify_plaid_signature(_BODY, {"Plaid-Verification": "bad-sig"})
+        assert any("digest mismatch" in r.message for r in caplog.records)
