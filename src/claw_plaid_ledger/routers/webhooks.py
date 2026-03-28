@@ -352,7 +352,12 @@ async def webhook_plaid(
 
     payload = json.loads(body)
     webhook_type = payload.get("webhook_type", "")
-    logger.info("Plaid webhook received webhook_type=%s", webhook_type)
+    webhook_code = payload.get("webhook_code", "")
+    logger.info(
+        "Plaid webhook received webhook_type=%s webhook_code=%s",
+        webhook_type,
+        webhook_code,
+    )
     logger.debug(
         "webhook payload (redacted): %s", redact_webhook_body(payload)
     )
@@ -366,7 +371,7 @@ async def webhook_plaid(
         else "sync-" + uuid.uuid4().hex[:8]
     )
 
-    if webhook_type == _SYNC_UPDATES_AVAILABLE:
+    if webhook_code == _SYNC_UPDATES_AVAILABLE:
         payload_item_id: str | None = payload.get("item_id")
         enqueued = False
 

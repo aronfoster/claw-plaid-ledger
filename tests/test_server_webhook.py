@@ -42,7 +42,7 @@ class TestWebhookPlaid:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         mock_bg = MagicMock()
@@ -70,7 +70,7 @@ class TestWebhookPlaid:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
 
         response = client.post(
             "/webhooks/plaid",
@@ -119,7 +119,7 @@ class TestWebhookPlaid:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         mock_config = MagicMock()
@@ -169,7 +169,7 @@ class TestWebhookItemRouting:
         monkeypatch.setenv("PLAID_ACCESS_TOKEN_ALICE", "access-token-alice")
 
         body = (
-            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE",'
             b' "item_id": "bank-alice"}'
         )
         sig = _make_plaid_sig(body)
@@ -218,7 +218,7 @@ class TestWebhookItemRouting:
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
         body = (
-            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE",'
             b' "item_id": "unknown-item"}'
         )
         sig = _make_plaid_sig(body)
@@ -269,7 +269,7 @@ class TestWebhookItemRouting:
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
         body = (
-            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE",'
             b' "item_id": "bank-alice"}'
         )
         sig = _make_plaid_sig(body)
@@ -303,7 +303,7 @@ class TestWebhookItemRouting:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         mock_bg = MagicMock()
@@ -339,7 +339,7 @@ class TestWebhookItemRouting:
         monkeypatch.delenv("PLAID_ACCESS_TOKEN_ALICE", raising=False)
 
         body = (
-            b'{"webhook_type": "SYNC_UPDATES_AVAILABLE",'
+            b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE",'
             b' "item_id": "bank-alice"}'
         )
         sig = _make_plaid_sig(body)
@@ -396,7 +396,7 @@ class TestWebhookIPAllowlistMiddleware:
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", db_path)
         monkeypatch.delenv("CLAW_WEBHOOK_ALLOWED_IPS", raising=False)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
@@ -430,7 +430,7 @@ class TestWebhookIPAllowlistMiddleware:
         monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "127.0.0.1/32")
         monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
@@ -462,7 +462,7 @@ class TestWebhookIPAllowlistMiddleware:
         monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
         monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "10.0.0.1")
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         response = client.post(
@@ -491,7 +491,7 @@ class TestWebhookIPAllowlistMiddleware:
         # TestClient falls back to 127.0.0.1 as direct IP, which is trusted.
         monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         monkeypatch.setattr(
@@ -524,7 +524,7 @@ class TestWebhookIPAllowlistMiddleware:
         monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
         monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "127.0.0.1")
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         response = client.post(
@@ -568,7 +568,7 @@ class TestWebhookIPAllowlistMiddleware:
         monkeypatch.setenv("CLAW_WEBHOOK_ALLOWED_IPS", "52.21.0.0/16")
         monkeypatch.setenv("CLAW_TRUSTED_PROXIES", "10.0.0.1")
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = b'{"webhook_type": "TRANSACTIONS", "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
         sig = _make_plaid_sig(body)
 
         with caplog.at_level(
