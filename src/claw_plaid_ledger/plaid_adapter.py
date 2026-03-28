@@ -20,6 +20,9 @@ from plaid.model.country_code import (  # type: ignore[import-untyped]
 from plaid.model.item_public_token_exchange_request import (  # type: ignore[import-untyped]
     ItemPublicTokenExchangeRequest,
 )
+from plaid.model.item_webhook_update_request import (  # type: ignore[import-untyped]
+    ItemWebhookUpdateRequest,
+)
 from plaid.model.link_token_create_request import (  # type: ignore[import-untyped]
     LinkTokenCreateRequest,
 )
@@ -198,20 +201,28 @@ class PlaidClientAdapter:
         user_client_id: str,
         products: list[str],
         country_codes: list[str],
+        webhook: str | None = None,
     ) -> str:
         """
         Create a Plaid Link token for the browser Link flow.
 
         Calls the Plaid /link/token/create endpoint and returns the
         ``link_token`` string for use in the Plaid Link JS initializer.
+
+        Pass ``webhook`` to register a webhook URL on items created through
+        this link session.  Plaid will deliver transaction events to that URL
+        without requiring a separate ``/item/webhook/update`` call.
         """
-        request = LinkTokenCreateRequest(
-            products=[Products(p) for p in products],
-            client_name="claw-plaid-ledger",
-            country_codes=[CountryCode(c) for c in country_codes],
-            language="en",
-            user=LinkTokenCreateRequestUser(client_user_id=user_client_id),
-        )
+        kwargs: dict[str, Any] = {
+            "products": [Products(p) for p in products],
+            "client_name": "claw-plaid-ledger",
+            "country_codes": [CountryCode(c) for c in country_codes],
+            "language": "en",
+            "user": LinkTokenCreateRequestUser(client_user_id=user_client_id),
+        }
+        if webhook is not None:
+            kwargs["webhook"] = webhook
+        request = LinkTokenCreateRequest(**kwargs)
         try:
             response = self._api.link_token_create(request)
         except plaid.ApiException as exc:
@@ -253,3 +264,31 @@ class PlaidClientAdapter:
             msg = f"Network error calling Plaid: {exc}"
             raise PlaidTransientError(msg) from exc
         return str(response.access_token), str(response.item_id)
+
+    def update_item_webhook(self, access_token: str, webhook: str) -> None:
+        """
+        Update the webhook URL registered on an existing Plaid item.
+
+        Calls the Plaid /item/webhook/update endpoint.  Use this to register
+        or change the webhook URL for items that were linked before a webhook
+        was configured (or when the server URL changes).
+        """
+        request = ItemWebhookUpdateRequest(
+            access_token=access_token,
+            webhook=webhook,
+        )
+        try:
+            self._api.item_webhook_update(request)
+        except plaid.ApiException as exc:
+            status = getattr(exc, "status", 0)
+            if (
+                status == _HTTP_TOO_MANY_REQUESTS
+                or status >= _HTTP_SERVER_ERROR_MIN
+            ):
+                msg = f"Plaid transient API error (HTTP {status}): {exc}"
+                raise PlaidTransientError(msg) from exc
+            msg = f"Plaid permanent API error (HTTP {status}): {exc}"
+            raise PlaidPermanentError(msg) from exc
+        except OSError as exc:
+            msg = f"Network error calling Plaid: {exc}"
+            raise PlaidTransientError(msg) from exc

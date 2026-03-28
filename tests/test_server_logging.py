@@ -31,6 +31,12 @@ _WEBHOOK_SECRET = "test-webhook-secret"  # noqa: S105
 
 _REQUEST_ID_LENGTH = 12  # "req-" (4) + 8 hex chars
 
+# Real Plaid SYNC_UPDATES_AVAILABLE payload shape.
+_SYNC_BODY = (
+    b'{"webhook_type": "TRANSACTIONS",'
+    b' "webhook_code": "SYNC_UPDATES_AVAILABLE"}'
+)
+
 
 def _make_plaid_sig(body: bytes, secret: str = _WEBHOOK_SECRET) -> str:
     """Compute a valid Plaid-Verification HMAC-SHA256 hex digest."""
@@ -52,7 +58,7 @@ class TestStructuredLogging:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = _SYNC_BODY
 
         with caplog.at_level(
             logging.ERROR, logger="claw_plaid_ledger.routers.webhooks"
@@ -86,7 +92,7 @@ class TestStructuredLogging:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = _SYNC_BODY
         sig = _make_plaid_sig(body)
 
         mock_config = MagicMock()
@@ -299,7 +305,7 @@ class TestSyncRunId:
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 
-        body = b'{"webhook_type": "SYNC_UPDATES_AVAILABLE"}'
+        body = _SYNC_BODY
         sig = _make_plaid_sig(body)
 
         captured_sync_run_id: list[str] = []

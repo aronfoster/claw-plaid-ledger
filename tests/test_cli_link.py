@@ -56,6 +56,7 @@ def test_link_create_token_error_exits_1(
             _user_client_id: str,
             _products: list[str],
             _country_codes: list[str],
+            **_kwargs: object,
         ) -> str:
             msg = "Plaid permanent API error (HTTP 400): ..."
             raise RuntimeError(msg)
@@ -93,6 +94,7 @@ def test_link_success_prints_access_token(
             _user_client_id: str,
             _products: list[str],
             _country_codes: list[str],
+            **_kwargs: object,
         ) -> str:
             return "link-sandbox-fake"
 
@@ -142,6 +144,7 @@ def test_link_default_product_is_transactions(
             _user_client_id: str,
             products: list[str],
             _country_codes: list[str],
+            **_kwargs: object,
         ) -> str:
             captured_products.append(products)
             return "link-sandbox-fake"
@@ -191,6 +194,7 @@ def test_link_keyboard_interrupt_exits_1(
             _user_client_id: str,
             _products: list[str],
             _country_codes: list[str],
+            **_kwargs: object,
         ) -> str:
             return "link-sandbox-fake"
 
