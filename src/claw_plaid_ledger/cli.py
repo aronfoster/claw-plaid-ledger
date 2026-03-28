@@ -580,11 +580,12 @@ def link(
 
     typer.echo("Creating Plaid link token...")
     try:
+        extra = {"webhook": webhook} if webhook is not None else {}
         link_token = adapter.create_link_token(
             "operator",
             requested_products,
             ["US"],
-            webhook=webhook,
+            **extra,
         )
     except (RuntimeError, OSError) as error:
         typer.echo(f"link: failed to create link token: {error}")

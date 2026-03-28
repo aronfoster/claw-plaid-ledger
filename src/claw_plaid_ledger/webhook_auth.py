@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 
 from claw_plaid_ledger.config import load_merged_env
+
+logger = logging.getLogger(__name__)
 
 
 def verify_plaid_signature(body: bytes, headers: dict[str, str]) -> bool:
@@ -22,6 +25,9 @@ def verify_plaid_signature(body: bytes, headers: dict[str, str]) -> bool:
     """
     secret_raw = load_merged_env().get("PLAID_WEBHOOK_SECRET")
     if not secret_raw:
+        logger.warning(
+            "PLAID_WEBHOOK_SECRET is not set; skipping signature verification"
+        )
         return True
 
     signature = headers.get("Plaid-Verification") or headers.get(
