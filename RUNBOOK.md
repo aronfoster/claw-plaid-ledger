@@ -30,6 +30,7 @@ durably on a home server.
 - Month-over-month spend trends via `GET /spend/trends` (Section 18)
 - Ledger error log monitoring via `GET /errors` (Section 19)
 - Allocation model and budgeting layer (Section 20)
+- Multi-allocation editing and split transactions (Section 21)
 - Performing a first live sync and validating the result
 - Backup and recovery procedures for SQLite and secrets
 - Incident triage quick reference
@@ -2080,15 +2081,15 @@ Response is a plain JSON array — one bucket per calendar month, oldest first:
 
 ```json
 [
-  {"month": "2026-01", "total_spend": 2980.00, "transaction_count": 41, "partial": false},
-  {"month": "2026-02", "total_spend": 3100.25, "transaction_count": 44, "partial": false},
-  {"month": "2026-03", "total_spend":  850.00, "transaction_count": 12, "partial": true}
+  {"month": "2026-01", "total_spend": 2980.00, "allocation_count": 41, "partial": false},
+  {"month": "2026-02", "total_spend": 3100.25, "allocation_count": 44, "partial": false},
+  {"month": "2026-03", "total_spend":  850.00, "allocation_count": 12, "partial": true}
 ]
 ```
 
 The current calendar month always has `partial: true`; all prior complete
 months have `partial: false`. Months with no qualifying transactions appear
-as zero-filled buckets (`total_spend: 0.0`, `transaction_count: 0`) and are
+as zero-filled buckets (`total_spend: 0.0`, `allocation_count: 0`) and are
 never omitted.
 
 ### Scoped trends
@@ -2284,44 +2285,67 @@ Every transaction automatically receives a blank allocation row at two points:
 
 ### Reading allocations
 
-All transaction responses include an `allocation` key (never null):
+The detail endpoint (`GET /transactions/{id}`) returns an `allocations` array
+(never null). For unsplit transactions it has one element; for split
+transactions it has all allocations ordered by `id ASC`:
 
 ```json
 {
   "id": "txn_abc123",
   "amount": 12.34,
   ...
-  "allocation": {
-    "id": 1,
-    "amount": 12.34,
-    "category": "groceries",
-    "tags": ["household"],
-    "note": "weekly shopping",
-    "updated_at": "2026-03-25T10:00:00+00:00"
-  }
+  "allocations": [
+    {
+      "id": 1,
+      "amount": 12.34,
+      "category": "groceries",
+      "tags": ["household"],
+      "note": "weekly shopping",
+      "updated_at": "2026-03-25T10:00:00+00:00"
+    }
+  ]
 }
 ```
 
-`category`, `tags`, and `note` within `allocation` may be null for
-uncategorized transactions. The `allocation` object itself is always present.
+The list endpoint (`GET /transactions`) returns a singular `"allocation": {...}`
+key per row (each row is one transaction–allocation pair).
 
-### Writing allocations
+`category`, `tags`, and `note` within each allocation element may be null for
+uncategorized transactions.
 
-Use `PUT /annotations/{transaction_id}` — the request body is unchanged:
+### Writing allocations (primary path)
+
+Use `PUT /transactions/{transaction_id}/allocations` — accepts a JSON array and
+atomically replaces all existing allocations:
 
 ```bash
+# Single-allocation (unsplit) write
 curl -s -X PUT \
   -H "Authorization: Bearer $CLAW_API_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"category": "groceries", "tags": ["household"], "note": "weekly shopping"}' \
-  http://127.0.0.1:8000/annotations/txn_abc123 | jq .
+  -d '[{"amount": 12.34, "category": "groceries", "tags": ["household"], "note": "weekly shopping"}]' \
+  http://127.0.0.1:8000/transactions/txn_abc123/allocations | jq .
+
+# Split transaction across two categories
+curl -s -X PUT \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '[{"amount": 60.00, "category": "groceries"}, {"amount": 40.00, "category": "household"}]' \
+  http://127.0.0.1:8000/transactions/txn_abc123/allocations | jq .
 ```
 
-The response contains an `allocation` key (not `annotation`) reflecting the
-values just written.
+Amounts are auto-corrected if the sum differs from the transaction amount by
+≤ $1.00 (last item silently adjusted). Returns HTTP 422 if the difference
+exceeds $1.00. The response contains the full transaction detail with
+`"allocations": [...]`.
 
-`PUT /annotations/{id}` double-writes to both `annotations` and `allocations`
-during M20–M22. The `annotations` table is decommissioned in M23.
+### Writing allocations (compatibility shim)
+
+`PUT /annotations/{transaction_id}` remains valid for single-allocation
+transactions. Returns **HTTP 409** if the transaction has been split (use
+`PUT /transactions/{id}/allocations` instead). Double-writes to both
+`annotations` and `allocations` during M20–M21. The `annotations` table is
+decommissioned in M22.
 
 ### Filtering spend by allocation category or tag
 
@@ -2339,12 +2363,71 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
 
 ### Notes
 
-- M20 is a 1:1 allocation model — one transaction maps to one allocation.
-  Multi-allocation editing (splitting one transaction across categories) is
-  deferred to M21.
+- As of M21 (Sprint 23), multi-allocation (split) transactions are fully
+  supported via `PUT /transactions/{id}/allocations`. A transaction split into
+  N allocations produces N rows in `GET /transactions` list results.
 - The `allocations` table has no UNIQUE constraint on `plaid_transaction_id`
-  by design, to allow M21 to add multiple rows per transaction without a
-  schema change.
+  by design, allowing multiple allocation rows per transaction.
 - `GET /categories` and `GET /tags` return vocabulary from `allocations`, not
   `annotations`. The vocabulary is identical for any transaction annotated via
   `PUT /annotations/{id}` because the double-write keeps both tables in sync.
+- `GET /spend` and `GET /spend/trends` use `allocation_count` (renamed from
+  `transaction_count` in M21) to reflect allocation-row semantics.
+
+---
+
+## 21. Multi-allocation editing (split transactions)
+
+M21 (Sprint 23) makes it possible to split a single imported transaction across
+multiple categories.
+
+### CLI: viewing and setting allocations
+
+```bash
+# View current allocation state for a transaction
+ledger allocations show txn_abc123
+
+# Replace allocations from a JSON file
+ledger allocations set txn_abc123 --file allocations.json
+
+# Replace allocations from stdin
+echo '[{"amount": 100.00, "category": "groceries"}]' \
+  | ledger allocations set txn_abc123 --file -
+```
+
+`ledger allocations show` output:
+
+```
+Transaction: txn_abc123
+  Date:     2026-03-15
+  Merchant: AMAZON.COM
+  Amount:   $100.00
+
+Allocations (2):
+  #1   $60.00   groceries     [household]   food
+  #2   $40.00   household     (no tags)     (no note)
+  ──────────────────────────────────────────────
+  Total: $100.00   ✓ Balanced
+```
+
+### API: `PUT /transactions/{id}/allocations`
+
+See ARCHITECTURE.md for the full endpoint spec. Key validation rules:
+
+- Empty array → HTTP 422.
+- Sum differs from transaction amount by > $1.00 → HTTP 422 with
+  `transaction_amount`, `allocation_total`, `difference` in the error body.
+- Sum differs by ≤ $1.00 → last item silently adjusted; HTTP 200 returned.
+
+### List pagination with split transactions
+
+`GET /transactions` returns one row per allocation. A transaction split into
+two categories appears as two rows (same `id`, different `allocation` objects).
+The `total` field in the pagination response counts allocation rows, not
+transaction rows, so `offset`/`limit` pagination works correctly.
+
+### Spend rollup for split transactions
+
+`GET /spend?category=groceries` sums only the grocery allocation amounts —
+not the full transaction amount — so split-category filtering is always
+accurate.

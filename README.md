@@ -158,6 +158,8 @@ Notes:
 | `ledger overlaps` | Shows configured source-precedence status and potential unconfirmed overlaps across items |
 | `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
+| `ledger allocations show <id>` | Display current allocation state for a transaction (amounts, categories, tags, notes, balance check) |
+| `ledger allocations set <id> --file <path>` | Replace all allocations for a transaction from a JSON file (or stdin with `--file -`) |
 
 ## HTTP API
 
@@ -168,13 +170,14 @@ Notes:
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
 | `GET` | `/transactions` | Paginated, filterable transaction list; includes `allocation` per row (never null; `category`, `tags`, `note` within it may be null); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
-| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters |
+| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters; response uses `allocation_count` |
 | `GET` | `/categories` | Distinct sorted category values from all allocations |
 | `GET` | `/tags` | Distinct sorted tag values from all allocations |
 | `GET` | `/accounts` | All synced accounts with human-readable labels (`label`, `description`) from `account_labels`; use to discover account IDs |
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
-| `GET` | `/transactions/{id}` | Single transaction with allocation and suppression provenance (`suppressed_by`) |
-| `PUT` | `/annotations/{id}` | Upsert annotation (double-writes to allocations); returns the full updated transaction record with `allocation` key (no follow-up GET needed) |
+| `GET` | `/transactions/{id}` | Single transaction detail; returns `"allocations": [...]` array (all allocations, ordered by `id`; single-element for unsplit transactions) |
+| `PUT` | `/transactions/{id}/allocations` | Atomically replace all allocations for a transaction; amounts auto-corrected within $1.00; returns 422 if off by more; primary write path for all allocation edits |
+| `PUT` | `/annotations/{id}` | Compatibility shim — single-allocation only; returns 409 if the transaction has been split; double-writes to `annotations` and `allocations` |
 | `GET` | `/errors` | Recent ledger warnings and errors; supports `hours`, `min_severity`, `limit`, `offset`; use for pre-run health checks and proactive alerting |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |
