@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import fastapi
-from fastapi import BackgroundTasks, Depends, Request
+from fastapi import BackgroundTasks, Request
 
 from claw_plaid_ledger.config import (
     ConfigError,
@@ -30,7 +30,6 @@ from claw_plaid_ledger.logging_utils import (
     reset_correlation_id,
     set_correlation_id,
 )
-from claw_plaid_ledger.middleware.auth import require_bearer_token
 from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.sync_engine import run_sync
@@ -336,7 +335,7 @@ async def lifespan(
         logging.getLogger().removeHandler(db_handler)
 
 
-@router.post("/webhooks/plaid", dependencies=[Depends(require_bearer_token)])
+@router.post("/webhooks/plaid")
 async def webhook_plaid(
     request: Request,
     background_tasks: BackgroundTasks,

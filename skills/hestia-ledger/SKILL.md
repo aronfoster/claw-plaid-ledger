@@ -1,6 +1,6 @@
 ---
 name: hestia-ledger
-description: Ingest and annotate claw-plaid-ledger transactions. Use after a Plaid sync to process new transactions, apply deterministic annotations, and escalate uncertain items to Athena via needs-athena-review tags. Reads and writes via the ledger HTTP API using bearer-token auth.
+description: Ingest and annotate claw-plaid-ledger transactions. Use after a Plaid sync to process new transactions, apply deterministic annotations, and ask humans via Discord when uncertain. Reads and writes via the ledger HTTP API using bearer-token auth.
 metadata:
   openclaw:
     emoji: '🧾'
@@ -43,7 +43,8 @@ Hestia should:
 
 - fetch newly synced or unreviewed transactions,
 - apply deterministic annotation updates,
-- tag uncertain items with `needs-athena-review` and continue processing.
+- ask your human via Discord when a transaction is uncertain and cannot be confidently categorized,
+- log all successfully categorized transactions to a temp review file.
 
 Hestia must not:
 
@@ -57,7 +58,7 @@ Hestia must not:
 - The ledger database + API are the source of truth.
 - `view=canonical` is the default operating surface.
 - `view=raw` is diagnostic-only and used only to validate discrepancies.
-- Hestia escalation target is Athena via `needs-athena-review` tagging.
+- Hestia's escalation path is a Discord message to your human (see USER.md for Discord ID). Do not write uncertain transactions to the ledger — ask and wait, or skip and Discord.
 
 ## Approved API calls
 
@@ -186,12 +187,13 @@ For each run:
 4. Re-fetch each candidate with `GET /transactions/{id}` before any write.
    The detail response contains `"allocations": [...]`. Check
    `allocations.length`: if `> 1`, the transaction has been split by an
-   operator — **do not overwrite the split; flag for Athena review instead.**
+   operator — **do not overwrite the split; send a Discord message to your human flagging it instead.**
 5. Write `PUT /transactions/{transaction_id}/allocations` only when evidence
    is specific. This endpoint works for both unsplit and split transactions.
    Do not use `PUT /annotations/{id}` — it returns 409 for split transactions.
-6. If confidence is low, set the allocation with `needs-athena-review` in
-   `tags` and continue.
+6. If confidence is low, do not write to the ledger. Send a Discord message
+   to your human with: merchant name, amount, date, account, and 2–3 candidate
+   categories with your reasoning. Skip the transaction for now and move on.
 
 ## API guardrails
 
@@ -265,11 +267,10 @@ For each run:
 2. Re-fetch by ID to validate current state.
 3. Optionally compare with identical `view=raw` query when discrepancy is
    suspected.
-4. If specific evidence exists, annotate with:
-   - `needs-athena-review` (required escalation tag), and
-   - one specific triage tag: `orphan-transaction`,
-     `cross-source-discrepancy`, `sync-lag-suspected`, or
-     `annotation-drift`.
+4. If specific evidence exists, send a Discord message to your human with:
+   transaction ID, merchant, amount, the anomaly type (`orphan-transaction`,
+   `cross-source-discrepancy`, `sync-lag-suspected`, or `annotation-drift`),
+   and a one-line summary of what looks wrong. Do not write to the ledger.
 
 ## Allocation write policy
 
@@ -281,13 +282,12 @@ Write allocations only when all are true:
 - note/tag is factual and evidence-based,
 - allocation write improves downstream review.
 
-Abstain from non-escalation writes when:
+Abstain from writes and send a Discord message to your human when:
 
 - evidence is ambiguous/conflicting,
 - the transaction cannot be re-fetched,
 - confidence is below threshold,
-- the transaction has `allocations.length > 1` and the intent is unclear
-  (flag for Athena instead).
+- the transaction has `allocations.length > 1` and the intent is unclear.
 
 Always use `PUT /transactions/{id}/allocations` for writes. Do not use
 `PUT /annotations/{id}` — it is a compatibility shim that returns 409 for
@@ -300,7 +300,7 @@ split transactions.
 - optional `category`: only when confidently known; use `GET /categories`
   vocabulary.
 
-For uncertain cases, include `needs-athena-review` in `tags`.
+For uncertain cases, do not write — send a Discord message instead (see Boundaries).
 
 ## Response contract
 
@@ -308,8 +308,35 @@ Hestia outputs are operational and machine-checkable:
 
 1. **Run frame**: queried window, pagination status, and filters.
 2. **Actions taken**: transaction IDs annotated + exact tags written.
-3. **Escalations**: transaction IDs tagged `needs-athena-review` + reason.
+3. **Discord questions sent**: transaction IDs + reason for each message sent to your human.
 4. **Gaps**: failed calls, partial coverage, or unresolved ambiguity.
+
+## Temp categorization log
+
+After each run, append all successfully categorized transactions to a daily
+log file at:
+
+```
+~/.openclaw/workspace/agents/hestia/memory/categorized-YYYY-MM-DD.md
+```
+
+Use today's date in the filename. Create the file if it doesn't exist;
+append if it does (multiple webhook syncs may fire in one day).
+
+### Format
+
+```markdown
+## Run YYYY-MM-DD HH:MM (N transactions)
+
+| Transaction ID | Date | Merchant | Amount | Account | Category | Tags | Note |
+|---|---|---|---|---|---|---|---|
+| abc123 | 2026-03-28 | King Soopers | $47.23 | Physical Visa ···7230 | Groceries | | weekly shop |
+```
+
+Include every transaction written in that run. Omit transactions that were
+skipped or sent to Discord — those are already surfaced in the run frame
+output. This file is for human review; the humans will clear or archive it
+themselves.
 
 ## Companion files
 
