@@ -20,8 +20,10 @@ def verify_plaid_signature(body: bytes, headers: dict[str, str]) -> bool:
     ``Plaid-Verification`` request header matches
     ``HMAC-SHA256(body, secret)`` encoded as a lowercase hex digest.
 
-    Fails closed: returns ``False`` whenever the secret is not set, the
-    header is absent, or the digest does not match.  Never raises.
+    When ``PLAID_WEBHOOK_SECRET`` is not set, logs INFO and returns ``True``
+    (passthrough mode — verification is opt-in).  When the secret is set,
+    fails closed: returns ``False`` if the header is absent or the digest
+    does not match, and logs a WARNING for each failure mode.  Never raises.
     """
     secret_raw = load_merged_env().get("PLAID_WEBHOOK_SECRET")
     if not secret_raw:
@@ -34,7 +36,13 @@ def verify_plaid_signature(body: bytes, headers: dict[str, str]) -> bool:
         "plaid-verification"
     )
     if not signature:
+        logger.warning(
+            "verify_plaid_signature: Plaid-Verification header absent"
+        )
         return False
 
     expected = hmac.new(secret_raw.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    if not hmac.compare_digest(expected, signature):
+        logger.warning("verify_plaid_signature: HMAC digest mismatch")
+        return False
+    return True

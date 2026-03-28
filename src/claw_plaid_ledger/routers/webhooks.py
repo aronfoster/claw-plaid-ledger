@@ -335,6 +335,70 @@ async def lifespan(
         logging.getLogger().removeHandler(db_handler)
 
 
+def _enqueue_sync_updates(
+    payload_item_id: str | None,
+    sync_run_id: str,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Route and enqueue a SYNC_UPDATES_AVAILABLE background sync."""
+    if not payload_item_id:
+        logger.warning(
+            "SYNC_UPDATES_AVAILABLE: no item_id in payload;"
+            " using single-item fallback sync_run_id=%s",
+            sync_run_id,
+        )
+        background_tasks.add_task(_background_sync, sync_run_id=sync_run_id)
+        return
+
+    try:
+        items = load_items_config()
+    except (OSError, ValueError):
+        logger.warning(
+            "Could not load items.toml; falling back to PLAID_ACCESS_TOKEN"
+        )
+        items = []
+
+    if items:
+        cfg = next((c for c in items if c.id == payload_item_id), None)
+        if cfg is not None:
+            token = load_merged_env().get(cfg.access_token_env)
+            if token:
+                logger.info(
+                    "Enqueuing background sync for item_id=%s"
+                    " webhook_type=%s sync_run_id=%s",
+                    payload_item_id,
+                    _SYNC_UPDATES_AVAILABLE,
+                    sync_run_id,
+                )
+                background_tasks.add_task(
+                    _background_sync,
+                    access_token=token,
+                    item_id=cfg.id,
+                    owner=cfg.owner,
+                    sync_run_id=sync_run_id,
+                )
+                return
+            logger.error(
+                "item_id %s: env var %s not set;"
+                " falling back to PLAID_ACCESS_TOKEN",
+                payload_item_id,
+                cfg.access_token_env,
+            )
+        else:
+            logger.warning(
+                "item_id %s not found in items.toml;"
+                " falling back to PLAID_ACCESS_TOKEN",
+                payload_item_id,
+            )
+
+    logger.info(
+        "Enqueuing background sync for webhook_type=%s sync_run_id=%s",
+        _SYNC_UPDATES_AVAILABLE,
+        sync_run_id,
+    )
+    background_tasks.add_task(_background_sync, sync_run_id=sync_run_id)
+
+
 @router.post("/webhooks/plaid")
 async def webhook_plaid(
     request: Request,
@@ -381,62 +445,11 @@ async def webhook_plaid(
     )
 
     if webhook_code == _SYNC_UPDATES_AVAILABLE:
-        payload_item_id: str | None = payload.get("item_id")
-        enqueued = False
-
-        if payload_item_id:
-            try:
-                items = load_items_config()
-            except (OSError, ValueError):
-                logger.warning(
-                    "Could not load items.toml; falling back to"
-                    " PLAID_ACCESS_TOKEN"
-                )
-                items = []
-
-            if items:
-                cfg = next((c for c in items if c.id == payload_item_id), None)
-                if cfg is not None:
-                    token = load_merged_env().get(cfg.access_token_env)
-                    if token:
-                        logger.info(
-                            "Enqueuing background sync for item_id=%s"
-                            " webhook_type=%s sync_run_id=%s",
-                            payload_item_id,
-                            webhook_type,
-                            sync_run_id,
-                        )
-                        background_tasks.add_task(
-                            _background_sync,
-                            access_token=token,
-                            item_id=cfg.id,
-                            owner=cfg.owner,
-                            sync_run_id=sync_run_id,
-                        )
-                        enqueued = True
-                    else:
-                        logger.error(
-                            "item_id %s: env var %s not set;"
-                            " falling back to PLAID_ACCESS_TOKEN",
-                            payload_item_id,
-                            cfg.access_token_env,
-                        )
-                else:
-                    logger.warning(
-                        "item_id %s not found in items.toml;"
-                        " falling back to PLAID_ACCESS_TOKEN",
-                        payload_item_id,
-                    )
-
-        if not enqueued:
-            logger.info(
-                "Enqueuing background sync for webhook_type=%s sync_run_id=%s",
-                webhook_type,
-                sync_run_id,
-            )
-            background_tasks.add_task(
-                _background_sync, sync_run_id=sync_run_id
-            )
+        _enqueue_sync_updates(
+            payload_item_id=payload.get("item_id"),
+            sync_run_id=sync_run_id,
+            background_tasks=background_tasks,
+        )
     else:
         logger.warning(
             "Unrecognized Plaid webhook_code=%s"

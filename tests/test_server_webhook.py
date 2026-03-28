@@ -119,6 +119,34 @@ class TestWebhookPlaid:
         assert response.status_code == http.HTTPStatus.OK
         mock_bg.assert_not_called()
 
+    def test_malformed_json_body_returns_400_and_logs_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Malformed JSON body returns 400 and logs an ERROR."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = b"not-valid-json{"
+        sig = _make_plaid_sig(body)
+
+        with caplog.at_level(
+            logging.ERROR, logger="claw_plaid_ledger.routers.webhooks"
+        ):
+            response = client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert response.status_code == http.HTTPStatus.BAD_REQUEST
+        assert any("not valid JSON" in r.message for r in caplog.records)
+
     def test_sync_error_in_background_does_not_affect_response(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
@@ -305,6 +333,40 @@ class TestWebhookItemRouting:
 
         assert response.status_code == http.HTTPStatus.OK
         mock_bg.assert_called_once_with(sync_run_id=ANY)
+
+    def test_no_item_id_in_payload_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Payload without item_id logs WARNING before falling back."""
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = _SYNC_BODY
+        sig = _make_plaid_sig(body)
+
+        monkeypatch.setattr(
+            "claw_plaid_ledger.routers.webhooks._background_sync",
+            MagicMock(),
+        )
+
+        with caplog.at_level(
+            logging.WARNING, logger="claw_plaid_ledger.routers.webhooks"
+        ):
+            client.post(
+                "/webhooks/plaid",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {_TOKEN}",
+                    "Plaid-Verification": sig,
+                    "Content-Type": "application/json",
+                },
+            )
+
+        assert any(
+            "no item_id in payload" in r.message for r in caplog.records
+        )
 
     def test_no_item_id_in_payload_falls_back_without_consulting_items_toml(
         self, monkeypatch: pytest.MonkeyPatch
