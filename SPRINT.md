@@ -137,7 +137,7 @@ if it exists, or the appropriate test file that covers adapter methods).
 
 ---
 
-## Task 2: CLI `ledger refresh` command
+## Task 2: CLI `ledger refresh` command ✅ DONE
 
 ### What
 

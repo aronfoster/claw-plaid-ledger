@@ -53,7 +53,12 @@ from claw_plaid_ledger.preflight import (
     CheckStatus,
     run_production_preflight,
 )
-from claw_plaid_ledger.sync_engine import SyncSummary, run_sync
+from claw_plaid_ledger.sync_engine import (
+    PlaidPermanentError,
+    PlaidTransientError,
+    SyncSummary,
+    run_sync,
+)
 
 app = typer.Typer(
     help=(
@@ -526,6 +531,126 @@ def sync(
         return
 
     _sync_all_items()
+
+
+def _refresh_default_mode() -> None:
+    """Run refresh for the singleton PLAID_ACCESS_TOKEN item."""
+    try:
+        config = load_config(require_plaid=True)
+    except ConfigError as error:
+        typer.echo(f"refresh: {error}")
+        raise SystemExit(2) from error
+
+    if config.plaid_access_token is None:
+        message = (
+            "Missing required environment variable(s): PLAID_ACCESS_TOKEN"
+        )
+        typer.echo(f"refresh: {message}")
+        raise SystemExit(2)
+
+    adapter = PlaidClientAdapter.from_config(config)
+    try:
+        adapter.refresh_transactions(config.plaid_access_token)
+    except (PlaidPermanentError, PlaidTransientError) as exc:
+        typer.echo(f"refresh: ERROR {exc}")
+        raise SystemExit(1) from exc
+    typer.echo("refresh: OK")
+
+
+def _refresh_named_item(item_id: str) -> None:
+    """Run refresh for exactly one item from items.toml."""
+    items_config = load_items_config()
+    item_cfg = next((cfg for cfg in items_config if cfg.id == item_id), None)
+    if item_cfg is None:
+        typer.echo(f"refresh: item '{item_id}' not found in items.toml")
+        raise SystemExit(2)
+
+    merged_env = load_merged_env()
+    token = merged_env.get(item_cfg.access_token_env)
+    if token is None:
+        typer.echo(f"refresh: {item_cfg.access_token_env} is not set")
+        raise SystemExit(2)
+
+    config = _load_client_config_for_sync()
+    adapter = PlaidClientAdapter.from_config(config)
+    try:
+        adapter.refresh_transactions(token)
+    except (PlaidPermanentError, PlaidTransientError) as exc:
+        typer.echo(f"refresh[{item_cfg.id}]: ERROR {exc}")
+        raise SystemExit(1) from exc
+    typer.echo(f"refresh[{item_cfg.id}]: OK")
+
+
+def _refresh_all_items() -> None:
+    """Run refresh sequentially for all items in items.toml."""
+    items_config = load_items_config()
+    if len(items_config) == 0:
+        typer.echo("refresh --all: no items found in items.toml")
+        raise SystemExit(2)
+
+    config = _load_client_config_for_sync()
+    adapter = PlaidClientAdapter.from_config(config)
+    success_count = 0
+    failure_count = 0
+    merged_env = load_merged_env()
+
+    for item_cfg in items_config:
+        token = merged_env.get(item_cfg.access_token_env)
+        if token is None:
+            typer.echo(
+                f"refresh[{item_cfg.id}]: ERROR "
+                f"{item_cfg.access_token_env} is not set"
+            )
+            failure_count += 1
+            continue
+
+        try:
+            adapter.refresh_transactions(token)
+        except (RuntimeError, OSError) as exc:
+            typer.echo(f"refresh[{item_cfg.id}]: ERROR {exc}")
+            failure_count += 1
+            continue
+
+        typer.echo(f"refresh[{item_cfg.id}]: OK")
+        success_count += 1
+
+    typer.echo(
+        f"refresh --all: {success_count} items refreshed,"
+        f" {failure_count} failed"
+    )
+    if failure_count > 0:
+        raise SystemExit(1)
+
+
+@app.command()
+def refresh(
+    item: Annotated[
+        str | None,
+        typer.Option(
+            "--item", help="Refresh a single item from items.toml by ID."
+        ),
+    ] = None,
+    all_items: Annotated[
+        int,
+        typer.Option(
+            "--all", count=True, help="Refresh all items listed in items.toml."
+        ),
+    ] = 0,
+) -> None:
+    """Ask Plaid to re-check institutions and fire SYNC_UPDATES_AVAILABLE."""
+    if item is not None and all_items > 0:
+        typer.echo("refresh: --item and --all are mutually exclusive")
+        raise SystemExit(2)
+
+    if item is None and all_items == 0:
+        _refresh_default_mode()
+        return
+
+    if item is not None:
+        _refresh_named_item(item)
+        return
+
+    _refresh_all_items()
 
 
 def _print_link_result(access_token: str, item_id: str) -> None:
