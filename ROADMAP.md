@@ -341,7 +341,40 @@ Sprint 23 is complete. Multi-allocation transactions are now fully usable:
 
 ## Upcoming Milestones
 
-### M22 — Remove Annotations Table
+### M22 — On-demand Plaid refresh (`ledger refresh`)
+
+**Goal:** Give operators a CLI command to trigger an immediate Plaid
+transaction refresh and verify webhook delivery end-to-end in production.
+
+**Rationale:** After switching from scheduled polling to webhook-driven sync,
+there is no in-app way to force Plaid to re-check an institution and confirm
+that `SYNC_UPDATES_AVAILABLE` is being delivered. The Plaid
+`/transactions/refresh` endpoint does this in production (the sandbox
+fire-webhook equivalents are not available in production). Without a CLI
+command, operators must call the Plaid API directly with raw HTTP tooling.
+
+#### Deliverables
+
+- `ledger refresh` — calls `/transactions/refresh` for the single item
+  in `PLAID_ACCESS_TOKEN` (default, single-item mode).
+- `ledger refresh --all` — calls `/transactions/refresh` for every item in
+  `items.toml`, following the same pattern as `ledger sync --all`.
+- `ledger refresh --item <id>` — single named item from `items.toml`,
+  mutually exclusive with `--all`.
+- `PlaidClientAdapter.refresh_transactions(access_token)` — thin adapter
+  method wrapping the SDK call, consistent with existing adapter conventions.
+- Unit tests covering single-item, `--all`, and error paths.
+
+#### Acceptance criteria
+
+- Running `ledger refresh --all` causes Plaid to fire `SYNC_UPDATES_AVAILABLE`
+  to the registered webhook URL for each item (verifiable via Plaid dashboard
+  webhook logs).
+- Missing or invalid access tokens follow the same exit-code conventions as
+  `ledger sync`.
+- `--item` and `--all` are mutually exclusive; combined use exits 2.
+
+### M23 — Remove Annotations Table
 
 **Goal:** simplify the data model by eliminating the now-redundant `annotations`
 table after the allocation migration is complete.
@@ -369,6 +402,46 @@ that data, `annotations` becomes dead weight and should be removed entirely.
 - Transaction sync/import logic remains unchanged and Plaid data remains immutable.
 - The schema is simpler: raw financial events in `transactions`, semantic budgeting
   data in `allocations`.
+
+### M24 — Plaid Required Attestations (due 2026-09-07)
+
+**Goal:** Complete all eleven Plaid compliance attestations before the
+2026-09-07 deadline to maintain production API access.
+
+**Plaid dashboard:** https://dashboard.plaid.com/settings/company/compliance?tab=dataSecurity
+
+**Rationale:** Plaid requires these attestations as part of their production
+access security review. Each item below must be formally attested in the Plaid
+dashboard. Most require documented policies or implemented controls to exist
+first.
+
+#### Attestations
+
+- **RBAC** — Attest that role-based access control is implemented.
+- **MFA (consumer-facing)** — Attest that MFA is implemented on the
+  consumer-facing application where Plaid Link is deployed.
+- **EOL software management** — Attest that end-of-life software is monitored
+  and that update/EOL management practices are documented in policy.
+- **Information Security Policy (ISP)** — Attest that an ISP has been created.
+- **Privacy policy** — Attest that a privacy policy has been published.
+- **Periodic access reviews** — Attest that access reviews and audits are
+  performed periodically.
+- **Centralized IAM** — Attest that centralized identity and access management
+  solutions are in place.
+- **MFA (internal systems)** — Attest that MFA is implemented on internal
+  systems that store or process consumer data.
+- **Vulnerability patching SLA** — Attest that identified vulnerabilities are
+  patched within a defined SLA.
+- **Zero trust architecture** — Attest that a zero trust access architecture
+  is implemented.
+- **Secure tokens and certificates** — Attest that secure tokens and
+  certificates are used for authentication.
+
+#### Acceptance criteria
+
+- All eleven attestations submitted in the Plaid dashboard before 2026-09-07.
+- Any required supporting documents (ISP, privacy policy, access review records)
+  are drafted and stored before attesting.
 
 ---
 
