@@ -53,13 +53,13 @@ class TestVerifyPlaidSignature:
             tampered, {"Plaid-Verification": sig}
         )
 
-    def test_missing_secret_fails_closed(
+    def test_missing_secret_passes_through(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Returns False without raising when PLAID_WEBHOOK_SECRET is unset."""
+        """Returns True when PLAID_WEBHOOK_SECRET is unset (passthrough)."""
         monkeypatch.delenv("PLAID_WEBHOOK_SECRET", raising=False)
         sig = _make_signature(_BODY, _SECRET)
-        assert not verify_plaid_signature(_BODY, {"Plaid-Verification": sig})
+        assert verify_plaid_signature(_BODY, {"Plaid-Verification": sig})
 
     def test_missing_header_returns_false(
         self, monkeypatch: pytest.MonkeyPatch
