@@ -369,6 +369,14 @@ ledger link --products transactions --products investments
 ```
 
 The `--products` flag may be passed multiple times (default: `transactions`).
+
+Pass `--webhook` to register the webhook URL on the new item at link time,
+so no separate `ledger webhook-set` call is needed afterward:
+
+```bash
+ledger link --webhook https://<subdomain>.duckdns.org:8443/webhooks/plaid
+```
+
 Use `ledger link --help` for the full option list.
 
 See `items.toml.example` at the repo root for a two-person household
@@ -985,6 +993,25 @@ https://<subdomain>.duckdns.org:8443/webhooks/plaid
 
 Using a nonstandard port (8443 recommended) adds a layer of obscurity
 and keeps port 443 free for other services on the same host.
+
+### 10.5.1 Registering the webhook URL on existing items
+
+Adding a URL to the Plaid dashboard does **not** backfill items that were
+linked before the webhook was configured.  Each existing item must be updated
+explicitly with `ledger webhook-set`:
+
+```bash
+# Update all items in items.toml at once
+ledger webhook-set --url https://<subdomain>.duckdns.org:8443/webhooks/plaid --all
+
+# Single-item mode (uses PLAID_ACCESS_TOKEN)
+ledger webhook-set --url https://<subdomain>.duckdns.org:8443/webhooks/plaid
+```
+
+Until this is run, Plaid will show no webhook deliveries for those items in
+the dashboard even though the server is reachable and correctly configured.
+Run `ledger webhook-set --all` once after completing Section 10.5, then verify
+deliveries appear in the Plaid dashboard.
 
 ### 10.6 Router port-forward requirements
 

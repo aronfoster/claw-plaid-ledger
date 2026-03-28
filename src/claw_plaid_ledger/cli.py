@@ -554,6 +554,18 @@ def link(
             ),
         ),
     ] = None,
+    webhook: Annotated[
+        str | None,
+        typer.Option(
+            "--webhook",
+            help=(
+                "Webhook URL to register on the new item "
+                "(e.g. https://example.com/webhooks/plaid). "
+                "Plaid will send transaction events here without needing "
+                "a separate 'ledger webhook-set' call."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Connect a Plaid institution via browser and print the access token."""
     requested_products = products if products is not None else ["transactions"]
@@ -568,10 +580,12 @@ def link(
 
     typer.echo("Creating Plaid link token...")
     try:
+        extra = {"webhook": webhook} if webhook is not None else {}
         link_token = adapter.create_link_token(
             "operator",
             requested_products,
             ["US"],
+            **extra,
         )
     except (RuntimeError, OSError) as error:
         typer.echo(f"link: failed to create link token: {error}")
@@ -611,6 +625,101 @@ def link(
         raise SystemExit(1) from error
 
     _print_link_result(access_token, item_id)
+
+
+def _webhook_set_all(adapter: PlaidClientAdapter, url: str) -> None:
+    """Update the webhook URL for every item in items.toml."""
+    try:
+        items_cfg = load_items_config()
+    except ItemsConfigError as error:
+        typer.echo(f"webhook-set: items.toml error: {error}")
+        raise SystemExit(1) from error
+
+    if not items_cfg:
+        typer.echo("webhook-set: no items found in items.toml")
+        raise SystemExit(1)
+
+    merged_env = load_merged_env()
+    ok = 0
+    for item_cfg in items_cfg:
+        token = merged_env.get(item_cfg.access_token_env)
+        if not token:
+            typer.echo(
+                f"webhook-set: {item_cfg.id}: "
+                f"env var {item_cfg.access_token_env} not set — skipped"
+            )
+            continue
+        try:
+            adapter.update_item_webhook(token, url)
+            typer.echo(f"webhook-set: {item_cfg.id}: updated to {url}")
+            ok += 1
+        except (RuntimeError, OSError) as error:
+            typer.echo(f"webhook-set: {item_cfg.id}: failed: {error}")
+
+    typer.echo(f"webhook-set: {ok}/{len(items_cfg)} items updated")
+    if ok < len(items_cfg):
+        raise SystemExit(1)
+
+
+def _webhook_set_single(adapter: PlaidClientAdapter, url: str) -> None:
+    """Update the webhook URL for the single item in PLAID_ACCESS_TOKEN."""
+    try:
+        config_full = load_config(require_plaid=True)
+    except ConfigError as error:
+        typer.echo(f"webhook-set: {error}")
+        raise SystemExit(2) from error
+
+    token = config_full.plaid_access_token
+    if not token:
+        typer.echo("webhook-set: PLAID_ACCESS_TOKEN not set")
+        raise SystemExit(2)
+
+    try:
+        adapter.update_item_webhook(token, url)
+    except (RuntimeError, OSError) as error:
+        typer.echo(f"webhook-set: failed: {error}")
+        raise SystemExit(1) from error
+
+    typer.echo(f"webhook-set: updated to {url}")
+
+
+@app.command(name="webhook-set")
+def webhook_set(
+    url: Annotated[
+        str,
+        typer.Option("--url", help="Webhook URL to register with Plaid."),
+    ],
+    all_items: Annotated[
+        int,
+        typer.Option(
+            "--all",
+            count=True,
+            help="Update all items listed in items.toml.",
+        ),
+    ] = 0,
+) -> None:
+    """
+    Register or update the webhook URL on existing Plaid items.
+
+    Use this after setting up a public webhook URL to backfill items that were
+    linked before the webhook was configured.  Without this, Plaid will not
+    send transaction events to your server for those items.
+
+    Single-item mode (default): reads PLAID_ACCESS_TOKEN from config.
+    Multi-item mode (--all): reads every item from items.toml.
+    """
+    try:
+        config = load_config(require_plaid_client=True)
+    except ConfigError as error:
+        typer.echo(f"webhook-set: {error}")
+        raise SystemExit(2) from error
+
+    adapter = PlaidClientAdapter.from_config(config)
+
+    if all_items > 0:
+        _webhook_set_all(adapter, url)
+    else:
+        _webhook_set_single(adapter, url)
 
 
 def _items_query_db(

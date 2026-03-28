@@ -350,9 +350,23 @@ async def webhook_plaid(
             status_code=400, detail="Invalid signature"
         )
 
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        logger.exception(
+            "Plaid webhook body is not valid JSON; body_preview=%r",
+            body[:200],
+        )
+        raise fastapi.HTTPException(
+            status_code=400, detail="Invalid JSON body"
+        ) from None
     webhook_type = payload.get("webhook_type", "")
-    logger.info("Plaid webhook received webhook_type=%s", webhook_type)
+    webhook_code = payload.get("webhook_code", "")
+    logger.info(
+        "Plaid webhook received webhook_type=%s webhook_code=%s",
+        webhook_type,
+        webhook_code,
+    )
     logger.debug(
         "webhook payload (redacted): %s", redact_webhook_body(payload)
     )
@@ -366,7 +380,7 @@ async def webhook_plaid(
         else "sync-" + uuid.uuid4().hex[:8]
     )
 
-    if webhook_type == _SYNC_UPDATES_AVAILABLE:
+    if webhook_code == _SYNC_UPDATES_AVAILABLE:
         payload_item_id: str | None = payload.get("item_id")
         enqueued = False
 
@@ -424,6 +438,11 @@ async def webhook_plaid(
                 _background_sync, sync_run_id=sync_run_id
             )
     else:
-        logger.warning("Unrecognized Plaid webhook type: %s", webhook_type)
+        logger.warning(
+            "Unrecognized Plaid webhook_code=%s"
+            " webhook_type=%s; no sync triggered",
+            webhook_code,
+            webhook_type,
+        )
 
     return {"status": "ok"}
