@@ -16,6 +16,55 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ---
 
+### BUG-015 — M21 allocation backfill silently dropped all annotation data
+
+**Status:** Resolved (branch `claude/restore-transaction-categories-bbO0l`)
+**Severity:** High (all pre-M21 category, note, and tag data invisible to the allocation model)
+**Area:** Database (`db.py` — `initialize_database`)
+**Reported by:** Hestia
+
+#### What happened
+
+The M21 (Sprint 23) startup backfill inserted allocation stubs for every
+transaction that had no allocation row — but the INSERT selected only from
+`transactions`, with no JOIN to `annotations`. Every transaction annotated
+before M21 received a stub with `category = NULL`, `note = NULL`,
+`tags = NULL`, even though the data was sitting intact in `annotations`.
+
+Because the `NOT EXISTS` guard made the backfill idempotent, subsequent
+startups could not repair the damage: the allocation row already existed, so
+the INSERT never fired again.
+
+The same null-stub pattern existed in `upsert_transaction` (called during
+sync), but that path is not affected by this bug because `PUT /annotations`
+always calls `upsert_single_allocation` immediately after, keeping both
+tables in sync for post-M21 writes.
+
+#### Affected code
+
+- `src/claw_plaid_ledger/db.py` — `initialize_database`, backfill block
+  (lines ~48–63 before fix)
+
+#### Fix
+
+Two changes to `initialize_database`:
+
+1. **INSERT backfill** now `LEFT JOIN`s `annotations` and projects
+   `an.category`, `an.note`, `an.tags` into new allocation rows. Stubs
+   created from this point forward carry annotation data.
+
+2. **UPDATE migration** (new) runs on every startup and repairs stubs that
+   were already created with all-null annotatable fields where annotation
+   data exists. Guards prevent it from touching allocations that already
+   have data, split transactions (allocation count > 1), or rows with no
+   matching annotation.
+
+Nine tests added to `TestStartupBackfill` in `tests/test_db.py`, covering
+both paths (with and without tags), the no-annotation case, the
+no-overwrite guard, the split-transaction guard, and idempotency.
+
+---
+
 ### BUG-014 — Unknown query parameters are silently ignored
 
 **Status:** Resolved (Sprint 21, M19)

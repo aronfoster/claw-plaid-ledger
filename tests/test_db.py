@@ -1699,6 +1699,321 @@ class TestStartupBackfill:
 
         assert count_after_second == 1
 
+    # ------------------------------------------------------------------
+    # Helpers shared by annotation-backfill tests
+    # ------------------------------------------------------------------
+
+    _ACCT = "acct_ann_bf"
+    _NOW = "2024-01-01T00:00:00+00:00"
+
+    def _seed_account(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO accounts "
+            "(plaid_account_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (self._ACCT, "Ann Backfill Acct", self._NOW, self._NOW),
+        )
+
+    def _seed_transaction(
+        self, conn: sqlite3.Connection, tx_id: str, amount: float = 36.85
+    ) -> None:
+        conn.execute(
+            TRANSACTION_INSERT_SQL,
+            (tx_id, self._ACCT, amount, "Merchant", 0, self._NOW, self._NOW),
+        )
+
+    def _seed_annotation(
+        self,
+        conn: sqlite3.Connection,
+        tx_id: str,
+        *,
+        category: str | None = "Car",
+        note: str | None = "E-470 Express Tolls",
+        tags: str | None = None,
+    ) -> None:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(plaid_transaction_id, category, note, tags, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (tx_id, category, note, tags, self._NOW, self._NOW),
+        )
+
+    # ------------------------------------------------------------------
+    # INSERT backfill picks up annotation data
+    # ------------------------------------------------------------------
+
+    def test_backfill_insert_copies_annotation_data(
+        self, tmp_path: Path
+    ) -> None:
+        """INSERT backfill carries annotation data into new allocation."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-ann-insert")
+            self._seed_annotation(conn, "tx-ann-insert")
+            # Remove the allocation the first initialize_database call created
+            # so we can test the INSERT path cleanly.
+            conn.execute(
+                "DELETE FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-ann-insert'"
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-ann-insert'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470 Express Tolls"
+        assert row[2] is None  # no tags seeded
+
+    def test_backfill_insert_no_annotation_leaves_fields_null(
+        self, tmp_path: Path
+    ) -> None:
+        """INSERT backfill with no annotation leaves fields null."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-no-ann")
+            conn.execute(
+                "DELETE FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-no-ann'"
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-no-ann'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] is None
+        assert row[1] is None
+        assert row[2] is None
+
+    # ------------------------------------------------------------------
+    # UPDATE migration restores data into existing null stubs
+    # ------------------------------------------------------------------
+
+    def test_update_migration_restores_annotation_into_null_stub(
+        self, tmp_path: Path
+    ) -> None:
+        """UPDATE migration restores annotation data into null stubs."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-restore")
+            # Simulate the old bad backfill: allocation row exists but has
+            # null category/note/tags even though an annotation is present.
+            conn.execute(
+                "INSERT OR REPLACE INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                ("tx-restore", 36.85, self._NOW, self._NOW),
+            )
+            self._seed_annotation(conn, "tx-restore")
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-restore'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470 Express Tolls"
+
+    def test_update_migration_does_not_overwrite_existing_allocation_data(
+        self, tmp_path: Path
+    ) -> None:
+        """UPDATE migration skips allocations with existing data."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-has-data")
+            conn.execute(
+                "INSERT OR REPLACE INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, NULL, ?, ?)",
+                (
+                    "tx-has-data",
+                    36.85,
+                    "Tolls",
+                    "manually set",
+                    self._NOW,
+                    self._NOW,
+                ),
+            )
+            # Annotation exists but has different data
+            self._seed_annotation(
+                conn, "tx-has-data", category="Car", note="E-470 Express Tolls"
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-has-data'"
+            ).fetchone()
+
+        # Must not be overwritten by annotation data
+        assert row[0] == "Tolls"
+        assert row[1] == "manually set"
+
+    def test_update_migration_does_not_touch_split_allocations(
+        self, tmp_path: Path
+    ) -> None:
+        """UPDATE migration skips split transactions (count > 1)."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-split", amount=100.0)
+            # Two null-stub allocations (bad-backfill on a split)
+            for amt in (60.0, 40.0):
+                conn.execute(
+                    "INSERT INTO allocations "
+                    "(plaid_transaction_id, amount, category, note, tags, "
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                    ("tx-split", amt, self._NOW, self._NOW),
+                )
+            self._seed_annotation(conn, "tx-split")
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT category FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-split'"
+            ).fetchall()
+
+        # Split allocations must not be touched
+        assert all(row[0] is None for row in rows)
+
+    def test_update_migration_is_idempotent(self, tmp_path: Path) -> None:
+        """Second initialize_database keeps count and data stable."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-idem")
+            conn.execute(
+                "INSERT OR REPLACE INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                ("tx-idem", 20.0, self._NOW, self._NOW),
+            )
+            self._seed_annotation(conn, "tx-idem")
+
+        initialize_database(db_path)
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-idem'"
+            ).fetchone()[0]
+            row = conn.execute(
+                "SELECT category FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-idem'"
+            ).fetchone()
+
+        assert count == 1
+        assert row[0] == "Car"
+
+    def test_backfill_insert_copies_tags(self, tmp_path: Path) -> None:
+        """INSERT backfill carries tags JSON string from annotations table."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-tags-insert")
+            self._seed_annotation(
+                conn,
+                "tx-tags-insert",
+                category="Car",
+                note="E-470",
+                tags='["toll", "commute"]',
+            )
+            conn.execute(
+                "DELETE FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-insert'"
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-insert'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470"
+        assert row[2] == '["toll", "commute"]'
+
+    def test_update_migration_restores_tags(self, tmp_path: Path) -> None:
+        """UPDATE migration restores tags JSON from annotations into stub."""
+        db_path = tmp_path / "ledger.db"
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            self._seed_account(conn)
+            self._seed_transaction(conn, "tx-tags-update")
+            conn.execute(
+                "INSERT OR REPLACE INTO allocations "
+                "(plaid_transaction_id, amount, category, note, tags, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, NULL, NULL, NULL, ?, ?)",
+                ("tx-tags-update", 36.85, self._NOW, self._NOW),
+            )
+            self._seed_annotation(
+                conn,
+                "tx-tags-update",
+                category="Car",
+                note="E-470",
+                tags='["toll", "commute"]',
+            )
+
+        initialize_database(db_path)
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT category, note, tags FROM allocations "
+                "WHERE plaid_transaction_id = 'tx-tags-update'"
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] == "Car"
+        assert row[1] == "E-470"
+        assert row[2] == '["toll", "commute"]'
+
 
 # ---------------------------------------------------------------------------
 # replace_allocations
