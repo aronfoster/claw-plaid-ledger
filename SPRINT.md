@@ -31,6 +31,12 @@ re-litigated during implementation:
 - **Mutual exclusion and missing-config exits** — `--item` and `--all` together
   exits 2. Missing required config exits 2. Adapter errors exit 1. These match
   the exit-code conventions of `ledger sync`.
+- **Default mode does not inspect items.toml** — `_refresh_default_mode()`
+  calls `load_config(require_plaid=True)` and requires `PLAID_ACCESS_TOKEN`.
+  If items.toml is present but `PLAID_ACCESS_TOKEN` is not set, the command
+  fails with exit 2 and a missing-variable message. It does **not** auto-select
+  the first item from items.toml. Operators on multi-item setups must use
+  `--all` or `--item`. This is identical to `_sync_default_mode()` behaviour.
 - **Default mode uses `PLAID_ACCESS_TOKEN` singleton** — identical to
   `ledger sync` default mode: calls `load_config(require_plaid=True)` and uses
   `config.plaid_access_token`.
