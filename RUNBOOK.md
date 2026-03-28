@@ -927,8 +927,14 @@ changes even when your IP does.
 1. Visit [duckdns.org](https://www.duckdns.org) and sign in with a
    GitHub, Google, or Twitter account.
 2. In the **domains** section, type a subdomain name of your choice
-   (e.g. `myledger`) and click **add domain**.
-3. Note the full hostname: `myledger.duckdns.org`.
+   and click **add domain**.  Use a random, unguessable subdomain
+   (e.g. 8 lowercase alphanumeric characters) rather than anything
+   descriptive — this makes your endpoint harder to discover by
+   enumeration.  Generate one with:
+   ```bash
+   cat /dev/urandom | tr -dc 'a-z0-9' | head -c 8
+   ```
+3. Note the full hostname: `<subdomain>.duckdns.org`.
 
 ### 10.3 Finding your DuckDNS token
 
@@ -936,70 +942,105 @@ After signing in, your token is displayed at the top of the DuckDNS
 dashboard page.  It looks like a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
 Keep it secret — it grants write access to all your DuckDNS subdomains.
 
-### 10.4 Updating the DNS record automatically
+### 10.4 Installing the update script and credentials
 
-Use the included script to keep the DuckDNS record current:
+Install the script system-wide:
 
 ```bash
-DUCKDNS_TOKEN=<your-token> DUCKDNS_DOMAIN=myledger \
-    ./scripts/duckdns-update.sh
+sudo cp scripts/duckdns-update.sh /usr/local/bin/duckdns-update.sh
+sudo chmod 755 /usr/local/bin/duckdns-update.sh
 ```
 
-For automatic updates, add a cron entry (edit with `crontab -e`):
+Store credentials in a system config file.  The file must be readable
+by the `caddy` group (see Section 10.7) and not world-readable:
+
+```bash
+sudo mkdir -p /etc/duckdns
+sudo chmod 700 /etc/duckdns
+sudo touch /etc/duckdns/credentials
+sudo chmod 640 /etc/duckdns/credentials
+sudo chown root:caddy /etc/duckdns/credentials
+```
+
+Edit `/etc/duckdns/credentials` and add:
 
 ```
-*/5 * * * * DUCKDNS_TOKEN=<your-token> DUCKDNS_DOMAIN=myledger /path/to/scripts/duckdns-update.sh >> /var/log/duckdns.log 2>&1
+DUCKDNS_TOKEN=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+DUCKDNS_DOMAIN=<subdomain>
 ```
 
-A systemd timer is an equivalent alternative for systemd-based hosts.
+For the systemd timer that runs the updates automatically, see
+**Section 12.4**.
 
 ### 10.5 Pointing Plaid to your webhook URL
 
-Register the following URL in the Plaid dashboard
-(Developers → Webhooks → Add webhook URL):
+Plaid requires HTTPS with a valid certificate but does not restrict
+which port the webhook URL uses.  Register the following URL in the
+Plaid dashboard (Developers → Webhooks → Add webhook URL):
 
 ```
-https://myledger.duckdns.org/webhooks/plaid
+https://<subdomain>.duckdns.org:8443/webhooks/plaid
 ```
 
-Replace `myledger` with your chosen subdomain.
+Using a nonstandard port (8443 recommended) adds a layer of obscurity
+and keeps port 443 free for other services on the same host.
 
-### 10.6 Router and firewall port-forward requirements
+### 10.6 Router port-forward requirements
 
 `ledger serve` listens on plain HTTP internally (default port 8000,
-configurable via `CLAW_SERVER_PORT`).  For Plaid to reach it you need:
+configurable via `CLAW_SERVER_PORT`).  A reverse proxy handles TLS
+termination.  Only one inbound port forward is required:
 
-1. **Port-forward** on your router: external TCP port 443 → internal
-   IP of the server host, port `CLAW_SERVER_PORT` (or the port your
-   reverse proxy listens on internally).
-2. A **reverse proxy** (nginx, Caddy, or similar) to terminate TLS and
-   forward requests to `ledger serve`.  Plaid requires HTTPS; the
-   server itself speaks plain HTTP.
+- **TCP 8443** → this host, port 8443 (Caddy listens here and proxies
+  to `ledger serve`)
 
-### 10.7 TLS termination
+Do **not** forward port 80 or 443.  Certificate issuance is handled
+via DNS-01 challenge (see Section 10.7), which requires no inbound
+port at all.
 
-`ledger serve` does not handle TLS directly.  Recommended setup:
+### 10.7 TLS termination with Caddy and DNS-01 (recommended)
 
-- **Caddy** — automatic HTTPS with Let's Encrypt, minimal config:
+The standard Caddy package does not include the DuckDNS DNS provider.
+Build a custom binary with `xcaddy`:
 
-  ```
-  myledger.duckdns.org {
-      reverse_proxy localhost:8000
-  }
-  ```
+```bash
+sudo apt install golang-go
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+~/go/bin/xcaddy build --with github.com/caddy-dns/duckdns
+sudo mv /usr/bin/caddy /usr/bin/caddy.stock
+sudo mv ./caddy /usr/bin/caddy
+sudo chmod 755 /usr/bin/caddy
+```
 
-- **nginx** — obtain a certificate with Certbot, then proxy:
+Add a drop-in override so the Caddy service can read the DuckDNS
+token from `/etc/duckdns/credentials`:
 
-  ```nginx
-  server {
-      listen 443 ssl;
-      server_name myledger.duckdns.org;
-      # ... ssl_certificate / ssl_certificate_key lines ...
-      location / {
-          proxy_pass http://127.0.0.1:8000;
-      }
-  }
-  ```
+```bash
+sudo mkdir -p /etc/systemd/system/caddy.service.d
+```
+
+Edit `/etc/systemd/system/caddy.service.d/override.conf`:
+
+```ini
+[Service]
+EnvironmentFile=/etc/duckdns/credentials
+```
+
+Then reload systemd: `sudo systemctl daemon-reload`
+
+Add this site block to `/etc/caddy/Caddyfile`:
+
+```
+<subdomain>.duckdns.org:8443 {
+    tls {
+        dns duckdns {env.DUCKDNS_TOKEN}
+    }
+    reverse_proxy localhost:8000
+}
+```
+
+Caddy will obtain and renew the Let's Encrypt certificate automatically
+via DNS-01 challenge — no inbound ports 80 or 443 required.
 
 ### 10.8 Testing the webhook URL before registering with Plaid
 
@@ -1007,7 +1048,7 @@ Verify the full HTTPS path is reachable before entering it in the
 dashboard:
 
 ```bash
-curl -v https://myledger.duckdns.org/health
+curl -v https://<subdomain>.duckdns.org:8443/health
 ```
 
 Expected response: `{"status": "ok"}` with HTTP 200.  If this fails,
@@ -1137,36 +1178,52 @@ systemctl list-timers claw-plaid-ledger-sync.timer
 
 ### 12.4 Installing the DuckDNS timer
 
-The DuckDNS timer replaces the cron entry from **Section 10.4**.  Remove
-the cron entry before enabling this timer to avoid duplicate updates.
+The DuckDNS update script and credentials are installed system-wide
+(see Section 10.4).  Create the following unit files:
 
-Install the units:
+`/etc/systemd/system/duckdns.service`:
+
+```ini
+[Unit]
+Description=DuckDNS dynamic DNS updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/duckdns/credentials
+ExecStart=/usr/local/bin/duckdns-update.sh
+StandardOutput=append:/var/log/duckdns.log
+StandardError=append:/var/log/duckdns.log
+```
+
+`/etc/systemd/system/duckdns.timer`:
+
+```ini
+[Unit]
+Description=DuckDNS update every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and start:
 
 ```bash
-sudo cp deploy/systemd/claw-plaid-ledger-duckdns.service /etc/systemd/system/
-sudo cp deploy/systemd/claw-plaid-ledger-duckdns.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now duckdns.timer
 ```
 
-Edit `claw-plaid-ledger-duckdns.service`:
-
-- Set `User` and `Group` to your OS username.
-- Set `EnvironmentFile` to the `.env` file containing `DUCKDNS_TOKEN`
-  and `DUCKDNS_DOMAIN`.
-- Set `ExecStart` to the absolute path of `scripts/duckdns-update.sh`
-  (e.g. `/opt/claw-plaid-ledger/scripts/duckdns-update.sh`).
-
-Enable the timer:
+Trigger the first run immediately and confirm it succeeded:
 
 ```bash
-sudo systemctl enable --now claw-plaid-ledger-duckdns.timer
-```
-
-Confirm the first run succeeds:
-
-```bash
-sudo systemctl start claw-plaid-ledger-duckdns.service
-journalctl -u claw-plaid-ledger-duckdns --no-pager
+sudo systemctl start duckdns.service
+cat /var/log/duckdns.log
+# Expected: duckdns-update: <subdomain> → OK
 ```
 
 ### 12.5 Passing secrets securely via EnvironmentFile
