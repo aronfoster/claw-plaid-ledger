@@ -260,3 +260,15 @@ Remove `/annotations` path-matching rules from:
   `initialize_database()`.
 - Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes with
   no regressions.
+
+---
+
+## Sprint 25 Closeout ✅ DONE
+
+**Closed:** 2026-04-01
+
+All three tasks completed and merged. Quality gate: 512 tests pass, ruff format/check clean, mypy clean.
+
+- ROADMAP.md: M23 moved from Upcoming to Completed Milestones.
+- ARCHITECTURE.md, RUNBOOK.md, README.md, skill bundles, and proxy configs: no remaining `annotations` references.
+- `grep -r "annotations" src/ deploy/ skills/ *.md` returns no hits except intentional historical entries in ROADMAP.md, BUGS.md, and SPRINT.md.
