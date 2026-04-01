@@ -17,35 +17,38 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 #### What is happening
 
-The OpenClaw doctor health check for both ledger skills generates a command of the form:
+The OpenClaw doctor health check for both ledger skills, and the runtime API call examples in both SKILL.md files, use commands of the form:
 
 ```bash
 source ~/.openclaw/.env && curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "$CLAW_LEDGER_URL/transactions?..." | python3 -c "import json, sys; ..."
 ```
 
-This command uses a pipe (`|`) to pass curl output through a `python3 -c` inline eval for display formatting. The same pattern is used at runtime when agents (particularly Hestia) call the ledger API.
+This form is broken for three independent reasons:
 
-Two properties of this command make it permanently incompatible with OpenClaw's exec allowlist system:
+1. **The pipe (`|`) is permanently unsupported in allowlist mode on the gateway host.** It is not a miss that can be approved or persisted — it is a hard block regardless of what is in the allowlist or how the operator responds to approval prompts.
 
-1. **Pipe operator blocked in allowlist mode.** OpenClaw's `security=allowlist` exec policy supports `&&`/`||`/`;` chaining but explicitly does not support redirections, and `|` (pipe) falls into that category. A command containing a pipe can never satisfy the allowlist and always requires a prompt.
+2. **`source` is a shell builtin that requires a shell process to execute**, meaning the entire command runs as `bash -c "source ... && curl ... | python3 -c '...'"`. The approval system then tracks the full shell command string rather than the curl binary path, so every invocation with different query parameters is treated as a new unapproved command.
 
-2. **`allow-always` cannot persist this command.** Because the pipe makes the command an allowlist miss on every run, `allow-always` approvals are not persisted. Each new invocation (with different date parameters or query strings) triggers a fresh approval prompt.
+3. **`python3 -c` is an inline interpreter eval form.** Even if it were not blocked by the pipe, `allow-always` cannot persist allowlist entries for eval forms.
+
+The `source ~/.openclaw/.env` prefix is also redundant. The skill's `apiKey` and `env` entries in `openclaw.json` already inject `CLAW_API_SECRET` and `CLAW_LEDGER_URL` into the agent's environment at skill activation time.
 
 The consequence: every time Hestia or Athena calls the ledger API, OpenClaw emits an approval request and the exec tool returns immediately with `status: approval-pending`. The agent's turn ends without a result. When the operator approves via Discord and the command completes, OpenClaw delivers the output as a new disconnected agent turn. Hestia receives the raw formatted output with no memory of the original question and dumps it verbatim into the chat.
 
 #### Fix
 
-Remove the `| python3 -c "..."` pipe from the doctor health check command and from agent runtime usage. Both skill SKILL.md files should instruct agents to call `curl` and receive raw JSON — LLM agents have no difficulty reading and acting on raw JSON responses, and the python3 formatting step provides no value to the model.
-
-With the pipe removed, the command becomes:
+Update the doctor health check command and all runtime API call examples in both `skills/hestia-ledger/SKILL.md` and `skills/athena-ledger/SKILL.md`. Every command that follows the pattern `source ~/.openclaw/.env && curl ... | python3 -c "..."` should be replaced with a bare curl call, for example:
 
 ```bash
-source ~/.openclaw/.env && curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
-  "$CLAW_LEDGER_URL/transactions?..."
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"
 ```
 
-This form uses only `&&` (supported chaining) and no inline eval. `allow-always` can persist it, subsequent runs auto-approve, and exec stays synchronous so agents receive results inline within the same turn.
+No shell wrapper, no pipe, no python3 formatting step. Agents read raw JSON without issue.
+
+The existing `exec-approvals.json` configuration (`security: "allowlist"`, `autoAllowSkills: true` per agent) is correct and does not need to change. Once the pipe is removed, `autoAllowSkills` should resolve `curl` from the skill binary list and auto-approve it without operator intervention. If curl is not being resolved by `autoAllowSkills` after this fix, the fallback is to add an explicit allowlist entry with `pattern: "/usr/bin/curl"` (verify path with `which curl`).
+
+Do not add a denylist. The allowlist model already blocks `rm` and everything else not explicitly referenced by a skill.
 
 ---
 
