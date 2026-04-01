@@ -5,10 +5,10 @@ loop.
 
 ## What is in this bundle
 
-- `SKILL.md` — ingestion-only contract for deterministic annotation and
-  escalation.
-- `checklists/annotation_write_checklist.md` — pre-write checklist for
-  `PUT /annotations/{transaction_id}`.
+- `SKILL.md` — ingestion-only contract for deterministic allocation updates
+  and escalation.
+- `checklists/allocation_write_checklist.md` — pre-write checklist for
+  `PUT /transactions/{id}/allocations`.
 - `checklists/query_playbooks.md` — ingestion query sequences, escalation
   tagging rules, and failure handling.
 
@@ -31,6 +31,6 @@ cp -R hestia-ledger "$OPENCLAW_SKILLS_DIR/hestia-ledger"
 
 1. Access to ledger API with bearer-token auth.
 2. Endpoints: `GET /transactions`, `GET /transactions/{id}`,
-   `PUT /annotations/{transaction_id}`.
+   `PUT /transactions/{id}/allocations`.
 3. Canonical-source precedence configured by operators.
 4. Stable timezone/basis for repeatable date-window queries.

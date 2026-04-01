@@ -27,7 +27,7 @@
   (`WebhookIPAllowlistMiddleware`)
 - Router package (`routers/`) — domain-scoped `APIRouter` modules:
   `health.py` (`GET /health`, `GET /errors`), `transactions.py`
-  (`GET /transactions`, `GET /transactions/{id}`, `PUT /annotations/{id}`,
+  (`GET /transactions`, `GET /transactions/{id}`,
   `PUT /transactions/{id}/allocations`),
   `spend.py` (`GET /spend`, `GET /spend/trends`), `accounts.py`
   (`GET /accounts`, `PUT /accounts/{id}`, `GET /categories`, `GET /tags`),
@@ -72,7 +72,7 @@ resolves the original source correctly (used by the webhook IP allowlist).
 - `GET /docs`
 - `GET /openapi.json`
 
-All other routes (`/transactions`, `/annotations`, `/spend`,
+All other routes (`/transactions`, `/spend`,
 `/webhooks/plaid`) require a valid client certificate when mTLS is active.
 
 ### Layer 2 — Application layer: CLAW_API_SECRET bearer token (always required)
@@ -103,8 +103,8 @@ certificate generation, Caddy/nginx configuration, and cert rotation.
 
 1. **Plaid sync event**: `SYNC_UPDATES_AVAILABLE` arrives and starts a
    background sync for the mapped item.
-2. **Hestia annotation pass**: when the sync has non-zero changes, notifier
-   wakes Hestia via `/hooks/agent` for ingestion-time annotation updates.
+2. **Hestia ingestion pass**: when the sync has non-zero changes, notifier
+   wakes Hestia via `/hooks/agent` for ingestion-time allocation updates.
 3. **Athena analysis**: Athena runs on its own cadence or when anomalies are
    flagged; it is not woken for every sync event.
 
@@ -149,8 +149,7 @@ _scheduled_sync_loop (every 60 min)
   periodic schedule, optionally prioritizing `needs-athena-review` tags.
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
-never touches `annotations`; it also seeds blank allocation rows via
-`upsert_transaction`. Source precedence is applied after sync writes via
+seeds blank allocation rows via `upsert_transaction`. Source precedence is applied after sync writes via
 `ledger apply-precedence`; canonical filtering happens in query/view logic,
 never by deleting raw rows. Agents read transactions and write allocations
 exclusively through the HTTP API.
@@ -165,9 +164,8 @@ Zero-change syncs skip the notification entirely.
 - SQLite is the source of truth for local financial state.
 - Database writes should be deterministic and idempotent across reruns.
 - CLI commands orchestrate workflows but should not contain raw Plaid API setup.
-- The `annotations` table is entirely agent-owned; the sync engine must never
-  read from or write to it.
-- The `allocations` table is the budgeting layer; `annotations` continues to receive double-writes (via `PUT /annotations/{id}`) and is decommissioned in M22.
+- The `allocations` table is the budgeting layer; written via
+  `PUT /transactions/{id}/allocations`.
 - Plaid-sourced tables (`transactions`, `accounts`, `sync_state`) are immutable
   from the agent's perspective.
 
@@ -180,8 +178,7 @@ Zero-change syncs skip the notification entirely.
 - `account`
 - `account_label` (agent/operator-owned; sync engine never touches this)
 - `transaction`
-- `annotation` (agent-owned; sync engine never touches this; continues to receive double-writes until M23)
-- `allocation` (budgeting layer; seeded by sync engine via `upsert_transaction`; written via `PUT /transactions/{id}/allocations` or the compatibility shim `PUT /annotations/{transaction_id}`)
+- `allocation` (budgeting layer; seeded by sync engine via `upsert_transaction`; written via `PUT /transactions/{id}/allocations`)
 - `sync_state`
 - `ledger_errors` (server-owned; written by `LedgerDbHandler`; read via `GET /errors`)
 
@@ -274,47 +271,14 @@ CREATE TABLE IF NOT EXISTS ledger_errors (
 );
 ```
 
-### `annotations`
-
-Agent-owned annotation data. **The sync engine never reads from or writes to
-this table.** Created by `init-db`; managed entirely via
-`PUT /annotations/{transaction_id}`.
-
-```sql
-CREATE TABLE IF NOT EXISTS annotations (
-    id                   INTEGER PRIMARY KEY,
-    plaid_transaction_id TEXT NOT NULL UNIQUE
-                         REFERENCES transactions(plaid_transaction_id),
-    category             TEXT,
-    note                 TEXT,
-    tags                 TEXT,          -- JSON array stored as text, e.g. '["food","recurring"]'
-    created_at           TEXT NOT NULL,
-    updated_at           TEXT NOT NULL
-);
-```
-
-Column notes:
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | INTEGER | Auto-incrementing primary key |
-| `plaid_transaction_id` | TEXT | FK to `transactions.plaid_transaction_id`; unique per annotation |
-| `category` | TEXT \| NULL | Agent-assigned category label |
-| `note` | TEXT \| NULL | Free-text agent note |
-| `tags` | TEXT \| NULL | JSON array stored as text (e.g. `'["food","recurring"]'`); `null` when no tags |
-| `created_at` | TEXT | ISO 8601 UTC timestamp; set on first insert; never changed on update |
-| `updated_at` | TEXT | ISO 8601 UTC timestamp; updated on every upsert |
-
 ### `allocations`
 
 Budgeting layer. Each Plaid transaction maps to one or more allocation rows.
-In M20, every transaction has exactly one allocation. The sync engine seeds a
-blank allocation row (amount = transaction amount, all semantic fields null)
-for every new transaction via `upsert_transaction`. A startup migration
-backfills allocations for any transaction that lacks one. Written via
-`PUT /annotations/{transaction_id}` (which double-writes to both `annotations`
-and `allocations`). Read by all transaction, spend, and category/tag endpoints.
-`annotations` receives double-writes until M23 when it is decommissioned.
+The sync engine seeds a blank allocation row (amount = transaction amount, all
+semantic fields null) for every new transaction via `upsert_transaction`. A
+startup migration backfills allocations for any transaction that lacks one.
+Written via `PUT /transactions/{id}/allocations`. Read by all transaction,
+spend, and category/tag endpoints.
 
 ```sql
 CREATE TABLE IF NOT EXISTS allocations (
@@ -392,7 +356,6 @@ All endpoints are served by `ledger serve`.
 | `GET` | `/accounts` | Bearer | All synced accounts joined with label data (`label`, `description`) from `account_labels` |
 | `PUT` | `/accounts/{account_id}` | Bearer | Upsert a human-readable label for an account; returns the full account record; 404 if unknown |
 | `GET` | `/transactions/{transaction_id}` | Bearer | Single transaction with merged allocation and suppression provenance |
-| `PUT` | `/annotations/{transaction_id}` | Bearer | Upsert annotation (double-writes to `allocations`); returns the full updated transaction record with `allocation` key |
 | `GET` | `/errors` | Bearer | Recent ledger warnings and errors from `ledger_errors`; supports `hours`, `min_severity`, `limit`, `offset` |
 | `GET` | `/openapi.json` | None | Auto-generated OpenAPI spec (FastAPI); no authentication required |
 | `GET` | `/docs` | None | Swagger UI (FastAPI); local use only; no authentication required |
@@ -742,36 +705,6 @@ Atomically replaces all allocations for a transaction with a new set.
 - This is the **primary write surface** for allocation data (works for both
   split and unsplit transactions).
 
-### `PUT /annotations/{transaction_id}`
-
-Compatibility shim — single-allocation transactions only. Creates or fully
-replaces the annotation and allocation for a transaction.
-`transaction_id` in the path is the `plaid_transaction_id` string.
-
-This is a **full replace**, not a partial PATCH: every PUT completely overwrites
-the annotation row. Omitted fields are stored as `null`.
-
-**Request body** (all fields optional):
-
-```json
-{
-  "category": "food",
-  "note": "Morning coffee",
-  "tags": ["discretionary", "recurring"]
-}
-```
-
-- `tags` must be a JSON array of strings or `null`.
-- Returns HTTP 404 if `transaction_id` does not exist in `transactions`.
-- Returns **HTTP 409** if the transaction has more than one allocation —
-  use `PUT /transactions/{id}/allocations` for split transactions.
-- Returns HTTP 200 with the full transaction record (same shape as
-  `GET /transactions/{transaction_id}`) on successful create or update.
-  The `allocations` array in the response always reflects the values just
-  written.
-- `created_at` is preserved on updates; `updated_at` is refreshed.
-- No follow-up GET is needed to confirm the write.
-
 ### `GET /errors`
 
 Returns recent ledger warnings and errors from `ledger_errors`, ordered newest
@@ -857,7 +790,7 @@ normally regardless of notification outcome.
 
 ```json
 {
-  "message": "Plaid sync complete: 3 added, 1 modified. Hestia should run ingestion annotations; Athena reviews later on schedule or anomaly flags.",
+  "message": "Plaid sync complete: 3 added, 1 modified. Hestia should run ingestion allocation updates; Athena reviews later on schedule or anomaly flags.",
   "name": "Hestia",
   "wakeMode": "now"
 }
@@ -871,7 +804,7 @@ normally regardless of notification outcome.
 
 The message is built by joining the non-zero count fragments
 (`"N added"`, `"N modified"`, `"N removed"`) with `", "` and appending
-`". Hestia should run ingestion annotations; Athena reviews later on
+`". Hestia should run ingestion allocation updates; Athena reviews later on
 schedule or anomaly flags."`.
 
 ### HTTP request
@@ -1041,7 +974,6 @@ src/claw_plaid_ledger/
     health.py         # GET /health, GET /errors
     spend.py          # GET /spend, GET /spend/trends
     transactions.py   # GET /transactions, GET /transactions/{id},
-                      # PUT /annotations/{id}
     utils.py          # _SpendRange, _today, _resolve_spend_dates,
                       # _strict_params (BUG-014 unknown-param enforcement)
     webhooks.py       # POST /webhooks/plaid, _WEBHOOK_PATH,
@@ -1073,7 +1005,6 @@ tests/
   test_plaid_adapter.py
   test_preflight.py
   test_server_accounts.py      # GET /accounts, PUT /accounts/{id}, /categories, /tags (M18)
-  test_server_annotations.py   # PUT /annotations/{id} (M18)
   test_server_auth.py          # require_bearer_token, TestProtectedRoute (M18)
   test_server_categories.py    # GET /categories (M18)
   test_server_errors.py        # GET /errors (M18)

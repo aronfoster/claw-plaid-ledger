@@ -2354,10 +2354,9 @@ See also Section 9.5 for the full request-tracing walkthrough.
 
 ## 20. Allocation model and budgeting layer
 
-As of Sprint 22 (M20), every transaction carries an `allocation` object in all
-API responses. Allocations are the sole budgeting layer: spend totals,
-category/tag vocabulary, and note search all read from `allocations`, not
-`annotations`.
+Every transaction carries an `allocation` object in all API responses.
+Allocations are the sole budgeting layer: spend totals, category/tag
+vocabulary, and note search all read from `allocations`.
 
 ### How allocations are seeded
 
@@ -2426,14 +2425,6 @@ Amounts are auto-corrected if the sum differs from the transaction amount by
 exceeds $1.00. The response contains the full transaction detail with
 `"allocations": [...]`.
 
-### Writing allocations (compatibility shim)
-
-`PUT /annotations/{transaction_id}` remains valid for single-allocation
-transactions. Returns **HTTP 409** if the transaction has been split (use
-`PUT /transactions/{id}/allocations` instead). Double-writes to both
-`annotations` and `allocations` during M20–M21. The `annotations` table is
-decommissioned in M22.
-
 ### Filtering spend by allocation category or tag
 
 `GET /spend` and `GET /spend/trends` filter against allocation fields:
@@ -2455,9 +2446,7 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   N allocations produces N rows in `GET /transactions` list results.
 - The `allocations` table has no UNIQUE constraint on `plaid_transaction_id`
   by design, allowing multiple allocation rows per transaction.
-- `GET /categories` and `GET /tags` return vocabulary from `allocations`, not
-  `annotations`. The vocabulary is identical for any transaction annotated via
-  `PUT /annotations/{id}` because the double-write keeps both tables in sync.
+- `GET /categories` and `GET /tags` return vocabulary from `allocations`.
 - `GET /spend` and `GET /spend/trends` use `allocation_count` (renamed from
   `transaction_count` in M21) to reflect allocation-row semantics.
 

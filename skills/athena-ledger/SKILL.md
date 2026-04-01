@@ -27,7 +27,7 @@ Athena should:
 - review transactions tagged `needs-athena-review`,
 - run deterministic spend rollups using `GET /spend`,
 - produce owner-aware summaries and anomaly narratives for humans,
-- issue only targeted clarification annotations when analyst evidence is strong.
+- issue only targeted clarification allocation updates when analyst evidence is strong.
 
 Athena must not:
 
@@ -57,18 +57,13 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactio
 3. `GET /spend`
 4. `GET /categories` — discover the current allocation category vocabulary
 5. `GET /tags` — discover the current allocation tag vocabulary
-6. `PUT /annotations/{transaction_id}` — **compatibility shim: single-allocation
-   transactions only.** Returns HTTP 409 if the transaction has been split into
-   multiple allocations. For all practical purposes, use
-   `PUT /transactions/{id}/allocations` instead (it handles both split and unsplit
-   transactions correctly). Clarification-only, low volume.
-7. `GET /accounts` — retrieve all known accounts with human-readable labels
-8. `PUT /accounts/{account_id}` — write or update a label for an account
-9. `GET /spend/trends` — monthly spend buckets for a lookback window;
+6. `GET /accounts` — retrieve all known accounts with human-readable labels
+7. `PUT /accounts/{account_id}` — write or update a label for an account
+8. `GET /spend/trends` — monthly spend buckets for a lookback window;
    supports the same filters as `GET /spend`
-10. `GET /errors` — recent ledger warnings and errors; use for proactive
-    alerting and pre-analysis health checks
-11. `PUT /transactions/{id}/allocations` — **primary write surface for
+9. `GET /errors` — recent ledger warnings and errors; use for proactive
+   alerting and pre-analysis health checks
+10. `PUT /transactions/{id}/allocations` — **primary write surface for
     category/tags/note.** Atomically replaces all allocations for a transaction.
     Request body is a JSON array of `{amount, category?, tags?, note?}` items.
     Amounts must sum to the transaction total (auto-corrects within $1.00; returns
@@ -160,9 +155,8 @@ report partial coverage and avoid definitive completeness claims.
 ### 0) Vocabulary discovery
 
 Before annotating, call `GET /categories` and `GET /tags` to retrieve the
-current allocation vocabulary already present in the ledger. These endpoints
-now draw from `allocations`, not `annotations`. This avoids creating
-near-duplicate labels (e.g. `groceries` vs `grocery`).
+current allocation vocabulary already present in the ledger. This avoids
+creating near-duplicate labels (e.g. `groceries` vs `grocery`).
 
 ### 1) Review `needs-athena-review` queue
 
@@ -268,8 +262,6 @@ Athena allocation writes are optional and minimal. Only write when:
 3. Use `PUT /transactions/{id}/allocations` for all writes — it handles both
    unsplit (`allocations.length == 1`) and split (`allocations.length > 1`)
    transactions correctly.
-4. Do **not** call `PUT /annotations/{id}` on split transactions — it returns
-   HTTP 409.
 
 When uncertain, keep or add `needs-athena-review` tag and document unresolved
 questions instead of guessing.

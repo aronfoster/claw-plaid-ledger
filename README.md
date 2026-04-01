@@ -178,7 +178,6 @@ Notes:
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
 | `GET` | `/transactions/{id}` | Single transaction detail; returns `"allocations": [...]` array (all allocations, ordered by `id`; single-element for unsplit transactions) |
 | `PUT` | `/transactions/{id}/allocations` | Atomically replace all allocations for a transaction; amounts auto-corrected within $1.00; returns 422 if off by more; primary write path for all allocation edits |
-| `PUT` | `/annotations/{id}` | Compatibility shim — single-allocation only; returns 409 if the transaction has been split; double-writes to `annotations` and `allocations` |
 | `GET` | `/errors` | Recent ledger warnings and errors; supports `hours`, `min_severity`, `limit`, `offset`; use for pre-run health checks and proactive alerting |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |

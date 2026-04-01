@@ -22,7 +22,7 @@ Response shape for `GET /transactions`:
 
 ## Vocabulary setup (start of run)
 
-Before writing any annotations, load the current vocabulary:
+Before writing any allocations, load the current vocabulary:
 
 1. `GET /categories` — retrieve existing category values (sorted).
 2. `GET /tags` — retrieve existing tag values (sorted).
@@ -62,8 +62,6 @@ Reuse these values; do not create near-duplicates.
 4. The PUT response contains the full updated transaction record with an
    `"allocations": [...]` array — use it directly to confirm the written state
    (no follow-up GET needed).
-5. Do **not** use `PUT /annotations/{transaction_id}` — it is a compatibility
-   shim that returns HTTP 409 for split transactions.
 
 ### 3) Orphan/discrepancy triage with Athena escalation
 
