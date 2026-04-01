@@ -8,11 +8,73 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
-*(none)*
+### BUG-016 — Skill doctor command pipes curl through `python3 -c`, blocking allowlist approval and causing agent context loss
+
+**Status:** Active
+**Severity:** High (Hestia and Athena cannot use the ledger skill without manual per-run Discord/TUI approval; Hestia loses session context on every approved run)
+**Area:** Skill definitions (`hestia-ledger/SKILL.md`, `athena-ledger/SKILL.md`) / OpenClaw exec approval compatibility
+**Reported by:** Operator (diagnosed during OpenClaw 2026.3.31 upgrade, which introduced exec approvals)
+
+#### What is happening
+
+The OpenClaw doctor health check for both ledger skills generates a command of the form:
+
+```bash
+source ~/.openclaw/.env && curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "$CLAW_LEDGER_URL/transactions?..." | python3 -c "import json, sys; ..."
+```
+
+This command uses a pipe (`|`) to pass curl output through a `python3 -c` inline eval for display formatting. The same pattern is used at runtime when agents (particularly Hestia) call the ledger API.
+
+Two properties of this command make it permanently incompatible with OpenClaw's exec allowlist system:
+
+1. **Pipe operator blocked in allowlist mode.** OpenClaw's `security=allowlist` exec policy supports `&&`/`||`/`;` chaining but explicitly does not support redirections, and `|` (pipe) falls into that category. A command containing a pipe can never satisfy the allowlist and always requires a prompt.
+
+2. **`allow-always` cannot persist this command.** Because the pipe makes the command an allowlist miss on every run, `allow-always` approvals are not persisted. Each new invocation (with different date parameters or query strings) triggers a fresh approval prompt.
+
+The consequence: every time Hestia or Athena calls the ledger API, OpenClaw emits an approval request and the exec tool returns immediately with `status: approval-pending`. The agent's turn ends without a result. When the operator approves via Discord and the command completes, OpenClaw delivers the output as a new disconnected agent turn. Hestia receives the raw formatted output with no memory of the original question and dumps it verbatim into the chat.
+
+#### Fix
+
+Remove the `| python3 -c "..."` pipe from the doctor health check command and from agent runtime usage. Both skill SKILL.md files should instruct agents to call `curl` and receive raw JSON — LLM agents have no difficulty reading and acting on raw JSON responses, and the python3 formatting step provides no value to the model.
+
+With the pipe removed, the command becomes:
+
+```bash
+source ~/.openclaw/.env && curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "$CLAW_LEDGER_URL/transactions?..."
+```
+
+This form uses only `&&` (supported chaining) and no inline eval. `allow-always` can persist it, subsequent runs auto-approve, and exec stays synchronous so agents receive results inline within the same turn.
 
 ---
 
 ## Resolved bugs (recent)
+
+---
+
+### BUG-017 — `_patch_today` in spend-trends tests targeted the wrong module namespace, causing date-dependent CI failures
+
+**Status:** Resolved (branch `claude/add-bug-016-exec-pipe-allowlist`)
+**Severity:** Medium (tests passed locally but failed on CI whenever the calendar month rolled over)
+**Area:** `tests/test_server_spend_trends.py`
+**Reported by:** Operator (CI failure observed in April 2026 after tests were written in March 2026)
+
+#### What was happening
+
+`_patch_today` in `test_server_spend_trends.py` called:
+
+```python
+monkeypatch.setattr("claw_plaid_ledger.routers.utils._today", lambda: fixed)
+```
+
+`spend.py` imports `_today` via `from claw_plaid_ledger.routers.utils import _today`, which binds the name in `spend.py`'s own namespace. Patching `utils._today` replaced the attribute on the `utils` module but left the already-bound reference in `spend.py` untouched, so the trends endpoint continued calling the real `date.today()`.
+
+The bug was invisible locally: the tests were written in March 2026, the fixed patch date was `2026-03-15`, and the real date was also in March 2026 — so the month-level assertions matched by coincidence. When CI ran in April 2026, the real date shifted the 6-month window by one month and four tests failed.
+
+#### Fix
+
+Changed the patch target to `claw_plaid_ledger.routers.spend._today`, which is where the name is actually resolved at call time.
 
 ---
 
