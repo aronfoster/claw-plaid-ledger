@@ -1,6 +1,6 @@
 ---
 name: hestia-ledger
-description: Ingest and annotate claw-plaid-ledger transactions. Use after a Plaid sync to process new transactions, apply deterministic annotations, and ask humans via Discord when uncertain. Reads and writes via the ledger HTTP API using bearer-token auth.
+description: Ingest and categorize claw-plaid-ledger transactions. Use after a Plaid sync to process new transactions, apply deterministic allocation updates, and ask humans via Discord when uncertain. Reads and writes via the ledger HTTP API using bearer-token auth.
 metadata:
   openclaw:
     emoji: '🧾'
@@ -25,7 +25,7 @@ Hestia is the **high-frequency ingestion bookkeeper** for `claw-plaid-ledger`.
 Hestia should:
 
 - fetch newly synced or unreviewed transactions,
-- apply deterministic annotation updates,
+- apply deterministic allocation updates,
 - ask your human via Discord when a transaction is uncertain and cannot be confidently categorized,
 - log all successfully categorized transactions to a temp review file.
 
@@ -65,12 +65,9 @@ Hestia may call only:
    `{amount, category?, tags?, note?}` items. Response is the full transaction
    detail with `"allocations": [...]` — no follow-up GET needed to confirm
    written state.
-6. `PUT /annotations/{transaction_id}` — **compatibility shim: single-allocation
-   transactions only.** Returns HTTP 409 if the transaction has been split.
-   Prefer item 5 (`PUT /transactions/{id}/allocations`) for all writes.
-7. `GET /accounts` — retrieve all known accounts with human-readable labels
-8. `PUT /accounts/{account_id}` — write or update a label for an account
-9. `GET /errors` — recent ledger warnings and errors; use as a pre-run
+6. `GET /accounts` — retrieve all known accounts with human-readable labels
+7. `PUT /accounts/{account_id}` — write or update a label for an account
+8. `GET /errors` — recent ledger warnings and errors; use as a pre-run
    health check before each ingestion run
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
@@ -181,7 +178,6 @@ For each run:
    operator — **do not overwrite the split; send a Discord message to your human flagging it instead.**
 5. Write `PUT /transactions/{transaction_id}/allocations` only when evidence
    is specific. This endpoint works for both unsplit and split transactions.
-   Do not use `PUT /annotations/{id}` — it returns 409 for split transactions.
 6. If confidence is low, do not write to the ledger. Send a Discord message
    to your human with: merchant name, amount, date, account, and 2–3 candidate
    categories with your reasoning. Skip the transaction for now and move on.
@@ -200,7 +196,7 @@ For each run:
 ### Vocabulary hygiene
 
 - Call `GET /categories` and `GET /tags` at the start of each ingestion run
-  to load the current vocabulary before writing any annotations.
+  to load the current vocabulary before writing any allocations.
 - Reuse existing category and tag values; do not invent near-duplicates.
 
 ### Required filter hygiene
@@ -280,9 +276,7 @@ Abstain from writes and send a Discord message to your human when:
 - confidence is below threshold,
 - the transaction has `allocations.length > 1` and the intent is unclear.
 
-Always use `PUT /transactions/{id}/allocations` for writes. Do not use
-`PUT /annotations/{id}` — it is a compatibility shim that returns 409 for
-split transactions.
+Always use `PUT /transactions/{id}/allocations` for writes.
 
 ### Required allocation shape
 

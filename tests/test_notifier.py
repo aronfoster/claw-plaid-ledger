@@ -155,8 +155,8 @@ class TestMessageConstruction:
         body = json.loads(req.data)  # type: ignore[arg-type]
         assert body["message"] == (
             "Plaid sync complete: 3 added, 1 modified."
-            " Hestia should run ingestion annotations; Athena reviews later"
-            " on schedule or anomaly flags."
+            " Hestia should run ingestion allocation updates; Athena reviews"
+            " later on schedule or anomaly flags."
         )
 
     def test_added_only(self) -> None:
@@ -165,8 +165,8 @@ class TestMessageConstruction:
         body = json.loads(req.data)  # type: ignore[arg-type]
         assert body["message"] == (
             "Plaid sync complete: 5 added."
-            " Hestia should run ingestion annotations; Athena reviews later"
-            " on schedule or anomaly flags."
+            " Hestia should run ingestion allocation updates; Athena reviews"
+            " later on schedule or anomaly flags."
         )
 
     def test_removed_only(self) -> None:
@@ -175,8 +175,8 @@ class TestMessageConstruction:
         body = json.loads(req.data)  # type: ignore[arg-type]
         assert body["message"] == (
             "Plaid sync complete: 2 removed."
-            " Hestia should run ingestion annotations; Athena reviews later"
-            " on schedule or anomaly flags."
+            " Hestia should run ingestion allocation updates; Athena reviews"
+            " later on schedule or anomaly flags."
         )
 
 

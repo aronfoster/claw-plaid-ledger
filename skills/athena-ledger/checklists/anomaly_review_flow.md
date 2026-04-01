@@ -11,5 +11,5 @@
 3. Re-fetch each candidate with `GET /transactions/{id}` before conclusions.
 4. If confidence is low or evidence is partial, mark as
    `needs-athena-review` and state unresolved questions.
-5. If adding clarification annotations, keep them low-volume and include
+5. If adding clarification allocation updates, keep them low-volume and include
    explicit timeframe + follow-up action in the note.

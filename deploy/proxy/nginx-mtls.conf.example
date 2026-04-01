@@ -93,7 +93,7 @@ server {
     # Clients that present a cert signed by the CA in ssl_client_certificate
     # are allowed through.  All others receive 403.
     # ------------------------------------------------------------------
-    location ~ ^/(transactions|annotations|spend|webhooks/plaid) {
+    location ~ ^/(transactions|spend|webhooks/plaid) {
         # Enforce client cert on these paths.
         if ($ssl_client_verify != SUCCESS) {
             return 403 '{"detail":"client certificate required"}';

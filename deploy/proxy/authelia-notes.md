@@ -83,7 +83,6 @@ access_control:
       policy: two_factor
       resources:
         - "^/transactions.*$"
-        - "^/annotations.*$"
         - "^/spend.*$"
         - "^/webhooks/plaid.*$"
 ```
@@ -155,7 +154,7 @@ location = /health {
 ```
 
 Repeat the `auth_request` block for each protected location
-(`/annotations`, `/spend`, `/webhooks/plaid`).
+(`/spend`, `/webhooks/plaid`).
 
 ---
 

@@ -29,4 +29,4 @@ cp -R athena-ledger "$OPENCLAW_SKILLS_DIR/athena-ledger"
 
 - **Cadence:** periodic, not per-transaction sync.
 - **Output style:** human-facing summary + anomaly interpretation.
-- **Write behavior:** low-volume clarification annotations only.
+- **Write behavior:** low-volume clarification allocation updates only.

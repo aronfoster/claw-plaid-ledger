@@ -174,7 +174,7 @@ search behaviour.
 
 ---
 
-## Task 3: Update documentation and skill files
+## Task 3: Update documentation and skill files ✅ DONE
 
 ### What
 

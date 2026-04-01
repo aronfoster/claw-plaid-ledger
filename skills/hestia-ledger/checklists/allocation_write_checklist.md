@@ -11,5 +11,5 @@ Run before `PUT /transactions/{id}/allocations`.
 - [ ] Proposed tags are short, factual, and normalized.
 - [ ] Proposed note is evidence-based and privacy-safe.
 - [ ] If confidence is low, I used `needs-athena-review` escalation tagging.
-- [ ] I am using `PUT /transactions/{id}/allocations` (not `PUT /annotations/{id}`).
+- [ ] I am using `PUT /transactions/{id}/allocations`.
 - [ ] I am not attempting to override canonical precedence behavior.

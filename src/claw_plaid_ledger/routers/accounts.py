@@ -36,7 +36,7 @@ class AccountLabelRequest(BaseModel):
 
 @router.get("/categories", dependencies=[Depends(require_bearer_token)])
 def get_categories() -> dict[str, object]:
-    """Return distinct non-null category values from annotations, sorted."""
+    """Return distinct non-null category values from allocations, sorted."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
         categories = get_distinct_categories(connection)
@@ -45,7 +45,7 @@ def get_categories() -> dict[str, object]:
 
 @router.get("/tags", dependencies=[Depends(require_bearer_token)])
 def get_tags() -> dict[str, object]:
-    """Return distinct tag values unnested from all annotations, sorted."""
+    """Return distinct tag values unnested from all allocations, sorted."""
     config = load_config()
     with sqlite3.connect(config.db_path) as connection:
         tags = get_distinct_tags(connection)
