@@ -37,17 +37,6 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_synced_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS annotations (
-    id INTEGER PRIMARY KEY,
-    plaid_transaction_id TEXT NOT NULL UNIQUE
-        REFERENCES transactions(plaid_transaction_id),
-    category TEXT,
-    note TEXT,
-    tags TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS allocations (
     id           INTEGER PRIMARY KEY,
     plaid_transaction_id TEXT NOT NULL

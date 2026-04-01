@@ -1,4 +1,4 @@
-"""Transaction, annotation, and related endpoints."""
+"""Transaction and related endpoints."""
 
 from __future__ import annotations
 
@@ -14,14 +14,11 @@ from pydantic import BaseModel, ConfigDict
 from claw_plaid_ledger.config import load_config
 from claw_plaid_ledger.db import (
     AllocationRow,
-    AnnotationRow,
     TransactionQuery,
     get_allocations_for_transaction,
     get_transaction,
     query_transactions,
     replace_allocations,
-    upsert_annotation,
-    upsert_single_allocation,
 )
 from claw_plaid_ledger.middleware.auth import require_bearer_token
 from claw_plaid_ledger.routers.utils import (
@@ -193,88 +190,6 @@ def get_transaction_detail(transaction_id: str) -> dict[str, object]:
             connection, transaction_id
         )
     if result is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    return result
-
-
-class AnnotationRequest(BaseModel):
-    """Request body for PUT /annotations/{transaction_id}."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    category: str | None = None
-    note: str | None = None
-    tags: list[str] | None = None
-
-
-@router.put(
-    "/annotations/{transaction_id}",
-    dependencies=[Depends(require_bearer_token)],
-)
-def put_annotation(
-    transaction_id: str, body: AnnotationRequest
-) -> dict[str, object]:
-    """Create or fully replace an annotation for a transaction."""
-    config = load_config()
-    with sqlite3.connect(config.db_path) as connection:
-        transaction = get_transaction(connection, transaction_id)
-        if transaction is None:
-            raise HTTPException(
-                status_code=404, detail="Transaction not found"
-            )
-        allocs = get_allocations_for_transaction(connection, transaction_id)
-        if len(allocs) > 1:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "transaction has multiple allocations",
-                    "message": (
-                        "Use PUT /transactions/{id}/allocations "
-                        "to edit split transactions."
-                    ),
-                    "allocation_count": len(allocs),
-                },
-            )
-        now = datetime.now(tz=UTC).isoformat()
-        tags_json = json.dumps(body.tags) if body.tags is not None else None
-        ann_row = AnnotationRow(
-            plaid_transaction_id=transaction_id,
-            category=body.category,
-            note=body.note,
-            tags=tags_json,
-            created_at=now,
-            updated_at=now,
-        )
-        upsert_annotation(connection, ann_row)
-        # Fetch the transaction amount via a direct SELECT so it is typed as
-        # Any (sqlite3 cursor row element) rather than object (dict value),
-        # avoiding a type-narrowing issue without a type: ignore bypass.
-        amount_row = connection.execute(
-            "SELECT amount FROM transactions WHERE plaid_transaction_id = ?",
-            (transaction_id,),
-        ).fetchone()
-        tx_amount = float(amount_row[0]) if amount_row is not None else 0.0
-        alloc_row = AllocationRow(
-            plaid_transaction_id=transaction_id,
-            amount=tx_amount,
-            category=body.category,
-            tags=tags_json,
-            note=body.note,
-            created_at=now,
-            updated_at=now,
-        )
-        upsert_single_allocation(connection, alloc_row)
-        logger.debug(
-            "annotation upserted transaction_id=%s category=%r tags=%s",
-            transaction_id,
-            body.category,
-            body.tags,
-        )
-        result = _fetch_transaction_with_allocations(
-            connection, transaction_id
-        )
-    if result is None:
-        # Should not happen: we verified the transaction exists above.
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
 

@@ -39,7 +39,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: Remove `annotations` table, DB layer, and endpoint
+## Task 1: Remove `annotations` table, DB layer, and endpoint ✅ DONE
 
 ### What
 
