@@ -11,6 +11,9 @@ metadata:
       config:
         - ~/.openclaw/.env
     primaryEnv: CLAW_API_SECRET
+    binaries:
+      - curl
+    doctor: 'curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"'
 ---
 
 ## Setup
@@ -32,6 +35,30 @@ Authorization: Bearer $CLAW_API_SECRET
 ```
 
 The ledger server must be running before invoking this skill (`uv run --locked ledger serve`).
+
+## Doctor
+
+OpenClaw runs the `doctor` command (defined in the skill frontmatter) to verify
+the skill is reachable before activating it. The command is a bare `curl` call
+— no shell wrapper, no pipe, no `python3 -c` step:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"
+```
+
+`CLAW_API_SECRET` and `CLAW_LEDGER_URL` are injected by the `apiKey` and `env`
+entries in `openclaw.json` at skill activation time. The `source
+~/.openclaw/.env` prefix is **not** needed and must not be used — piped or
+`source`-wrapped commands cannot be persisted in the exec allowlist and will
+block on every invocation.
+
+For all runtime API calls, use the same bare-curl form:
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/spend?range=last_month"
+```
+
+Agents read raw JSON directly; no `python3 -c` formatting step is needed or permitted.
 
 # Athena Ledger Analysis Skill
 
