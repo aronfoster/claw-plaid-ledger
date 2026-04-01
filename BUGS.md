@@ -53,6 +53,31 @@ This form uses only `&&` (supported chaining) and no inline eval. `allow-always`
 
 ---
 
+### BUG-017 — `_patch_today` in spend-trends tests targeted the wrong module namespace, causing date-dependent CI failures
+
+**Status:** Resolved (branch `claude/add-bug-016-exec-pipe-allowlist`)
+**Severity:** Medium (tests passed locally but failed on CI whenever the calendar month rolled over)
+**Area:** `tests/test_server_spend_trends.py`
+**Reported by:** Operator (CI failure observed in April 2026 after tests were written in March 2026)
+
+#### What was happening
+
+`_patch_today` in `test_server_spend_trends.py` called:
+
+```python
+monkeypatch.setattr("claw_plaid_ledger.routers.utils._today", lambda: fixed)
+```
+
+`spend.py` imports `_today` via `from claw_plaid_ledger.routers.utils import _today`, which binds the name in `spend.py`'s own namespace. Patching `utils._today` replaced the attribute on the `utils` module but left the already-bound reference in `spend.py` untouched, so the trends endpoint continued calling the real `date.today()`.
+
+The bug was invisible locally: the tests were written in March 2026, the fixed patch date was `2026-03-15`, and the real date was also in March 2026 — so the month-level assertions matched by coincidence. When CI ran in April 2026, the real date shifted the 6-month window by one month and four tests failed.
+
+#### Fix
+
+Changed the patch target to `claw_plaid_ledger.routers.spend._today`, which is where the name is actually resolved at call time.
+
+---
+
 ### BUG-015 — M21 allocation backfill silently dropped all annotation data
 
 **Status:** Resolved (branch `claude/restore-transaction-categories-bbO0l`)
