@@ -500,21 +500,6 @@ def _seed_annotation_list_data(db_path: pathlib.Path) -> None:
                 ),
             ],
         )
-        connection.execute(
-            (
-                "INSERT INTO annotations "
-                "(plaid_transaction_id, category, note, tags, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-            ),
-            (
-                "tx_ann",
-                "coffee",
-                "morning latte",
-                '["coffee", "recurring"]',
-                "2024-06-01T10:00:00+00:00",
-                "2024-06-01T10:00:00+00:00",
-            ),
-        )
         # Seed allocations (mirrors production seeding; tx_ann includes
         # semantic fields to match the annotation already written above).
         connection.executemany(
@@ -779,14 +764,16 @@ class TestGetTransactionDetailEndpoint:
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
 
-        # Use PUT to write annotation + allocation (double-write).
         client.put(
-            "/annotations/tx_1",
-            json={
-                "category": "food",
-                "note": "Morning coffee",
-                "tags": ["discretionary", "recurring"],
-            },
+            "/transactions/tx_1/allocations",
+            json=[
+                {
+                    "amount": _TX_1_AMOUNT,
+                    "category": "food",
+                    "note": "Morning coffee",
+                    "tags": ["discretionary", "recurring"],
+                }
+            ],
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
 
@@ -954,38 +941,8 @@ def _seed_tag_notes_data(db_path: pathlib.Path) -> None:
                 ),
             ],
         )
-        # Annotate tx_t1: tags=["coffee","recurring"], note matching "coffee"
-        connection.execute(
-            (
-                "INSERT INTO annotations (plaid_transaction_id, category, "
-                "note, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-            ),
-            (
-                "tx_t1",
-                None,
-                "morning coffee habit",
-                '["coffee", "recurring"]',
-                "2025-01-01T00:00:00+00:00",
-                "2025-01-01T00:00:00+00:00",
-            ),
-        )
-        # Annotate tx_t2: tags=["groceries"], note="nothing special"
-        connection.execute(
-            (
-                "INSERT INTO annotations (plaid_transaction_id, category, "
-                "note, tags, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-            ),
-            (
-                "tx_t2",
-                None,
-                "nothing special",
-                '["groceries"]',
-                "2025-01-01T00:00:00+00:00",
-                "2025-01-01T00:00:00+00:00",
-            ),
-        )
         # tx_t3 has no annotation
-        # Seed allocations mirroring the annotation data above so that tag
+        # Seed allocations with tag and note data so that tag
         # and search_notes filters (which now query alloc.tags / alloc.note)
         # work correctly.
         connection.executemany(
@@ -1641,29 +1598,3 @@ class TestPutTransactionAllocations:
         get_allocs = get_response.json()["allocations"]
 
         assert get_allocs == put_allocs
-
-    def test_after_split_annotations_returns_409(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-    ) -> None:
-        """After a split, PUT /annotations/{id} returns 409."""
-        db_path = tmp_path / "db.sqlite"
-        _seed_transactions(db_path)
-        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
-        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
-
-        split_response = client.put(
-            "/transactions/tx_2/allocations",
-            json=[
-                {"amount": 30.0, "category": "groceries"},
-                {"amount": 25.0, "category": "household"},
-            ],
-            headers={"Authorization": f"Bearer {_TOKEN}"},
-        )
-        assert split_response.status_code == http.HTTPStatus.OK
-
-        ann_response = client.put(
-            "/annotations/tx_2",
-            json={"category": "food"},
-            headers={"Authorization": f"Bearer {_TOKEN}"},
-        )
-        assert ann_response.status_code == http.HTTPStatus.CONFLICT
