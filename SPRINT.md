@@ -56,23 +56,32 @@ below handles existing databases.
 
 ### Migration (`src/claw_plaid_ledger/db.py` — `initialize_database()`)
 
-1. **Remove** the two annotation backfill patches that currently occupy roughly
-   lines 48–106 of `initialize_database()`. Both patches use `LEFT JOIN
-   annotations` or subqueries against `annotations`; they will fail once the
-   table is dropped, so they must be removed in the same commit.
+All migration and backfill code in `initialize_database()` is now dead weight
+and must be removed:
 
-2. **Add** a new idempotent migration step — positioned after the existing
-   column-addition migrations — that drops the table on any live database:
+1. **Remove** the `migration_stmts` tuple and its surrounding `for` loop
+   (currently lines 34–46). These `ALTER TABLE` statements add `owner`,
+   `item_id`, and `canonical_account_id` columns that are already present in
+   the checked-in `schema.sql`. All live databases have had these columns for
+   many sprints; the try/except loop is no longer needed.
+
+2. **Remove** the two annotation backfill patches that follow (roughly lines
+   48–106). Both reference the `annotations` table (via `LEFT JOIN annotations`
+   and subqueries) and will fail once the table is dropped.
+
+3. **Add** a single idempotent step — the only migration code that remains —
+   that drops the annotations table on any live database:
 
    ```sql
    DROP TABLE IF EXISTS annotations
    ```
 
    `IF EXISTS` makes this safe for new databases (where the table was never
-   created) and for re-runs.
+   created by `schema.sql`) and for re-runs after the table is already gone.
 
-3. **Verify** that `initialize_database()` no longer references `annotations`
-   anywhere after these changes.
+After these changes `initialize_database()` should be essentially:
+`executescript(schema)` → `DROP TABLE IF EXISTS annotations` → `commit`.
+No try/except loops, no backfills.
 
 ### DB layer (`src/claw_plaid_ledger/db.py`)
 
