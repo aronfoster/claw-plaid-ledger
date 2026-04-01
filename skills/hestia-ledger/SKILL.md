@@ -16,50 +16,6 @@ metadata:
     doctor: 'curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"'
 ---
 
-## Setup
-
-```bash
-cat >> ~/.openclaw/.env <<'EOF'
-CLAW_API_SECRET=<your-CLAW_API_SECRET-value>
-CLAW_LEDGER_URL=http://127.0.0.1:8000
-EOF
-chmod 600 ~/.openclaw/.env
-```
-
-`CLAW_API_SECRET` is the bearer token required on all non-health ledger API endpoints.
-`CLAW_LEDGER_URL` is the base URL of the running `ledger serve` instance (default: `http://127.0.0.1:8000`).
-
-All API calls must include:
-```
-Authorization: Bearer $CLAW_API_SECRET
-```
-
-The ledger server must be running before invoking this skill (`uv run --locked ledger serve`).
-
-## Doctor
-
-OpenClaw runs the `doctor` command (defined in the skill frontmatter) to verify
-the skill is reachable before activating it. The command is a bare `curl` call
-— no shell wrapper, no pipe, no `python3 -c` step:
-
-```bash
-curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"
-```
-
-`CLAW_API_SECRET` and `CLAW_LEDGER_URL` are injected by the `apiKey` and `env`
-entries in `openclaw.json` at skill activation time. The `source
-~/.openclaw/.env` prefix is **not** needed and must not be used — piped or
-`source`-wrapped commands cannot be persisted in the exec allowlist and will
-block on every invocation.
-
-For all runtime API calls, use the same bare-curl form:
-
-```bash
-curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?start_date=2026-03-01&end_date=2026-03-31"
-```
-
-Agents read raw JSON directly; no `python3 -c` formatting step is needed or permitted.
-
 # Hestia Ledger Ingestion Skill
 
 ## Purpose
@@ -86,6 +42,14 @@ Hestia must not:
 - `view=canonical` is the default operating surface.
 - `view=raw` is diagnostic-only and used only to validate discrepancies.
 - Hestia's escalation path is a Discord message to your human (see USER.md for Discord ID). Do not write uncertain transactions to the ledger — ask and wait, or skip and Discord.
+
+## Making API calls
+
+`$CLAW_API_SECRET` and `$CLAW_LEDGER_URL` are already in your environment. No `source`, no shell wrapper, no pipes.
+
+```bash
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?range=last_30_days"
+```
 
 ## Approved API calls
 
