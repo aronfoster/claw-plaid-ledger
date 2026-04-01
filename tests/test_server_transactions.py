@@ -440,7 +440,7 @@ class TestListTransactionsRangeParam:
 
 
 # ---------------------------------------------------------------------------
-# Tests for GET /transactions — annotations in list results (BUG-013)
+# Tests for GET /transactions — allocations in list results (BUG-013)
 # ---------------------------------------------------------------------------
 
 
@@ -798,10 +798,16 @@ class TestGetTransactionDetailEndpoint:
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
 
-        # Use PUT with no tags — allocation.tags should be null.
+        # Use PUT /allocations with no tags — allocation.tags should be null.
         client.put(
-            "/annotations/tx_1",
-            json={"category": "food", "note": "Morning coffee"},
+            "/transactions/tx_1/allocations",
+            json=[
+                {
+                    "amount": _TX_1_AMOUNT,
+                    "category": "food",
+                    "note": "Morning coffee",
+                }
+            ],
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
 

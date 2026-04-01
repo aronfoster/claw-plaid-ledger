@@ -24,7 +24,7 @@ client = TestClient(app)
 _TOKEN = "test-bearer-value"  # noqa: S105
 
 
-def _insert_one_annotation_row(
+def _insert_one_allocation_row(
     db_path: pathlib.Path,
     *,
     category: str | None,
@@ -55,8 +55,8 @@ def _insert_one_annotation_row(
         )
 
 
-def _seed_annotations(db_path: pathlib.Path) -> None:
-    """Seed a DB with transactions and annotations for vocabulary tests."""
+def _seed_allocations(db_path: pathlib.Path) -> None:
+    """Seed a DB with transactions and allocations for vocabulary tests."""
     initialize_database(db_path)
     with sqlite3.connect(db_path) as connection:
         connection.executemany(
@@ -207,10 +207,10 @@ class TestCategoriesEndpoint:
 
         assert response.status_code == http.HTTPStatus.UNAUTHORIZED
 
-    def test_empty_annotations_returns_empty_list(
+    def test_empty_allocations_returns_empty_list(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """No annotations → empty categories array."""
+        """No allocations → empty categories array."""
         db_path = tmp_path / "db.sqlite"
         initialize_database(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -228,7 +228,7 @@ class TestCategoriesEndpoint:
     ) -> None:
         """Returns alphabetically sorted distinct categories."""
         db_path = tmp_path / "db.sqlite"
-        _seed_annotations(db_path)
+        _seed_allocations(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
 
@@ -249,10 +249,10 @@ class TestCategoriesEndpoint:
     def test_excludes_null_categories(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotations with null category are excluded."""
+        """Allocations with null category are excluded."""
         db_path = tmp_path / "db.sqlite"
         initialize_database(db_path)
-        _insert_one_annotation_row(
+        _insert_one_allocation_row(
             db_path, category=None, tags=None, note="no category"
         )
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -283,10 +283,10 @@ class TestTagsEndpoint:
 
         assert response.status_code == http.HTTPStatus.UNAUTHORIZED
 
-    def test_empty_annotations_returns_empty_list(
+    def test_empty_allocations_returns_empty_list(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """No annotations → empty tags array."""
+        """No allocations → empty tags array."""
         db_path = tmp_path / "db.sqlite"
         initialize_database(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -304,7 +304,7 @@ class TestTagsEndpoint:
     ) -> None:
         """Returns alphabetically sorted distinct unnested tag values."""
         db_path = tmp_path / "db.sqlite"
-        _seed_annotations(db_path)
+        _seed_allocations(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
 
@@ -323,10 +323,10 @@ class TestTagsEndpoint:
     def test_excludes_null_tags(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """Annotations with null tags are excluded from the result."""
+        """Allocations with null tags are excluded from the result."""
         db_path = tmp_path / "db.sqlite"
         initialize_database(db_path)
-        _insert_one_annotation_row(
+        _insert_one_allocation_row(
             db_path, category="food", tags=None, note="no tags"
         )
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
@@ -344,7 +344,7 @@ class TestTagsEndpoint:
     ) -> None:
         """Tags in multiple annotation rows are returned only once."""
         db_path = tmp_path / "db.sqlite"
-        _seed_annotations(db_path)
+        _seed_allocations(db_path)
         monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
 
