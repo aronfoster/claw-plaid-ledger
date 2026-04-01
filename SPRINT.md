@@ -132,7 +132,7 @@ no longer appear in any expected-schema list.
 
 ---
 
-## Task 2: Clean up secondary test references
+## Task 2: Clean up secondary test references ✅ DONE
 
 ### What
 

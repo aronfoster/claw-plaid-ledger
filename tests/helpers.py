@@ -25,7 +25,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # ---------------------------------------------------------------------------
 
 
-# Used by test_server_transactions.py and test_server_annotations.py.
+# Used by test_server_transactions.py.
 def _seed_transactions(db_path: pathlib.Path) -> None:
     initialize_database(db_path)
     with sqlite3.connect(db_path) as connection:
