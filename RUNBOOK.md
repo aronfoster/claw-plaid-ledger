@@ -145,6 +145,21 @@ them in each agent's `TOOLS.md` in one step:
 
 See Section 16 for what this does and how to verify it.
 
+**Deploy the API wrapper.** `scripts/deploy-local.sh` installs `ledger-api`
+to `/usr/local/bin/ledger-api` automatically. If you have not run deploy
+recently, install it manually:
+
+```bash
+sudo install -m 755 scripts/ledger-api /usr/local/bin/ledger-api
+```
+
+Verify it works:
+
+```bash
+ledger-api /health
+# Expected: {"status": "ok"}
+```
+
 Add the ledger credentials to `~/.openclaw/.env` so that OpenClaw loads
 them automatically at startup — no flags or manual exports required:
 
@@ -2578,3 +2593,53 @@ refresh --all: 1 items refreshed, 1 failed
   production. In sandbox, Plaid simulates the webhook; in production, it
   triggers a real check against the institution.
 - `--item` and `--all` are mutually exclusive; using both together exits 2.
+
+
+---
+
+## 23. Post-upgrade cleanup (after Sprint 26)
+
+After deploying the `ledger-api` wrapper and pushing updated skill bundles,
+clean up stale exec-approval and config entries.
+
+### 23.1 Remove stale curl allowlist entry from `exec-approvals.json`
+
+Open `~/.openclaw/exec-approvals.json` and remove the `/usr/bin/curl` object
+from `agents.hestia.allowlist`. Also remove `/usr/bin/echo` if it was only
+used for skill debugging. Keep `allowlist` as `[]` if no other entries remain.
+
+```json
+{
+  "id": "5d35405b-...",
+  "pattern": "/usr/bin/curl"
+}
+```
+
+Restart the gateway after editing:
+
+```bash
+openclaw gateway restart
+```
+
+### 23.2 Optional: remove redundant `CLAW_LEDGER_URL` from `openclaw.json`
+
+The `ledger-api` wrapper defaults `CLAW_LEDGER_URL` to
+`http://127.0.0.1:8000`, so `skills.entries.*.env.CLAW_LEDGER_URL` is
+redundant. You can simplify each entry to:
+
+```json
+"hestia-ledger": {
+  "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" }
+}
+```
+
+This cleanup is optional; leaving `env.CLAW_LEDGER_URL` is harmless.
+
+### 23.3 Verify end-to-end
+
+Start new Hestia and Athena sessions and run a health check in each. Both
+should execute `ledger-api /health` with no approval prompts and return:
+
+```json
+{"status":"ok"}
+```

@@ -267,7 +267,7 @@ that prohibition and extend it: "Do not use `curl` directly, `source`,
 
 ---
 
-## Task 3: Update documentation
+## Task 3: Update documentation ✅ DONE
 
 ### What
 
