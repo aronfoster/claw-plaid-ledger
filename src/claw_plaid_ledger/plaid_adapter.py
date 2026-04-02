@@ -186,6 +186,12 @@ class PlaidClientAdapter:
             msg = f"Network error calling Plaid: {exc}"
             raise PlaidTransientError(msg) from exc
 
+        item_obj = getattr(response, "item", None)
+        plaid_item_id = (
+            str(item_obj.item_id)
+            if item_obj is not None and item_obj.item_id is not None
+            else None
+        )
         return SyncResult(
             added=tuple(_to_transaction_data(tx) for tx in response.added),
             modified=tuple(
@@ -197,6 +203,7 @@ class PlaidClientAdapter:
             accounts=tuple(_to_account_data(acc) for acc in response.accounts),
             next_cursor=str(response.next_cursor),
             has_more=bool(response.has_more),
+            plaid_item_id=plaid_item_id,
         )
 
     def create_link_token(

@@ -57,3 +57,4 @@ class SyncResult:
     accounts: tuple[AccountData, ...]
     next_cursor: str
     has_more: bool
+    plaid_item_id: str | None = None

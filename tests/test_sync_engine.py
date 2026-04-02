@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claw_plaid_ledger.db import get_all_sync_state, get_sync_cursor
+from claw_plaid_ledger.db import (
+    get_all_sync_state,
+    get_item_id_by_plaid_item_id,
+    get_sync_cursor,
+)
 from claw_plaid_ledger.plaid_models import (
     AccountData,
     RemovedTransactionData,
@@ -79,6 +83,7 @@ def _result(
     amount: float = 12.5,
     has_more: bool = False,
     removed: tuple[RemovedTransactionData, ...] = (),
+    plaid_item_id: str | None = None,
 ) -> SyncResult:
     """Build a small SyncResult payload for test fixtures."""
     return SyncResult(
@@ -107,6 +112,7 @@ def _result(
         removed=removed,
         next_cursor=next_cursor,
         has_more=has_more,
+        plaid_item_id=plaid_item_id,
     )
 
 
@@ -436,3 +442,42 @@ def test_run_sync_owner_defaults_to_none(tmp_path: Path) -> None:
             ("acct-1",),
         ).fetchone()[0]
         assert account_owner is None
+
+
+def test_run_sync_stores_plaid_item_id(tmp_path: Path) -> None:
+    """run_sync stores plaid_item_id in sync_state when returned by adapter."""
+    db_path = tmp_path / "ledger.db"
+    plaid_id = "M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
+    adapter = FakeAdapter((_result("cursor-pid", plaid_item_id=plaid_id),))
+
+    run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="bank-alice",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        logical_id = get_item_id_by_plaid_item_id(connection, plaid_id)
+        assert logical_id == "bank-alice"
+
+
+def test_run_sync_plaid_item_id_none_stores_null(tmp_path: Path) -> None:
+    """run_sync stores NULL plaid_item_id when adapter returns None."""
+    db_path = tmp_path / "ledger.db"
+    adapter = FakeAdapter((_result("cursor-null-pid", plaid_item_id=None),))
+
+    run_sync(
+        db_path=db_path,
+        adapter=adapter,
+        access_token=SYNC_ACCESS_VALUE,
+        item_id="bank-bob",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT plaid_item_id FROM sync_state WHERE item_id = ?",
+            ("bank-bob",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] is None

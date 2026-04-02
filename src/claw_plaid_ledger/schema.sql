@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
     item_id TEXT NOT NULL UNIQUE,
     cursor TEXT,
     owner TEXT,
-    last_synced_at TEXT
+    last_synced_at TEXT,
+    plaid_item_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS allocations (

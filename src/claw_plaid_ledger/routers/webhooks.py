@@ -21,7 +21,10 @@ from claw_plaid_ledger.config import (
     load_config,
     load_merged_env,
 )
-from claw_plaid_ledger.db import get_all_sync_state
+from claw_plaid_ledger.db import (
+    get_all_sync_state,
+    get_item_id_by_plaid_item_id,
+)
 from claw_plaid_ledger.items_config import ItemConfig, load_items_config
 from claw_plaid_ledger.logging_utils import (
     LedgerDbHandler,
@@ -335,6 +338,84 @@ async def lifespan(
         logging.getLogger().removeHandler(db_handler)
 
 
+def _resolve_logical_item_id(db_path: Path, plaid_item_id: str) -> str | None:
+    """Look up the logical item_id for a Plaid item ID in sync_state."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            return get_item_id_by_plaid_item_id(conn, plaid_item_id)
+    except Exception:
+        logger.exception(
+            "Could not query sync_state for plaid_item_id=%s", plaid_item_id
+        )
+        return None
+
+
+def _enqueue_multi_item_sync(
+    payload_item_id: str,
+    items: list[ItemConfig],
+    sync_run_id: str,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Resolve a Plaid item_id via sync_state and enqueue a sync for it."""
+    try:
+        config = load_config(require_plaid=False, require_plaid_client=False)
+    except ConfigError:
+        logger.exception(
+            "Could not load config to resolve plaid_item_id=%s;"
+            " skipping sync sync_run_id=%s",
+            payload_item_id,
+            sync_run_id,
+        )
+        return
+
+    logical_item_id = _resolve_logical_item_id(config.db_path, payload_item_id)
+    if logical_item_id is None:
+        logger.warning(
+            "unknown Plaid item_id %s — not in sync_state;"
+            " skipping sync sync_run_id=%s",
+            payload_item_id,
+            sync_run_id,
+        )
+        return
+
+    cfg = next((c for c in items if c.id == logical_item_id), None)
+    if cfg is None:
+        logger.warning(
+            "Plaid item_id %s resolved to logical id %s"
+            " but that item is not in items.toml;"
+            " skipping sync sync_run_id=%s",
+            payload_item_id,
+            logical_item_id,
+            sync_run_id,
+        )
+        return
+
+    token = load_merged_env().get(cfg.access_token_env)
+    if not token:
+        logger.error(
+            "item_id %s: env var %s not set; skipping sync sync_run_id=%s",
+            logical_item_id,
+            cfg.access_token_env,
+            sync_run_id,
+        )
+        return
+
+    logger.info(
+        "Enqueuing background sync for item_id=%s"
+        " webhook_type=%s sync_run_id=%s",
+        logical_item_id,
+        _SYNC_UPDATES_AVAILABLE,
+        sync_run_id,
+    )
+    background_tasks.add_task(
+        _background_sync,
+        access_token=token,
+        item_id=cfg.id,
+        owner=cfg.owner,
+        sync_run_id=sync_run_id,
+    )
+
+
 def _enqueue_sync_updates(
     payload_item_id: str | None,
     sync_run_id: str,
@@ -353,50 +434,22 @@ def _enqueue_sync_updates(
     try:
         items = load_items_config()
     except (OSError, ValueError):
+        # No items.toml — genuine single-item mode; fall back.
         logger.warning(
-            "Could not load items.toml; falling back to PLAID_ACCESS_TOKEN"
+            "Could not load items.toml; falling back to single-item sync"
         )
-        items = []
+        background_tasks.add_task(_background_sync, sync_run_id=sync_run_id)
+        return
 
-    if items:
-        cfg = next((c for c in items if c.id == payload_item_id), None)
-        if cfg is not None:
-            token = load_merged_env().get(cfg.access_token_env)
-            if token:
-                logger.info(
-                    "Enqueuing background sync for item_id=%s"
-                    " webhook_type=%s sync_run_id=%s",
-                    payload_item_id,
-                    _SYNC_UPDATES_AVAILABLE,
-                    sync_run_id,
-                )
-                background_tasks.add_task(
-                    _background_sync,
-                    access_token=token,
-                    item_id=cfg.id,
-                    owner=cfg.owner,
-                    sync_run_id=sync_run_id,
-                )
-                return
-            logger.error(
-                "item_id %s: env var %s not set;"
-                " falling back to PLAID_ACCESS_TOKEN",
-                payload_item_id,
-                cfg.access_token_env,
-            )
-        else:
-            logger.warning(
-                "item_id %s not found in items.toml;"
-                " falling back to PLAID_ACCESS_TOKEN",
-                payload_item_id,
-            )
+    if not items:
+        # items.toml present but empty — single-item mode; fall back.
+        background_tasks.add_task(_background_sync, sync_run_id=sync_run_id)
+        return
 
-    logger.info(
-        "Enqueuing background sync for webhook_type=%s sync_run_id=%s",
-        _SYNC_UPDATES_AVAILABLE,
-        sync_run_id,
+    # Multi-item: delegate to helper; no PLAID_ACCESS_TOKEN fallback.
+    _enqueue_multi_item_sync(
+        payload_item_id, items, sync_run_id, background_tasks
     )
-    background_tasks.add_task(_background_sync, sync_run_id=sync_run_id)
 
 
 @router.post("/webhooks/plaid")

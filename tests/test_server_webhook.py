@@ -196,17 +196,21 @@ class TestWebhookItemRouting:
     """Tests for item_id-based routing in POST /webhooks/plaid."""
 
     def test_item_id_found_routes_to_configured_access_token(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:
-        """item_id matching a configured item routes to that item's token."""
+        """Plaid item_id resolved via sync_state routes to item's token."""
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
         monkeypatch.setenv("PLAID_ACCESS_TOKEN_ALICE", "access-token-alice")
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
 
+        plaid_item_id = "M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
         body = (
             b'{"webhook_type": "TRANSACTIONS",'
             b' "webhook_code": "SYNC_UPDATES_AVAILABLE",'
-            b' "item_id": "bank-alice"}'
+            b' "item_id": "' + plaid_item_id.encode() + b'"}'
         )
         sig = _make_plaid_sig(body)
 
@@ -221,9 +225,15 @@ class TestWebhookItemRouting:
             "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
         )
 
-        with patch(
-            "claw_plaid_ledger.routers.webhooks.load_items_config",
-            return_value=[item],
+        with (
+            patch(
+                "claw_plaid_ledger.routers.webhooks.load_items_config",
+                return_value=[item],
+            ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._resolve_logical_item_id",
+                return_value="bank-alice",
+            ),
         ):
             response = client.post(
                 "/webhooks/plaid",
@@ -244,19 +254,23 @@ class TestWebhookItemRouting:
             sync_run_id=ANY,
         )
 
-    def test_item_id_not_in_items_toml_logs_warning_and_falls_back(
+    def test_plaid_item_id_not_in_sync_state_logs_warning_and_skips(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        tmp_path: pathlib.Path,
     ) -> None:
-        """item_id absent from items.toml logs WARNING and falls back."""
+        """Plaid item_id not in sync_state logs WARNING and skips sync."""
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
 
         body = (
             b'{"webhook_type": "TRANSACTIONS",'
             b' "webhook_code": "SYNC_UPDATES_AVAILABLE",'
-            b' "item_id": "unknown-item"}'
+            b' "item_id": "unknown-plaid-item-id"}'
         )
         sig = _make_plaid_sig(body)
 
@@ -278,6 +292,10 @@ class TestWebhookItemRouting:
                 "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item],
             ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._resolve_logical_item_id",
+                return_value=None,
+            ),
         ):
             response = client.post(
                 "/webhooks/plaid",
@@ -290,13 +308,13 @@ class TestWebhookItemRouting:
             )
 
         assert response.status_code == http.HTTPStatus.OK
-        mock_bg.assert_called_once_with(sync_run_id=ANY)
+        mock_bg.assert_not_called()
         warning_messages = [
             r.getMessage()
             for r in caplog.records
             if r.levelno == logging.WARNING
         ]
-        assert any("not found in items.toml" in m for m in warning_messages)
+        assert any("not in sync_state" in m for m in warning_messages)
 
     def test_no_items_toml_falls_back_to_legacy(
         self, monkeypatch: pytest.MonkeyPatch
@@ -400,20 +418,25 @@ class TestWebhookItemRouting:
         mock_bg.assert_called_once_with(sync_run_id=ANY)
         mock_load.assert_not_called()
 
-    def test_env_var_not_set_for_item_logs_error_and_falls_back(
+    def test_env_var_not_set_for_item_logs_error_and_skips(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        tmp_path: pathlib.Path,
     ) -> None:
-        """Missing access-token env var logs ERROR and falls back to legacy."""
+        """Missing access-token env var logs ERROR and skips sync."""
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+        monkeypatch.setenv(
+            "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "test.db")
+        )
         monkeypatch.delenv("PLAID_ACCESS_TOKEN_ALICE", raising=False)
 
+        plaid_item_id = "M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
         body = (
             b'{"webhook_type": "TRANSACTIONS",'
             b' "webhook_code": "SYNC_UPDATES_AVAILABLE",'
-            b' "item_id": "bank-alice"}'
+            b' "item_id": "' + plaid_item_id.encode() + b'"}'
         )
         sig = _make_plaid_sig(body)
 
@@ -435,6 +458,10 @@ class TestWebhookItemRouting:
                 "claw_plaid_ledger.routers.webhooks.load_items_config",
                 return_value=[item],
             ),
+            patch(
+                "claw_plaid_ledger.routers.webhooks._resolve_logical_item_id",
+                return_value="bank-alice",
+            ),
         ):
             response = client.post(
                 "/webhooks/plaid",
@@ -447,7 +474,7 @@ class TestWebhookItemRouting:
             )
 
         assert response.status_code == http.HTTPStatus.OK
-        mock_bg.assert_called_once_with(sync_run_id=ANY)
+        mock_bg.assert_not_called()
         error_messages = [
             r.getMessage()
             for r in caplog.records

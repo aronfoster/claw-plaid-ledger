@@ -110,6 +110,7 @@ def _raw_sync_response(  # noqa: PLR0913
     accounts: list[MagicMock] | None = None,
     next_cursor: str = "cursor-xyz",
     has_more: bool = False,
+    plaid_item_id: str = "plaid-item-fixture",
 ) -> MagicMock:
     """Return a mock Plaid transactions/sync SDK response."""
     resp = MagicMock()
@@ -119,6 +120,8 @@ def _raw_sync_response(  # noqa: PLR0913
     resp.accounts = accounts or []
     resp.next_cursor = next_cursor
     resp.has_more = has_more
+    resp.item = MagicMock()
+    resp.item.item_id = plaid_item_id
     return resp
 
 
@@ -240,6 +243,17 @@ def test_sync_transactions_returns_sync_result() -> None:
 
     result = adapter.sync_transactions("tok")
     assert isinstance(result, SyncResult)
+
+
+def test_sync_transactions_captures_plaid_item_id() -> None:
+    """sync_transactions captures the Plaid-assigned item ID from response."""
+    adapter, api_mock = _adapter_with_mock_api()
+    api_mock.transactions_sync.return_value = _raw_sync_response(
+        plaid_item_id="M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
+    )
+
+    result = adapter.sync_transactions("tok")
+    assert result.plaid_item_id == "M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
 
 
 def test_sync_transactions_translates_added_transaction() -> None:

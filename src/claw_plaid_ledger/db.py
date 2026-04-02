@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -32,6 +33,12 @@ def initialize_database(db_path: Path) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.executescript(load_schema_sql())
         connection.execute("DROP TABLE IF EXISTS annotations")
+        # Migration: add plaid_item_id to sync_state for existing databases
+        # that were created before this column existed.
+        with contextlib.suppress(sqlite3.OperationalError):
+            connection.execute(
+                "ALTER TABLE sync_state ADD COLUMN plaid_item_id TEXT"
+            )
         connection.commit()
 
 
@@ -975,6 +982,19 @@ def upsert_sync_state(
     )
 
 
+def update_plaid_item_id(
+    connection: sqlite3.Connection,
+    *,
+    item_id: str,
+    plaid_item_id: str,
+) -> None:
+    """Store the Plaid-assigned item ID on an existing sync_state row."""
+    connection.execute(
+        "UPDATE sync_state SET plaid_item_id = ? WHERE item_id = ?",
+        (plaid_item_id, item_id),
+    )
+
+
 @dataclass(frozen=True)
 class SyncStateRow:
     """One row from sync_state with owner and last-synced timestamp."""
@@ -1000,6 +1020,18 @@ def get_all_sync_state(
         )
         for row in rows
     ]
+
+
+def get_item_id_by_plaid_item_id(
+    connection: sqlite3.Connection,
+    plaid_item_id: str,
+) -> str | None:
+    """Return the logical item_id for a given plaid_item_id, or None."""
+    row = connection.execute(
+        "SELECT item_id FROM sync_state WHERE plaid_item_id = ?",
+        (plaid_item_id,),
+    ).fetchone()
+    return str(row[0]) if row is not None else None
 
 
 @dataclass(frozen=True)
