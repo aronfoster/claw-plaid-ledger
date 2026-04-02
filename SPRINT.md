@@ -165,7 +165,7 @@ working directory.
 
 ---
 
-## Task 2: Update skill bundles
+## Task 2: Update skill bundles ✅ DONE
 
 ### What
 
