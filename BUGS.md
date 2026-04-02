@@ -8,7 +8,8 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
-_No active bugs currently tracked._
+- [BUG-018](#bug-018--webhook-handler-falls-back-to-plaid_access_token-when-item_id-is-not-in-itemstoml-crashing-all-multi-item-syncs)
+  remains open and is tracked below.
 
 ---
 
@@ -38,6 +39,8 @@ now declare `binaries: [ledger-api]` and `doctor: 'ledger-api /health'`, and
 all API examples were updated to use `ledger-api`. With `autoAllowSkills: true`,
 the wrapper is auto-approved without operator intervention.
 
+
+## Active bugs (open)
 
 ### BUG-018 — Webhook handler falls back to `PLAID_ACCESS_TOKEN` when item_id is not in items.toml, crashing all multi-item syncs
 
@@ -111,6 +114,8 @@ permanently lost (cursor-based sync preserves pending transactions), but syncs
 must be triggered manually after the fix is deployed.
 
 ---
+
+## Resolved bugs (historical)
 
 ### BUG-016 — Skill doctor command pipes curl through `python3 -c`, blocking allowlist approval and causing agent context loss
 

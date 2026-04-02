@@ -379,6 +379,24 @@ wrote it have been removed:
 - The data model is now simpler: raw financial events in `transactions`;
   all semantic/budgeting data exclusively in `allocations`.
 
+### M23a — Skill exec wrapper for ledger API (Sprint 26)
+
+Sprint 26 is complete. OpenClaw skill HTTP calls now route through a dedicated
+wrapper that is compatible with exec approvals:
+
+- **BUG-019 resolved** — added `scripts/ledger-api`, a shared wrapper that
+  sources `~/.openclaw/.env` in-process, enforces `CLAW_API_SECRET`, defaults
+  `CLAW_LEDGER_URL` to `http://127.0.0.1:8000`, and forwards extra curl args.
+- **Deploy integration** — `scripts/deploy-local.sh` installs the wrapper to
+  `/usr/local/bin/ledger-api` during local deploys.
+- **Skill bundles updated** — both `skills/hestia-ledger/` and
+  `skills/athena-ledger/` now declare `binaries: [ledger-api]`, use
+  `doctor: 'ledger-api /health'`, and prohibit direct `curl` usage in normal
+  API workflows.
+- **Operations docs updated** — RUNBOOK post-upgrade cleanup now documents
+  removing stale `/usr/bin/curl` allowlist entries and optional
+  `openclaw.json` simplification.
+
 ---
 
 ## Upcoming Milestones
