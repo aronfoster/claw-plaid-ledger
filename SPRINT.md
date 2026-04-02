@@ -1,4 +1,4 @@
-# Sprint 26 — BUG-019: Skill Exec Wrapper for Ledger API
+# Sprint 26 — BUG-019: Skill Exec Wrapper for Ledger API ✅ DONE
 
 ## Sprint goal
 
@@ -431,3 +431,13 @@ wrapper used by both skills" is acceptable but not required.
   (stale allowlist entry removal, optional `openclaw.json` simplification).
 - Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
   with no regressions.
+
+---
+
+## Sprint closeout ✅ DONE
+
+- All three implementation tasks are marked complete.
+- BUG-019 is documented as resolved in `BUGS.md`.
+- Operator-facing docs (`ARCHITECTURE.md`, `RUNBOOK.md`) include wrapper
+  deployment and post-upgrade cleanup guidance.
+- Sprint outcomes are captured in `ROADMAP.md` under completed milestones.

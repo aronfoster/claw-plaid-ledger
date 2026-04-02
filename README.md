@@ -37,6 +37,12 @@ cp -R skills/hestia-ledger ~/.openclaw/workspace/agents/hestia/skills/
 cp -R skills/athena-ledger ~/.openclaw/workspace/agents/athena/skills/
 ```
 
+Install/update the shared `ledger-api` wrapper used by both skills:
+
+```bash
+bash scripts/deploy-local.sh
+```
+
 Recommended operating cadence:
 
 - **Hestia (bookkeeper)**: event-driven; wake on non-empty Plaid webhook syncs.
