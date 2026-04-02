@@ -7,13 +7,10 @@ metadata:
     requires:
       env:
         - CLAW_API_SECRET
-        - CLAW_LEDGER_URL
-      config:
-        - ~/.openclaw/.env
     primaryEnv: CLAW_API_SECRET
     binaries:
-      - curl
-    doctor: 'curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/health"'
+      - ledger-api
+    doctor: 'ledger-api /health'
 ---
 
 # Hestia Ledger Ingestion Skill
@@ -45,11 +42,24 @@ Hestia must not:
 
 ## Making API calls
 
-`$CLAW_API_SECRET` and `$CLAW_LEDGER_URL` are already in your environment. No `source`, no shell wrapper, no pipes.
+Use `ledger-api` for all ledger HTTP calls. It handles auth and base URL
+internally — no env vars, no `source`, no pipes.
 
 ```bash
-curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?range=last_30_days"
+# GET (default)
+ledger-api /transactions?range=last_30_days
+
+# GET with filters
+ledger-api "/transactions?tags=needs-athena-review&start_date=2026-01-01&end_date=2026-03-31"
+
+# PUT with JSON body
+ledger-api /transactions/abc123/allocations \
+  -X PUT -H "Content-Type: application/json" \
+  -d '[{"amount": 12.34, "category": "groceries", "tags": ["household"]}]'
 ```
+
+Do not call `curl` directly. Do not use `source`, env-var expansion, or shell
+pipes in API calls.
 
 ## Approved API calls
 
