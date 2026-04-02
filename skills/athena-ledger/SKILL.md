@@ -243,9 +243,11 @@ about ledger health. Useful parameters:
 - `?hours=168` — last week
 - `?min_severity=ERROR` — errors only (exclude warnings)
 
-If ERROR-level rows are present, include them in the summary and recommend
-the operator investigate. Warnings may be informational — note them but
-do not escalate unless they form a pattern.
+If ERROR-level rows are present, summarize them in plain language (one line
+per error: timestamp, short message, correlation ID) — never paste raw JSON
+into Discord. Include the summary in the report and recommend the operator
+investigate. Warnings may be informational — note them but do not escalate
+unless they form a pattern.
 
 ## Allocation write policy (Athena)
 

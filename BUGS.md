@@ -8,6 +8,77 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
+### BUG-018 — Webhook handler falls back to `PLAID_ACCESS_TOKEN` when item_id is not in items.toml, crashing all multi-item syncs
+
+**Status:** Active
+**Severity:** High (all webhook-triggered syncs fail silently in multi-item setups; transactions accumulate unsynced)
+**Area:** `src/claw_plaid_ledger/routers/webhooks.py` — `SYNC_UPDATES_AVAILABLE` handler
+**Reported by:** Operator (diagnosed 2026-04-01; three failed syncs today at 06:02, 06:50, 17:14)
+
+#### What is happening
+
+When Plaid delivers a `SYNC_UPDATES_AVAILABLE` webhook, the handler looks up the
+incoming `item_id` in `items.toml`. The lookup compares the Plaid-assigned item ID
+(e.g. `M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q`) against the logical `id` field in
+each `[[items]]` entry (`usaa-aron`, `amex-aron`). These never match, so the lookup
+always fails. The handler then falls back to single-item mode and calls `load_config()`
+expecting `PLAID_ACCESS_TOKEN`. In a multi-item setup `PLAID_ACCESS_TOKEN` is
+intentionally blank, so `load_config()` raises `ConfigError` and the background sync
+crashes. The error is logged at ERROR level and stored in the errors table, but the
+message is a generic Python exception trace rather than anything actionable.
+
+Observed journal line:
+```
+WARNING: item_id M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q not found in items.toml; falling back to PLAID_ACCESS_TOKEN
+ERROR:   Background sync failed — ConfigError: Missing required environment variable(s): PLAID_ACCESS_TOKEN
+```
+
+Because Plaid's cursor does not advance on a failed sync, all pending transactions
+remain queued. After retries are exhausted, Plaid stops sending webhooks until the
+next transaction event. A manual sync is required to recover.
+
+#### Root cause
+
+`items.toml` and `sync_state` both use the logical operator-assigned `id`
+(`usaa-aron`, `amex-aron`). Neither stores the Plaid-assigned item ID that arrives
+in webhook payloads. The handler has no way to match the two, so it always misses.
+
+Adding `plaid_item_id` to `items.toml` would fix the immediate lookup but creates a
+new operator-maintained field that can drift from reality. The Plaid item ID is
+already known to the sync engine at sync time — the right place to store it is the
+database, populated automatically on first sync.
+
+#### Required fix
+
+Three-part change:
+
+**1. Schema:** Add `plaid_item_id TEXT` column to `sync_state`:
+
+```sql
+ALTER TABLE sync_state ADD COLUMN plaid_item_id TEXT;
+```
+
+**2. Sync engine:** When processing a `transactions/sync` response, store the
+Plaid-assigned item ID into `sync_state.plaid_item_id` for that row. The Plaid API
+returns the item ID in the sync response envelope — capture it there. After this
+runs once per item, the mapping is self-maintaining.
+
+**3. Webhook handler:** Look up the incoming `item_id` against
+`sync_state.plaid_item_id` to resolve the logical item ID, then use that to find the
+items.toml entry. If no match is found, log a clear WARNING
+(`unknown Plaid item_id <x> — not in sync_state; skipping sync`) and return without
+falling back to `PLAID_ACCESS_TOKEN`. The fallback path should be removed or gated
+on `items.toml` being absent entirely (genuine single-item mode).
+
+This requires no operator-maintained fields and cannot drift from the actual Plaid
+item IDs seen during sync.
+
+#### Impact
+
+All `SYNC_UPDATES_AVAILABLE` webhooks fail in any multi-item setup. No data is
+permanently lost (cursor-based sync preserves pending transactions), but syncs
+must be triggered manually after the fix is deployed.
+
 ---
 
 ## Resolved bugs (recent)
