@@ -8,29 +8,36 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
-### BUG-019 Skill Permission Hellscape
-
-Warning: Adding curl to your allowlist allows the agent to curl any URL on the internet, not just your localhost endpoints.
-If you want to restrict the agent only to your specific API, you should use a Wrapper Script pattern.
-Create a simple script (e.g., my-api-client) that hardcodes your base URL and only accepts the endpoint path as an argument.
-bash
-#!/bin/bash
-# my-api-client
-BASE_URL="http://localhost:3000"
-curl -s "$BASE_URL/$1" 
-
-Update SKILL.md to require this script instead of global curl.
-yaml
-requires:
-  bins: ["my-api-client"]
-
-Because apparently SKILLs are supposed to come with a yaml that tells them what they're allowed to run!
-
-Update instructions: Tell the agent to run my-api-client /users instead of curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?range=last_30_days". But when allow-always is set for a skill usage, Hestia is getting an exit code 3, meaning she can't resolve the host, meaning that $CLAW_LEDGER_URL isn't getting resolved, meaning that there's some context where she isn't getting the .env variables.
+_No active bugs currently tracked._
 
 ---
 
 ## Resolved bugs
+
+### BUG-019 — Skill exec wrapper for ledger API
+
+**Status:** Resolved (Sprint 26)
+**Severity:** High (both agents could not call the ledger API without manual per-run approval; exec subprocesses dropped required env vars)
+**Area:** Skill definitions (`skills/hestia-ledger/SKILL.md`, `skills/athena-ledger/SKILL.md`) / OpenClaw exec-approval env propagation
+
+#### Root cause
+
+OpenClaw exec approvals did not propagate `skills.entries.*.env` values into
+child processes spawned by exec (OpenClaw issue #31583). Separately, `$`
+expansion syntax in command arguments was treated as an allowlist miss.
+Combined effect: skill `curl` commands saw empty `$CLAW_API_SECRET` and
+`$CLAW_LEDGER_URL`, causing exit code 3 host-resolution failures.
+
+#### Fix
+
+Added `scripts/ledger-api`, a bash wrapper that sources `~/.openclaw/.env`
+inside its own process, builds the authenticated request with a default base
+URL, and passes through extra curl args. The wrapper is installed to
+`/usr/local/bin/ledger-api` via `scripts/deploy-local.sh`. Both skill bundles
+now declare `binaries: [ledger-api]` and `doctor: 'ledger-api /health'`, and
+all API examples were updated to use `ledger-api`. With `autoAllowSkills: true`,
+the wrapper is auto-approved without operator intervention.
+
 
 ### BUG-018 — Webhook handler falls back to `PLAID_ACCESS_TOKEN` when item_id is not in items.toml, crashing all multi-item syncs
 

@@ -147,6 +147,11 @@ _scheduled_sync_loop (every 60 min)
 - **Default wake target**: non-empty sync notifications wake Hestia only.
 - **Analysis cadence**: Athena is intentionally decoupled and should run on a
   periodic schedule, optionally prioritizing `needs-athena-review` tags.
+- **Agent API access**: both skill bundles call `ledger-api`
+  (`/usr/local/bin/ledger-api`) for all HTTP requests. The wrapper sources
+  `~/.openclaw/.env` for `CLAW_API_SECRET`, defaults `CLAW_LEDGER_URL` to
+  `http://127.0.0.1:8000`, and bypasses OpenClaw exec-approval env stripping.
+  `scripts/deploy-local.sh` installs the wrapper automatically.
 
 The sync engine writes to `transactions`, `accounts`, and `sync_state`. It
 seeds blank allocation rows via `upsert_transaction`. Source precedence is applied after sync writes via
@@ -987,6 +992,7 @@ scripts/
   deploy-local.sh   # reinstall ledger via uv tool install and restart the systemd service
   duckdns-update.sh # DuckDNS IP-update script for cron/systemd
   install-hooks.sh
+  ledger-api        # OpenClaw agent wrapper for ledger HTTP API (installed to /usr/local/bin)
   sync-skills.sh    # push/pull OpenClaw agent skill bundles between repo and ~/.openclaw
 
 tests/
