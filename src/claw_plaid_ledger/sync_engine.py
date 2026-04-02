@@ -13,6 +13,7 @@ from claw_plaid_ledger.db import (
     get_sync_cursor,
     initialize_database,
     normalize_account_for_db,
+    update_plaid_item_id,
     upsert_account,
     upsert_sync_state,
     upsert_transaction,
@@ -157,6 +158,12 @@ def _sync_pages(
         cursor=cursor,
         owner=owner,
     )
+    if result.plaid_item_id is not None:
+        update_plaid_item_id(
+            connection,
+            item_id=item_id,
+            plaid_item_id=result.plaid_item_id,
+        )
     connection.commit()
 
     return SyncSummary(

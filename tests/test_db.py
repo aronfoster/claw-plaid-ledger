@@ -18,6 +18,7 @@ from claw_plaid_ledger.db import (
     apply_account_precedence,
     get_all_sync_state,
     get_allocations_for_transaction,
+    get_item_id_by_plaid_item_id,
     get_sync_cursor,
     get_transaction,
     initialize_database,
@@ -27,6 +28,7 @@ from claw_plaid_ledger.db import (
     query_ledger_errors,
     query_transactions,
     replace_allocations,
+    update_plaid_item_id,
     upsert_account,
     upsert_single_allocation,
     upsert_sync_state,
@@ -1624,3 +1626,124 @@ def test_query_transactions_total_counts_allocation_rows(
     assert len(rows) == expected_alloc_count
     ids = {r["id"] for r in rows}
     assert ids == {"tx-split"}
+
+
+# ---------------------------------------------------------------------------
+# plaid_item_id — sync_state column (BUG-018)
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_database_fresh_db_has_plaid_item_id_column(
+    tmp_path: Path,
+) -> None:
+    """Fresh DB has plaid_item_id column on sync_state."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert "plaid_item_id" in _sync_state_column_names(connection)
+
+
+def test_initialize_database_migration_adds_plaid_item_id_to_existing_db(
+    tmp_path: Path,
+) -> None:
+    """initialize_database adds plaid_item_id to a pre-existing DB."""
+    db_path = tmp_path / "ledger.db"
+    # Bootstrap a DB without plaid_item_id by creating sync_state manually.
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE sync_state "
+            "(id INTEGER PRIMARY KEY, item_id TEXT NOT NULL UNIQUE, "
+            "cursor TEXT, owner TEXT, last_synced_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO sync_state (item_id, cursor) VALUES (?, ?)",
+            ("pre-existing-item", "old-cursor"),
+        )
+        connection.commit()
+
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        assert "plaid_item_id" in _sync_state_column_names(connection)
+        # Existing row is preserved; new column is NULL.
+        row = connection.execute(
+            "SELECT cursor, plaid_item_id FROM sync_state WHERE item_id = ?",
+            ("pre-existing-item",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "old-cursor"
+        assert row[1] is None
+
+
+def test_update_plaid_item_id_stores_and_is_readable(tmp_path: Path) -> None:
+    """update_plaid_item_id writes plaid_item_id to an existing row."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_sync_state(
+            connection,
+            item_id="bank-alice",
+            cursor="cursor-1",
+        )
+        update_plaid_item_id(
+            connection,
+            item_id="bank-alice",
+            plaid_item_id="plaid-id-abc",
+        )
+        row = connection.execute(
+            "SELECT plaid_item_id FROM sync_state WHERE item_id = ?",
+            ("bank-alice",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "plaid-id-abc"
+
+        # A second call overwrites the value.
+        update_plaid_item_id(
+            connection,
+            item_id="bank-alice",
+            plaid_item_id="plaid-id-abc",
+        )
+        row = connection.execute(
+            "SELECT plaid_item_id FROM sync_state WHERE item_id = ?",
+            ("bank-alice",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "plaid-id-abc"
+
+
+def test_get_item_id_by_plaid_item_id_returns_logical_id(
+    tmp_path: Path,
+) -> None:
+    """get_item_id_by_plaid_item_id maps plaid_item_id to logical item_id."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        upsert_sync_state(
+            connection,
+            item_id="bank-alice",
+            cursor="cursor-1",
+        )
+        update_plaid_item_id(
+            connection,
+            item_id="bank-alice",
+            plaid_item_id="M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q",
+        )
+        result = get_item_id_by_plaid_item_id(
+            connection, "M0RJm3p05Qhkow14o1azcgog1rKNvAfdwBq8q"
+        )
+        assert result == "bank-alice"
+
+
+def test_get_item_id_by_plaid_item_id_returns_none_for_unknown(
+    tmp_path: Path,
+) -> None:
+    """get_item_id_by_plaid_item_id returns None for unknown plaid_item_id."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        result = get_item_id_by_plaid_item_id(connection, "unknown-plaid-id")
+        assert result is None
