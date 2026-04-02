@@ -159,9 +159,10 @@ For each run:
 
 0. **Pre-run health check.** Call `GET /errors?hours=1&min_severity=ERROR`
    before starting ingestion. If the response contains any ERROR-level rows,
-   surface them in the run frame output and lower overall confidence for
-   the run. Do not abort — continue ingestion with reduced confidence and
-   flag any affected results.
+   summarize them in plain language (one line per error: timestamp, short
+   message, correlation ID) — never paste raw JSON into Discord. Lower
+   overall confidence for the run. Do not abort — continue ingestion with
+   reduced confidence and flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
 2. Query `GET /transactions` in `view=canonical` and paginate to completion.
    Each row includes a nested `allocation` field (singular, list-view shape).
