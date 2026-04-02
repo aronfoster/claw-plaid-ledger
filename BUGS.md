@@ -8,6 +8,30 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 ## Active bugs
 
+### BUG-019 Skill Permission Hellscape
+
+Warning: Adding curl to your allowlist allows the agent to curl any URL on the internet, not just your localhost endpoints.
+If you want to restrict the agent only to your specific API, you should use a Wrapper Script pattern.
+Create a simple script (e.g., my-api-client) that hardcodes your base URL and only accepts the endpoint path as an argument.
+bash
+#!/bin/bash
+# my-api-client
+BASE_URL="http://localhost:3000"
+curl -s "$BASE_URL/$1" 
+
+Update SKILL.md to require this script instead of global curl.
+yaml
+requires:
+  bins: ["my-api-client"]
+
+Because apparently SKILLs are supposed to come with a yaml that tells them what they're allowed to run!
+
+Update instructions: Tell the agent to run my-api-client /users instead of curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?range=last_30_days". But when allow-always is set for a skill usage, Hestia is getting an exit code 3, meaning she can't resolve the host, meaning that $CLAW_LEDGER_URL isn't getting resolved, meaning that there's some context where she isn't getting the .env variables.
+
+---
+
+## Resolved bugs
+
 ### BUG-018 — Webhook handler falls back to `PLAID_ACCESS_TOKEN` when item_id is not in items.toml, crashing all multi-item syncs
 
 **Status:** Active
@@ -80,8 +104,6 @@ permanently lost (cursor-based sync preserves pending transactions), but syncs
 must be triggered manually after the fix is deployed.
 
 ---
-
-## Resolved bugs (recent)
 
 ### BUG-016 — Skill doctor command pipes curl through `python3 -c`, blocking allowlist approval and causing agent context loss
 
