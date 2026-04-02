@@ -76,7 +76,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: Create `ledger-api` wrapper script and deploy integration
+## Task 1: Create `ledger-api` wrapper script and deploy integration ✅ DONE
 
 ### What
 

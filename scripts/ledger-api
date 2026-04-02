@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Source OpenClaw env for CLAW_API_SECRET (and optionally CLAW_LEDGER_URL).
+# This happens inside the script's own process — not subject to
+# exec-approval env stripping.
+OPENCLAW_ENV="${HOME}/.openclaw/.env"
+if [[ -f "$OPENCLAW_ENV" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$OPENCLAW_ENV"
+    set +a
+fi
+
+CLAW_LEDGER_URL="${CLAW_LEDGER_URL:-http://127.0.0.1:8000}"
+
+if [[ -z "${CLAW_API_SECRET:-}" ]]; then
+    echo "ledger-api: CLAW_API_SECRET is not set (checked $OPENCLAW_ENV)" >&2
+    exit 2
+fi
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: ledger-api <endpoint-path> [curl-args...]" >&2
+    echo "  ledger-api /health" >&2
+    echo "  ledger-api /transactions?range=last_30_days" >&2
+    echo "  ledger-api /transactions/ID/allocations -X PUT -d '[...]'" >&2
+    exit 2
+fi
+
+ENDPOINT="$1"
+if [[ "$ENDPOINT" != /* ]]; then
+    echo "ledger-api: endpoint path must start with '/'" >&2
+    exit 2
+fi
+shift
+
+exec curl -s \
+    -H "Authorization: Bearer ${CLAW_API_SECRET}" \
+    "${CLAW_LEDGER_URL}${ENDPOINT}" \
+    "$@"
