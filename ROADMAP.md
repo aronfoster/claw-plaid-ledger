@@ -357,38 +357,31 @@ refresh from the CLI:
   errors exit 1, `--item` and `--all` together exits 2.
 - No API endpoint added, no schema changed, no skill bundles modified.
 
+### M23 — Remove Annotations Table (Sprint 25)
+
+Sprint 25 is complete. The `annotations` table and every piece of code that read or
+wrote it have been removed:
+
+- **Schema** — `CREATE TABLE annotations` block removed from `schema.sql`.
+  `DROP TABLE IF EXISTS annotations` runs idempotently on every startup, cleaning
+  up any live database that still carries the old table.
+- **DB layer** — `AnnotationRow`, `upsert_annotation()`, and `get_annotation()`
+  removed from `db.py`. All migration and backfill code (migration_stmts loop,
+  annotation backfill patches) removed from `initialize_database()`.
+- **API** — `PUT /annotations/{transaction_id}` endpoint removed entirely.
+  `AnnotationRequest` Pydantic model removed. The endpoint now returns HTTP 404.
+- **Tests** — `tests/test_server_annotations.py` deleted. All annotation-specific
+  DB tests removed. Category/tag seeding in `test_server_categories.py` migrated
+  to use `allocations` directly.
+- **Skill bundles and docs** — All markdown, skill files, and proxy config examples
+  updated to remove `annotations` references. `annotation_write_checklist.md`
+  merged into `allocation_write_checklist.md` and deleted.
+- The data model is now simpler: raw financial events in `transactions`;
+  all semantic/budgeting data exclusively in `allocations`.
+
 ---
 
 ## Upcoming Milestones
-
-### M23 — Remove Annotations Table
-
-**Goal:** simplify the data model by eliminating the now-redundant `annotations`
-table after the allocation migration is complete.
-
-**Rationale:** The project is intentionally collapsing from a two-table semantic
-model (`annotations` + `allocations`) into a single semantic table. In practice,
-transaction-level metadata stored in `annotations` (category, tags, notes) has not
-been pulling its weight as a separate layer — the same information belongs in
-`allocations`, which is already the authoritative budgeting surface. Keeping both
-tables creates dual-write complexity with no benefit. After M20–M21 fully migrate
-that data, `annotations` becomes dead weight and should be removed entirely.
-
-#### Deliverables
-
-- Migrate any remaining `annotations.note` data into `allocations`.
-- Remove all reads/writes that depend on `annotations`.
-- Delete the `annotations` table and related migration compatibility code.
-- Update API, CLI, and reporting paths to use `allocations` as the only
-  semantic/budgeting layer.
-
-#### Acceptance criteria
-
-- No production code depends on `annotations`.
-- Transaction categorization, tags, and notes are stored only in `allocations`.
-- Transaction sync/import logic remains unchanged and Plaid data remains immutable.
-- The schema is simpler: raw financial events in `transactions`, semantic budgeting
-  data in `allocations`.
 
 ### M24 — Plaid Required Attestations (due 2026-09-07)
 
