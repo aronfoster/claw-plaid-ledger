@@ -210,7 +210,7 @@ GET /transactions/splits
 
 ---
 
-## Task 3: `POST /transactions/allocations/batch`
+## Task 3: `POST /transactions/allocations/batch` ✅ DONE
 
 ### What
 

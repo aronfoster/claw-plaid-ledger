@@ -1879,3 +1879,274 @@ class TestPutTransactionAllocations:
         get_allocs = get_response.json()["allocations"]
 
         assert get_allocs == put_allocs
+
+
+class TestPostTransactionAllocationsBatch:
+    """Tests for POST /transactions/allocations/batch endpoint."""
+
+    def test_happy_path_all_succeed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Batch updates three valid single-allocation transactions."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_transactions(db_path)
+        now = "2026-01-01T00:00:00+00:00"
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                (
+                    "INSERT INTO transactions ("
+                    "plaid_transaction_id, plaid_account_id, amount, "
+                    "iso_currency_code, name, merchant_name, pending, "
+                    "authorized_date, posted_date, raw_json, created_at, "
+                    "updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    "tx_3",
+                    "acct_1",
+                    9.0,
+                    "USD",
+                    "Corner Store",
+                    None,
+                    0,
+                    None,
+                    "2024-01-20",
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                (
+                    "INSERT INTO allocations ("
+                    "plaid_transaction_id, amount, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?)"
+                ),
+                ("tx_3", 9.0, now, now),
+            )
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[
+                {"transaction_id": "tx_1", "category": "groceries"},
+                {
+                    "transaction_id": "tx_2",
+                    "category": "food",
+                    "tags": ["essentials"],
+                    "note": "weekly top-up",
+                },
+                {
+                    "transaction_id": "tx_3",
+                    "category": "utilities",
+                    "tags": ["monthly"],
+                    "note": "reset to single",
+                },
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["succeeded"] == [
+            "tx_1",
+            "tx_2",
+            "tx_3",
+        ]
+        assert "failed" not in body
+
+    def test_mixed_success_not_found_and_split(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """One item succeeds while not-found and split are reported failed."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[
+                {"transaction_id": "tx_uncat_single", "category": "food"},
+                {"transaction_id": "tx_missing", "category": "food"},
+                {"transaction_id": "tx_split_mixed", "category": "food"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["succeeded"] == ["tx_uncat_single"]
+        assert body["failed"] == [
+            {
+                "transaction_id": "tx_missing",
+                "error": "transaction not found",
+            },
+            {
+                "transaction_id": "tx_split_mixed",
+                "error": (
+                    "split transaction (2 allocations); use "
+                    "PUT /transactions/{id}/allocations"
+                ),
+            },
+        ]
+
+    def test_replace_semantics_clear_omitted_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Omitted note/tags are cleared to null by batch replace semantics."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        initial_response = client.post(
+            "/transactions/allocations/batch",
+            json=[
+                {
+                    "transaction_id": "tx_uncat_single",
+                    "category": "food",
+                    "tags": ["weekly"],
+                    "note": "first pass",
+                }
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert initial_response.status_code == http.HTTPStatus.OK
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[{"transaction_id": "tx_uncat_single", "category": "coffee"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        detail_response = client.get(
+            "/transactions/tx_uncat_single",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert detail_response.status_code == http.HTTPStatus.OK
+        allocation = detail_response.json()["allocations"][0]
+        assert allocation["category"] == "coffee"
+        assert allocation["tags"] is None
+        assert allocation["note"] is None
+
+    def test_empty_array_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Empty batch body is rejected with HTTP 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+    def test_split_rejection_mentions_count_and_alternative_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Split transaction failure includes allocation count and guidance."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[{"transaction_id": "tx_split_mixed", "category": "food"}],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["succeeded"] == []
+        assert body["failed"] == [
+            {
+                "transaction_id": "tx_split_mixed",
+                "error": (
+                    "split transaction (2 allocations); use "
+                    "PUT /transactions/{id}/allocations"
+                ),
+            }
+        ]
+
+    def test_duplicate_transaction_id_in_batch_fails_later_entry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Second entry for the same transaction is reported as duplicate."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[
+                {"transaction_id": "tx_uncat_single", "category": "food"},
+                {"transaction_id": "tx_uncat_single", "category": "travel"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["succeeded"] == ["tx_uncat_single"]
+        assert body["failed"] == [
+            {
+                "transaction_id": "tx_uncat_single",
+                "error": "duplicate transaction_id in batch",
+            }
+        ]
+
+    def test_database_update_error_is_collected_in_failed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """SQLite update errors are captured and batch processing continues."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        def _raise_db_error(
+            connection: sqlite3.Connection,
+            **__: object,
+        ) -> None:
+            connection.execute("SELECT * FROM table_that_does_not_exist")
+
+        monkeypatch.setattr(
+            "claw_plaid_ledger.routers.transactions._update_single_allocation_fields",
+            _raise_db_error,
+        )
+
+        response = client.post(
+            "/transactions/allocations/batch",
+            json=[
+                {"transaction_id": "tx_uncat_single", "category": "food"},
+                {"transaction_id": "tx_cat_single", "category": "travel"},
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["succeeded"] == []
+        expected_error = (
+            "database update failed: no such table: table_that_does_not_exist"
+        )
+        assert body["failed"] == [
+            {
+                "transaction_id": "tx_uncat_single",
+                "error": expected_error,
+            },
+            {
+                "transaction_id": "tx_cat_single",
+                "error": expected_error,
+            },
+        ]
