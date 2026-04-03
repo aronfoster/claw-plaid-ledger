@@ -401,7 +401,25 @@ wrapper that is compatible with exec approvals:
 
 ## Upcoming Milestones
 
-### M24 — Plaid Required Attestations (due 2026-09-07)
+### M24 — Batch Allocation Updates & Uncategorized Transaction Query
+
+Goal: Reduce Hestia's exec footprint to a single approved command per ingestion run.
+
+- **`GET /transactions/uncategorized`** — returns transactions where the single allocation has null category. Includes split transactions (allocation count > 1). Supports standard date range filters and pagination. Goal: give Hestia an focused work queue without requiring her to filter client-side.
+- **`POST /transactions/allocations/batch`** — accepts an array of simple allocation updates (transaction ID + category/tags/note). Scoped to single-allocation transactions only; rejects or skips splits. Implementation detail TBD: whether to fail fast, skip-and-report, or collect all errors and return a summary. Response shape TBD: full records vs success/failure summary per ID. Document the tradeoffs as a design decision for the developer to resolve with PM input.
+- Skill bundles for both agents updated with new endpoints.
+ 
+### M25 — Scheduled Sync (Webhook Retirement)
+
+Goal: Replace inbound webhook infrastructure with a reliable outbound pull cadence.
+
+- Configurable systemd timer running `ledger sync --all` at operator-chosen frequency (4x/day default, hourly option).
+- Post-sync agent notification: if sync returns new transactions, poke the configured agent (same `OPENCLAW_HOOKS_*` env vars already in place). Enabled/disabled via new flag.
+- Webhook code remains in codebase but marked deprecated in ARCHITECTURE.md and RUNBOOK.md with a note that BUG-018 is unresolved. Not removed — leaves the door open for a future contributor.
+- DuckDNS, Caddy, and port-forward setup sections in RUNBOOK.md marked accordingly.
+- `doctor` reports scheduled sync status and warns if both webhook and scheduled sync are enabled simultaneously.
+
+### M26 — Plaid Required Attestations (due 2026-09-07)
 
 **Goal:** Complete all eleven Plaid compliance attestations before the
 2026-09-07 deadline to maintain production API access.
