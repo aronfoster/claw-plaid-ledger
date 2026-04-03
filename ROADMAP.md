@@ -1,5 +1,154 @@
 # Roadmap
 
+## Upcoming Milestones
+
+### M24 — Batch Allocation Updates & Uncategorized Transaction Query
+
+Goal: Reduce Hestia's exec footprint to a single approved command per ingestion run, and give Athena richer query tools for analysis and review.
+
+- **`GET /transactions/uncategorized`** — returns transactions where the single allocation has null category. Includes split transactions (allocation count > 1). Supports standard date range filters and pagination. Goal: give Hestia a focused work queue without requiring her to filter client-side.
+- **`GET /transactions/splits`** — returns transactions that have more than one allocation. Supports standard date range filters and pagination. Goal: give Athena a dedicated review queue for split transactions without client-side filtering.
+- **`POST /transactions/allocations/batch`** — accepts an array of simple allocation updates (transaction ID + category/tags/note). Scoped to single-allocation transactions only; rejects or skips splits. Implementation detail TBD: whether to fail fast, skip-and-report, or collect all errors and return a summary. Response shape TBD: full records vs success/failure summary per ID. Document the tradeoffs as a design decision for the developer to resolve with PM input.
+- **Amount range filters on `GET /transactions`** — add `min_amount` and `max_amount` query parameters (inclusive bounds, matched against transaction amount). Useful for isolating large transactions for Athena review or finding small recurring charges.
+- **Merchant/name text search on `GET /transactions`** — add a `merchant` query parameter that performs a case-insensitive substring match against the transaction name/merchant name field. Complements the existing `search_notes` keyword filter.
+- Skill bundles for both agents updated with all new endpoints and filter parameters.
+ 
+### M25 — Scheduled Sync (Webhook Retirement)
+
+Goal: Replace inbound webhook infrastructure with a reliable outbound pull cadence.
+
+- Configurable systemd timer running `ledger sync --all` at operator-chosen frequency (4x/day default, hourly option).
+- Post-sync agent notification: if sync returns new transactions, poke the configured agent (same `OPENCLAW_HOOKS_*` env vars already in place). Enabled/disabled via new flag.
+- Webhook code remains in codebase but marked deprecated in ARCHITECTURE.md and RUNBOOK.md with a note that BUG-018 is unresolved. Not removed — leaves the door open for a future contributor.
+- DuckDNS, Caddy, and port-forward setup sections in RUNBOOK.md marked accordingly.
+- `doctor` reports scheduled sync status and warns if both webhook and scheduled sync are enabled simultaneously.
+
+### M26 — Plaid Required Attestations (due 2026-09-07)
+
+**Goal:** Complete all eleven Plaid compliance attestations before the
+2026-09-07 deadline to maintain production API access.
+
+**Plaid dashboard:** https://dashboard.plaid.com/settings/company/compliance?tab=dataSecurity
+
+**Rationale:** Plaid requires these attestations as part of their production
+access security review. Each item below must be formally attested in the Plaid
+dashboard. Most require documented policies or implemented controls to exist
+first.
+
+#### Attestations
+
+- **RBAC** — Attest that role-based access control is implemented.
+- **MFA (consumer-facing)** — Attest that MFA is implemented on the
+  consumer-facing application where Plaid Link is deployed.
+- **EOL software management** — Attest that end-of-life software is monitored
+  and that update/EOL management practices are documented in policy.
+- **Information Security Policy (ISP)** — Attest that an ISP has been created.
+- **Privacy policy** — Attest that a privacy policy has been published.
+- **Periodic access reviews** — Attest that access reviews and audits are
+  performed periodically.
+- **Centralized IAM** — Attest that centralized identity and access management
+  solutions are in place.
+- **MFA (internal systems)** — Attest that MFA is implemented on internal
+  systems that store or process consumer data.
+- **Vulnerability patching SLA** — Attest that identified vulnerabilities are
+  patched within a defined SLA.
+- **Zero trust architecture** — Attest that a zero trust access architecture
+  is implemented.
+- **Secure tokens and certificates** — Attest that secure tokens and
+  certificates are used for authentication.
+
+#### Acceptance criteria
+
+- All eleven attestations submitted in the Plaid dashboard before 2026-09-07.
+- Any required supporting documents (ISP, privacy policy, access review records)
+  are drafted and stored before attesting.
+
+---
+
+## Deferred / Unscheduled
+
+### `doctor` auto-remediation
+
+**Focus:** Reduce manual maintenance and recovery toil.
+
+**Goal:** Expand diagnostics into safe, explicit remediation workflows.
+
+**Scope**
+
+- Add `ledger doctor --fix` style flows for common recoverable issues:
+  - Missing/incomplete `items.toml` bootstrap
+  - Stale or pending migrations
+  - File permission and path readiness problems
+- Add pre-sync health checks before `sync --all` with clear, actionable errors.
+- Preserve dry-run and audit output so operators can review planned fixes.
+
+**Design questions for PM/user**
+
+- Should auto-fix be interactive by default, or non-interactive with
+  `--yes/--force` semantics?
+- What risk level is acceptable for auto-remediation (config edits only vs.
+  database mutations)?
+
+### Markdown export
+
+Human-readable transaction summaries written to the OpenClaw workspace.
+Originally planned for M3. Not urgent now that agents have a proper query
+API, but may be useful for contexts where tool calls are unavailable or for
+manual review workflows. Revisit after M11.
+
+### Per-agent token scoping
+
+If multiple OpenClaw agents with different trust levels need ledger access,
+replace `CLAW_API_SECRET` with a small token table mapping tokens to
+permission scopes (read-only vs. read-write annotations). Not needed while
+Hestia is the only consumer.
+
+### Budget rule engine
+
+Explicit rules for recurring spend categories, monthly targets, and
+over-budget alerts. The annotation layer may make this unnecessary for
+day-to-day use; revisit once Hestia has several months of annotation history
+to assess whether rule-based guardrails add value over conversational
+queries.
+
+### Operator review queue for ambiguous identity matches
+
+If automatic account or transaction source-precedence confidence is low,
+surface a small review queue rather than silently guessing. This can remain manual until the
+household has enough real production history to reveal the weird edge cases.
+
+### CSV export for financial data
+
+Export transaction and allocation data as CSV for use in spreadsheet tools
+and manual review workflows.
+
+**Scope**
+
+- CLI command (e.g. `ledger export`) that writes a CSV to stdout or a named
+  file.
+- Supports the same filter parameters as `GET /transactions` (date range,
+  account, owner, category, view).
+- Each row represents one allocation (matching the API's one-row-per-allocation
+  semantics introduced in M20).
+- Columns include: transaction date, merchant, transaction amount, allocation
+  amount, category, tags, note, account id, owner.
+
+**Design questions for PM/user**
+
+- Should an API endpoint (`GET /export/csv`) be added alongside the CLI, or
+  is CLI-only sufficient?
+- What file-naming convention should the CLI use for file output vs. stdout?
+
+---
+
+### Parallel multi-institution sync
+
+M6 syncs institutions sequentially. If sync latency becomes a problem with
+5+ items, parallel execution via `asyncio` or worker threads is a natural
+extension.
+
+---
+
 ## Completed Milestones
 
 ### M0 — Project skeleton
@@ -398,147 +547,3 @@ wrapper that is compatible with exec approvals:
   `openclaw.json` simplification.
 
 ---
-
-## Upcoming Milestones
-
-### M24 — Batch Allocation Updates & Uncategorized Transaction Query
-
-Goal: Reduce Hestia's exec footprint to a single approved command per ingestion run.
-
-- **`GET /transactions/uncategorized`** — returns transactions where the single allocation has null category. Includes split transactions (allocation count > 1). Supports standard date range filters and pagination. Goal: give Hestia an focused work queue without requiring her to filter client-side.
-- **`POST /transactions/allocations/batch`** — accepts an array of simple allocation updates (transaction ID + category/tags/note). Scoped to single-allocation transactions only; rejects or skips splits. Implementation detail TBD: whether to fail fast, skip-and-report, or collect all errors and return a summary. Response shape TBD: full records vs success/failure summary per ID. Document the tradeoffs as a design decision for the developer to resolve with PM input.
-- Skill bundles for both agents updated with new endpoints.
- 
-### M25 — Scheduled Sync (Webhook Retirement)
-
-Goal: Replace inbound webhook infrastructure with a reliable outbound pull cadence.
-
-- Configurable systemd timer running `ledger sync --all` at operator-chosen frequency (4x/day default, hourly option).
-- Post-sync agent notification: if sync returns new transactions, poke the configured agent (same `OPENCLAW_HOOKS_*` env vars already in place). Enabled/disabled via new flag.
-- Webhook code remains in codebase but marked deprecated in ARCHITECTURE.md and RUNBOOK.md with a note that BUG-018 is unresolved. Not removed — leaves the door open for a future contributor.
-- DuckDNS, Caddy, and port-forward setup sections in RUNBOOK.md marked accordingly.
-- `doctor` reports scheduled sync status and warns if both webhook and scheduled sync are enabled simultaneously.
-
-### M26 — Plaid Required Attestations (due 2026-09-07)
-
-**Goal:** Complete all eleven Plaid compliance attestations before the
-2026-09-07 deadline to maintain production API access.
-
-**Plaid dashboard:** https://dashboard.plaid.com/settings/company/compliance?tab=dataSecurity
-
-**Rationale:** Plaid requires these attestations as part of their production
-access security review. Each item below must be formally attested in the Plaid
-dashboard. Most require documented policies or implemented controls to exist
-first.
-
-#### Attestations
-
-- **RBAC** — Attest that role-based access control is implemented.
-- **MFA (consumer-facing)** — Attest that MFA is implemented on the
-  consumer-facing application where Plaid Link is deployed.
-- **EOL software management** — Attest that end-of-life software is monitored
-  and that update/EOL management practices are documented in policy.
-- **Information Security Policy (ISP)** — Attest that an ISP has been created.
-- **Privacy policy** — Attest that a privacy policy has been published.
-- **Periodic access reviews** — Attest that access reviews and audits are
-  performed periodically.
-- **Centralized IAM** — Attest that centralized identity and access management
-  solutions are in place.
-- **MFA (internal systems)** — Attest that MFA is implemented on internal
-  systems that store or process consumer data.
-- **Vulnerability patching SLA** — Attest that identified vulnerabilities are
-  patched within a defined SLA.
-- **Zero trust architecture** — Attest that a zero trust access architecture
-  is implemented.
-- **Secure tokens and certificates** — Attest that secure tokens and
-  certificates are used for authentication.
-
-#### Acceptance criteria
-
-- All eleven attestations submitted in the Plaid dashboard before 2026-09-07.
-- Any required supporting documents (ISP, privacy policy, access review records)
-  are drafted and stored before attesting.
-
----
-
-## Deferred / Unscheduled
-
-### `doctor` auto-remediation
-
-**Focus:** Reduce manual maintenance and recovery toil.
-
-**Goal:** Expand diagnostics into safe, explicit remediation workflows.
-
-**Scope**
-
-- Add `ledger doctor --fix` style flows for common recoverable issues:
-  - Missing/incomplete `items.toml` bootstrap
-  - Stale or pending migrations
-  - File permission and path readiness problems
-- Add pre-sync health checks before `sync --all` with clear, actionable errors.
-- Preserve dry-run and audit output so operators can review planned fixes.
-
-**Design questions for PM/user**
-
-- Should auto-fix be interactive by default, or non-interactive with
-  `--yes/--force` semantics?
-- What risk level is acceptable for auto-remediation (config edits only vs.
-  database mutations)?
-
-### Markdown export
-
-Human-readable transaction summaries written to the OpenClaw workspace.
-Originally planned for M3. Not urgent now that agents have a proper query
-API, but may be useful for contexts where tool calls are unavailable or for
-manual review workflows. Revisit after M11.
-
-### Per-agent token scoping
-
-If multiple OpenClaw agents with different trust levels need ledger access,
-replace `CLAW_API_SECRET` with a small token table mapping tokens to
-permission scopes (read-only vs. read-write annotations). Not needed while
-Hestia is the only consumer.
-
-### Budget rule engine
-
-Explicit rules for recurring spend categories, monthly targets, and
-over-budget alerts. The annotation layer may make this unnecessary for
-day-to-day use; revisit once Hestia has several months of annotation history
-to assess whether rule-based guardrails add value over conversational
-queries.
-
-### Operator review queue for ambiguous identity matches
-
-If automatic account or transaction source-precedence confidence is low,
-surface a small review queue rather than silently guessing. This can remain manual until the
-household has enough real production history to reveal the weird edge cases.
-
-### CSV export for financial data
-
-Export transaction and allocation data as CSV for use in spreadsheet tools
-and manual review workflows.
-
-**Scope**
-
-- CLI command (e.g. `ledger export`) that writes a CSV to stdout or a named
-  file.
-- Supports the same filter parameters as `GET /transactions` (date range,
-  account, owner, category, view).
-- Each row represents one allocation (matching the API's one-row-per-allocation
-  semantics introduced in M20).
-- Columns include: transaction date, merchant, transaction amount, allocation
-  amount, category, tags, note, account id, owner.
-
-**Design questions for PM/user**
-
-- Should an API endpoint (`GET /export/csv`) be added alongside the CLI, or
-  is CLI-only sufficient?
-- What file-naming convention should the CLI use for file output vs. stdout?
-
----
-
-### Parallel multi-institution sync
-
-M6 syncs institutions sequentially. If sync latency becomes a problem with
-5+ items, parallel execution via `asyncio` or worker threads is a natural
-extension.
