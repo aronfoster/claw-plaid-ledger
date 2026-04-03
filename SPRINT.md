@@ -1,443 +1,441 @@
-# Sprint 26 — BUG-019: Skill Exec Wrapper for Ledger API ✅ DONE
+# Sprint 27 — Batch Allocation Updates & Uncategorized Transaction Query (M24)
 
 ## Sprint goal
 
-Replace bare `curl` invocations in both ledger skill bundles with a
-`ledger-api` wrapper script that sources credentials internally, bypassing
-OpenClaw's exec-approval environment variable stripping. After this sprint
-both Hestia and Athena can call the ledger API without operator approval
-prompts and without exit-code-3 host-resolution failures.
+Give Hestia a single batch-update command per ingestion run (replacing N
+individual PUT calls) and give both agents dedicated query endpoints for
+uncategorized and split transactions — eliminating client-side filtering.
 
 ## Background
 
-OpenClaw's exec approval system (introduced in 2026.3.31) strips environment
-variables from subprocess launches. `skills.entries.*.env` values are injected
-into the agent's prompt context but are not propagated to child processes
-spawned by the exec tool (OpenClaw issue #31583). Additionally, `$` expansion
-syntax in command arguments is treated as an allowlist miss on the companion
-app / node host. The combined result: `$CLAW_API_SECRET` and `$CLAW_LEDGER_URL`
-resolve to empty strings when Hestia or Athena runs `curl`, producing exit
-code 3 (host not found).
+Today, Hestia's ingestion loop pages through `GET /transactions`, identifies
+uncategorized rows client-side, then issues one
+`PUT /transactions/{id}/allocations` per transaction. For a typical run of
+30–50 updates this is noisy and slow. The batch endpoint collapses that into
+a single POST.
 
-The fix is a `ledger-api` wrapper script installed to `/usr/local/bin/`.
-The script sources `~/.openclaw/.env` inside its own process (not subject to
-exec-approval env stripping), constructs the full `curl` command with auth
-header and base URL, and passes additional curl arguments through. Both skill
-bundles declare `binaries: [ledger-api]`; with `autoAllowSkills: true` already
-set for both agents, the wrapper is auto-approved with no operator
-intervention.
+Athena currently identifies split transactions by scanning list results for
+duplicate transaction IDs. A dedicated `/transactions/splits` endpoint removes
+that heuristic. Similarly, `/transactions/uncategorized` gives Hestia a
+pre-filtered work queue.
+
+Amount-range filters (`min_amount`, `max_amount`) and keyword search against
+`name`/`merchant_name` already exist on `GET /transactions`. Those M24 items
+are already delivered and are **not** included in this sprint.
 
 ## Design decisions
 
 The following decisions were made during sprint planning and must not be
 re-litigated during implementation:
 
-- **Credential source is `~/.openclaw/.env`** — This is the OpenClaw-facing
-  contract (RUNBOOK Section 1c). The wrapper does not read from
-  `~/.config/claw-plaid-ledger/.env`. The `.env` file is sourced inside the
-  script's own bash process, which is not subject to exec-approval env
-  stripping — the gate only applies to the top-level command launch
-  environment.
-- **Install location is `/usr/local/bin/ledger-api`** — On PATH, resolvable
-  by OpenClaw's skill binary eligibility check, and accessible to both agents.
-- **Both agents share the same wrapper** — One script, one install path,
-  declared in both SKILL.md frontmatter files.
-- **`deploy-local.sh` handles installation** — The script is copied and
-  permissions set as part of the existing deploy workflow, alongside the
-  `uv tool install` step.
-- **Extra curl args pass through** — The wrapper accepts `-X`, `-H`, `-d`,
-  etc. after the endpoint path. This avoids per-operation wrapper scripts
-  (unlike the gmail-skill `bins/` pattern) because the ledger API is a
-  straightforward REST surface where one generic wrapper is sufficient.
-- **`CLAW_LEDGER_URL` defaults to `http://127.0.0.1:8000`** — The gateway
-  runs on the same host as `ledger serve`. The wrapper reads
-  `CLAW_LEDGER_URL` from the sourced `.env` if present, and falls back to
-  the default if not. This makes the `skills.entries.*.env.CLAW_LEDGER_URL`
-  entry in `openclaw.json` redundant (but harmless); operator cleanup is
-  documented in the RUNBOOK but not required.
-- **`requires.env` keeps `CLAW_API_SECRET` only** — The `CLAW_API_SECRET`
-  requirement in SKILL.md frontmatter is kept because OpenClaw uses
-  `requires.env` to check skill eligibility at the gateway level (where the
-  variable IS present). `CLAW_LEDGER_URL` is removed from `requires.env`
-  because the wrapper provides its own default. `requires.config` is removed
-  because the wrapper handles file sourcing internally with a clear error
-  message.
-- **Stale allowlist cleanup is operator-managed** — The sprint includes
-  RUNBOOK instructions for the operator to remove the `/usr/bin/curl` entry
-  from `exec-approvals.json`. The developer does not modify
-  `exec-approvals.json`.
+- **`GET /transactions/uncategorized` returns one row per uncategorized
+  allocation.** The endpoint uses the same transaction+allocation JOIN as
+  `GET /transactions` and adds `WHERE alloc.category IS NULL`. A split
+  transaction with two allocations — one categorized, one not — returns only
+  the uncategorized allocation row. Response shape is identical to
+  `GET /transactions`.
+
+- **`GET /transactions/splits` returns one row per allocation for split
+  transactions.** A split transaction is one with more than one allocation.
+  All allocations of qualifying transactions are returned (not just
+  uncategorized ones). Response shape is identical to `GET /transactions`.
+
+- **Both new endpoints accept the full `GET /transactions` filter set** —
+  `start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
+  `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`.
+  Parameter validation uses the same `_strict_params` mechanism.
+
+- **`POST /transactions/allocations/batch` uses collect-all-errors semantics.**
+  Every item in the batch is processed independently. Failures do not abort
+  the remaining items. Each item commits independently (not atomic across the
+  batch).
+
+- **Batch request items use replace semantics for semantic fields.** Omitted
+  fields (`category`, `tags`, `note`) are set to NULL — not preserved from
+  the existing allocation. The `amount` is not included in the request; it
+  remains equal to the transaction amount (single-allocation invariant).
+
+- **Batch response is a summary, not full records:**
+  ```json
+  {
+    "succeeded": ["txn_id_1", "txn_id_2"],
+    "failed": [
+      {"transaction_id": "txn_id_3", "error": "transaction not found"},
+      {"transaction_id": "txn_id_4", "error": "split transaction (2 allocations); use PUT /transactions/{id}/allocations"}
+    ]
+  }
+  ```
+
+- **Batch endpoint rejects split transactions.** If a transaction has more
+  than one allocation, it goes into the `failed` array with a message
+  directing the caller to `PUT /transactions/{id}/allocations`.
+
+- **Merchant text search is not included.** The existing `keyword` parameter
+  already searches `name` and `merchant_name`. Dropped from M24 scope.
 
 ## Working agreements
 
 - Tasks are **sequential** — each must leave the quality gate green before
   the next starts.
-- No API changes, no schema changes, no new endpoints.
 - Mark completed tasks `✅ DONE` before committing.
 
 ---
 
-## Task 1: Create `ledger-api` wrapper script and deploy integration ✅ DONE
+## Task 1: `GET /transactions/uncategorized`
 
 ### What
 
-Create a bash wrapper script that both agents use to call the ledger HTTP API,
-and integrate it into the existing deploy workflow.
+Add a new endpoint that returns the subset of transaction+allocation rows
+where the allocation has no category. This gives Hestia a focused work queue
+without client-side filtering.
 
-### Wrapper script (`scripts/ledger-api`)
+### Database layer (`db.py`)
 
-Create `scripts/ledger-api` with the following behavior and make it executable
-(`chmod +x`):
+Add a `uncategorized_only: bool = False` field to `TransactionQuery`.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+When `uncategorized_only` is `True`, add `alloc.category IS NULL` to the
+WHERE clause in `query_transactions()`. No other changes to the query
+function are needed — the allocation LEFT JOIN is already in place.
 
-# Source OpenClaw env for CLAW_API_SECRET (and optionally CLAW_LEDGER_URL).
-# This happens inside the script's own process — not subject to
-# exec-approval env stripping.
-OPENCLAW_ENV="${HOME}/.openclaw/.env"
-if [[ -f "$OPENCLAW_ENV" ]]; then
-    set -a
-    # shellcheck source=/dev/null
-    source "$OPENCLAW_ENV"
-    set +a
-fi
+### Router (`routers/transactions.py`)
 
-CLAW_LEDGER_URL="${CLAW_LEDGER_URL:-http://127.0.0.1:8000}"
+Add a new endpoint:
 
-if [[ -z "${CLAW_API_SECRET:-}" ]]; then
-    echo "ledger-api: CLAW_API_SECRET is not set (checked $OPENCLAW_ENV)" >&2
-    exit 2
-fi
-
-if [[ $# -lt 1 ]]; then
-    echo "Usage: ledger-api <endpoint-path> [curl-args...]" >&2
-    echo "  ledger-api /health" >&2
-    echo "  ledger-api /transactions?range=last_30_days" >&2
-    echo "  ledger-api /transactions/ID/allocations -X PUT -d '[...]'" >&2
-    exit 2
-fi
-
-ENDPOINT="$1"
-shift
-
-exec curl -s \
-    -H "Authorization: Bearer ${CLAW_API_SECRET}" \
-    "${CLAW_LEDGER_URL}${ENDPOINT}" \
-    "$@"
+```
+GET /transactions/uncategorized
 ```
 
-Key behaviors:
+- **Accepted query parameters:** identical to `GET /transactions`
+  (`start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
+  `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`).
+- **`_strict_params`:** use the same `_TRANSACTIONS_ALLOWED_PARAMS` frozenset.
+- **Auth:** `require_bearer_token` dependency.
+- **Implementation:** reuse the existing `list_transactions` logic (or factor
+  out a shared helper) with `uncategorized_only=True` on the
+  `TransactionQuery`.
+- **Response shape:** identical to `GET /transactions`:
+  ```json
+  {
+    "transactions": [...],
+    "total": <int>,
+    "limit": <int>,
+    "offset": <int>
+  }
+  ```
+  Each row contains a singular `"allocation"` object (same as list view).
 
-- `set -euo pipefail` for strict error handling.
-- Sources `~/.openclaw/.env` with `set -a` / `set +a` to export all variables.
-- `# shellcheck source=/dev/null` suppresses the expected SC1091 on the
-  dynamic source path.
-- Validates `CLAW_API_SECRET` is non-empty; exits 2 with a diagnostic message
-  naming the checked file.
-- Defaults `CLAW_LEDGER_URL` to `http://127.0.0.1:8000` if not set.
-- First positional arg is the endpoint path (must start with `/`).
-- Remaining args pass through to `curl` verbatim (`"$@"`).
-- Uses `exec` to replace the shell process with curl (clean PID, correct
-  signal handling, exit code propagation).
+### Tests
 
-### Deploy integration (`scripts/deploy-local.sh`)
+Add tests to the appropriate `test_server_transactions*.py` file:
 
-Add to `scripts/deploy-local.sh`, after the `uv tool install` step and before
-the `systemctl restart`:
-
-```bash
-echo "Installing ledger-api wrapper..."
-sudo install -m 755 "$(dirname "$0")/ledger-api" /usr/local/bin/ledger-api
-```
-
-`install -m 755` copies the file and sets permissions atomically. Use
-`$(dirname "$0")` so the path resolves correctly regardless of the caller's
-working directory.
+- Seed two transactions: one with a categorized allocation, one without.
+  Confirm the uncategorized endpoint returns only the uncategorized one.
+- Seed a split transaction (2 allocations: one categorized, one not).
+  Confirm only the uncategorized allocation row is returned.
+- Seed a split transaction where both allocations have categories. Confirm
+  it does NOT appear in results.
+- Confirm date range, pagination, and at least one other filter
+  (e.g. `account_id`) work correctly.
+- Confirm `_strict_params` rejects unknown parameters with HTTP 422.
 
 ### Done when
 
-- `scripts/ledger-api` exists, is executable, and is well-formed bash (no
-  syntax errors; `bash -n scripts/ledger-api` exits 0).
-- `scripts/deploy-local.sh` includes the `install` step.
-- Full quality gate passes (the script is bash, not Python, so ruff/mypy/pytest
-  are unaffected — but the gate must still be green with no regressions).
-
----
-
-## Task 2: Update skill bundles ✅ DONE
-
-### What
-
-Update both `skills/hestia-ledger/SKILL.md` and `skills/athena-ledger/SKILL.md`
-to replace all `curl` invocations with `ledger-api` and update frontmatter to
-declare the new binary.
-
-### SKILL.md frontmatter changes (both skills)
-
-Replace the `requires`, `binaries`, and `doctor` sections. The resulting
-`metadata.openclaw` block for **both** skills should look like this (emoji
-differs per skill — `🧾` for Hestia, `📊` for Athena):
-
-```yaml
-metadata:
-  openclaw:
-    emoji: '<per-skill emoji>'
-    requires:
-      env:
-        - CLAW_API_SECRET
-    primaryEnv: CLAW_API_SECRET
-    binaries:
-      - ledger-api
-    doctor: 'ledger-api /health'
-```
-
-Changes from the current frontmatter:
-
-1. **`binaries`**: `curl` → `ledger-api`.
-2. **`doctor`**: the full `curl -s -H "..." "$CLAW_LEDGER_URL/health"` →
-   `ledger-api /health`.
-3. **`requires.env`**: remove `CLAW_LEDGER_URL` (wrapper provides default).
-   Keep `CLAW_API_SECRET` (needed for skill eligibility check at gateway
-   level).
-4. **`requires.config`**: remove entirely (wrapper handles file sourcing
-   internally).
-5. **`requires.bins`**: not present in current files; do not add (the
-   `binaries` key at the `openclaw` level already serves this purpose).
-
-### "Making API calls" section (both skills)
-
-Replace the current section in both SKILL.md files. Current text:
-
-```markdown
-## Making API calls
-
-`$CLAW_API_SECRET` and `$CLAW_LEDGER_URL` are already in your environment. No `source`, no shell wrapper, no pipes.
-
-\`\`\`bash
-curl -s -H "Authorization: Bearer $CLAW_API_SECRET" "$CLAW_LEDGER_URL/transactions?range=last_30_days"
-\`\`\`
-```
-
-Replace with:
-
-```markdown
-## Making API calls
-
-Use `ledger-api` for all ledger HTTP calls. It handles auth and base URL
-internally — no env vars, no `source`, no pipes.
-
-\`\`\`bash
-# GET (default)
-ledger-api /transactions?range=last_30_days
-
-# GET with filters
-ledger-api "/transactions?tags=needs-athena-review&start_date=2026-01-01&end_date=2026-03-31"
-
-# PUT with JSON body
-ledger-api /transactions/abc123/allocations \
-  -X PUT -H "Content-Type: application/json" \
-  -d '[{"amount": 12.34, "category": "groceries", "tags": ["household"]}]'
-```
-
-Do not call `curl` directly. Do not use `source`, env-var expansion, or shell
-pipes in API calls.
-```
-
-### Doctor section
-
-If either SKILL.md contains a `## Doctor` section (added during BUG-016),
-update the example command from the bare-curl form to `ledger-api /health`.
-If the section references the `source … | python3 -c` prohibition, keep
-that prohibition and extend it: "Do not use `curl` directly, `source`,
-`python3 -c`, or shell pipes."
-
-### Done when
-
-- Both SKILL.md files have updated frontmatter with `binaries: [ledger-api]`
-  and `doctor: 'ledger-api /health'`.
-- Both SKILL.md files have a "Making API calls" section showing `ledger-api`
-  usage and explicitly prohibiting direct `curl`.
-- `grep -r "\\bcurl\\b" skills/` returns no hits except:
-  - The `exec curl` line inside the wrapper script itself (if it were in
-    skills/ — it is not, it is in `scripts/`).
-  - Historical/explanatory text that says "Do not call `curl` directly" or
-    similar prohibitions.
+- `GET /transactions/uncategorized` returns only rows where
+  `alloc.category IS NULL`.
+- Split transactions with mixed categorization show only their uncategorized
+  allocation rows.
+- Full `GET /transactions` filter set works.
 - Full quality gate passes.
 
 ---
 
-## Task 3: Update documentation ✅ DONE
+## Task 2: `GET /transactions/splits`
 
 ### What
 
-Update project documentation to reflect the wrapper script, provide operator
-cleanup instructions, and mark BUG-019 resolved.
+Add a new endpoint that returns all allocations belonging to split
+transactions (those with more than one allocation). This gives Athena a
+dedicated review queue for split transactions.
 
-### ARCHITECTURE.md
+### Database layer (`db.py`)
 
-**Repository layout**: Add `scripts/ledger-api` to the `scripts/` section:
+Add a `splits_only: bool = False` field to `TransactionQuery`.
+
+When `splits_only` is `True`, restrict results to transactions that have
+more than one allocation. The recommended approach is a subquery:
+
+```sql
+t.plaid_transaction_id IN (
+    SELECT plaid_transaction_id FROM allocations
+    GROUP BY plaid_transaction_id HAVING COUNT(*) > 1
+)
+```
+
+All allocations of qualifying transactions are returned (not just some).
+The existing LEFT JOIN on allocations provides one row per allocation, so a
+split transaction with 3 allocations produces 3 result rows.
+
+### Router (`routers/transactions.py`)
+
+Add a new endpoint:
 
 ```
-scripts/
-  deploy-local.sh   # reinstall ledger via uv tool install and restart the systemd service
-  duckdns-update.sh # DuckDNS IP-update script for cron/systemd
-  install-hooks.sh
-  ledger-api        # OpenClaw agent wrapper for ledger HTTP API (installed to /usr/local/bin)
-  sync-skills.sh    # push/pull OpenClaw agent skill bundles between repo and ~/.openclaw
+GET /transactions/splits
 ```
 
-**Operator handoff**: In the "Operator handoff" section (near "Skill install
-source"), add a bullet or short paragraph:
+- **Accepted query parameters:** identical to `GET /transactions`.
+- **`_strict_params`:** same `_TRANSACTIONS_ALLOWED_PARAMS` frozenset.
+- **Auth:** `require_bearer_token` dependency.
+- **Implementation:** reuse the existing query infrastructure with
+  `splits_only=True`.
+- **Response shape:** identical to `GET /transactions`.
 
-> **Agent API access**: Both skill bundles use `ledger-api` (a bash wrapper
-> installed to `/usr/local/bin/ledger-api`) for all HTTP calls. The wrapper
-> sources `~/.openclaw/.env` for `CLAW_API_SECRET` and defaults
-> `CLAW_LEDGER_URL` to `http://127.0.0.1:8000`. This bypasses OpenClaw's
-> exec-approval env stripping. The wrapper is deployed automatically by
-> `scripts/deploy-local.sh`.
+### Tests
 
-### RUNBOOK.md
-
-**Section 1c (Two-agent OpenClaw setup)**: After the `./scripts/sync-skills.sh
-push` step and before the `cat >> ~/.openclaw/.env` block, add:
-
-> **Deploy the API wrapper.** The `ledger-api` wrapper script is installed
-> automatically by `scripts/deploy-local.sh`. If you have not run deploy
-> recently, install it manually:
->
-> ```bash
-> sudo install -m 755 scripts/ledger-api /usr/local/bin/ledger-api
-> ```
->
-> Verify it works:
->
-> ```bash
-> ledger-api /health
-> # Expected: {"status": "ok"}
-> ```
-
-**New subsection in Section 1c or a new Section 23**: Add an operator cleanup
-checklist:
-
-> ### Post-upgrade cleanup (after Sprint 26)
->
-> After deploying the `ledger-api` wrapper and pushing updated skill bundles,
-> clean up stale exec-approval and config entries:
->
-> **1. Remove stale curl allowlist entry from `exec-approvals.json`.**
->
-> Open `~/.openclaw/exec-approvals.json` and remove the `/usr/bin/curl`
-> entry from the `agents.hestia.allowlist` array. The entry looks like:
->
-> ```json
-> {
->   "id": "5d35405b-...",
->   "pattern": "/usr/bin/curl",
->   ...
-> }
-> ```
->
-> Remove the entire object (and any trailing comma). Also remove the
-> `/usr/bin/echo` entry if it was only used for skill debugging. Leave
-> the `allowlist` key as an empty array `[]` if no other entries remain.
-> Restart the gateway after editing: `openclaw gateway restart`.
->
-> **2. (Optional) Remove redundant `CLAW_LEDGER_URL` from `openclaw.json`
-> skill entries.**
->
-> The `ledger-api` wrapper defaults `CLAW_LEDGER_URL` to
-> `http://127.0.0.1:8000`. The `skills.entries.*.env.CLAW_LEDGER_URL`
-> values in `~/.openclaw/openclaw.json` are now redundant. You can remove
-> the `env` block from both `hestia-ledger` and `athena-ledger` entries:
->
-> ```json
-> "hestia-ledger": {
->   "apiKey": { "source": "env", "provider": "default", "id": "CLAW_API_SECRET" }
-> }
-> ```
->
-> This is optional — the redundant entry is harmless.
->
-> **3. Verify end-to-end.**
->
-> Start a new Hestia session and ask her to run a health check. She should
-> call `ledger-api /health` with no approval prompts and receive
-> `{"status": "ok"}`. Repeat for Athena.
-
-### BUGS.md
-
-Update BUG-019 status block. Move from **Active bugs** to **Resolved bugs**
-with the following status and fix summary:
-
-> **Status:** Resolved (Sprint 26)
-> **Severity:** High (both agents unable to call ledger API without manual
-> per-run operator approval; env vars not propagated to exec subprocesses)
-> **Area:** Skill definitions (`hestia-ledger/SKILL.md`,
-> `athena-ledger/SKILL.md`) / OpenClaw exec-approval env propagation
->
-> #### Root cause
->
-> OpenClaw's exec approval system does not propagate `skills.entries.*.env`
-> variables to subprocesses spawned by the exec tool (OpenClaw issue #31583).
-> Additionally, `$` expansion syntax in command arguments is treated as an
-> allowlist miss. The combined effect: `$CLAW_API_SECRET` and
-> `$CLAW_LEDGER_URL` resolve to empty strings when agents run `curl`,
-> producing exit code 3 (host not found).
->
-> #### Fix
->
-> Added `scripts/ledger-api`, a bash wrapper that sources `~/.openclaw/.env`
-> inside its own process, constructs the authenticated `curl` command with
-> base URL, and passes additional arguments through. Installed to
-> `/usr/local/bin/ledger-api` via `scripts/deploy-local.sh`. Both skill
-> bundles updated: `binaries: [ledger-api]`, `doctor: 'ledger-api /health'`,
-> all API call examples replaced. With `autoAllowSkills: true` already
-> configured for both agents, the wrapper is auto-approved with no operator
-> intervention.
-
-### README.md
-
-No changes required — the README's "Two-agent skill bundle quickstart" section
-references `sync-skills.sh push` which will copy the updated skill files. The
-operator RUNBOOK covers `deploy-local.sh` which installs the wrapper.
-
-If the developer judges that a one-line mention of `ledger-api` in the
-"Two-agent skill bundle quickstart" section would help discoverability, a
-note like "Run `bash scripts/deploy-local.sh` to install the `ledger-api`
-wrapper used by both skills" is acceptable but not required.
+- Seed one single-allocation transaction and one split (2 allocations).
+  Confirm only the split's rows are returned, and both allocation rows
+  appear.
+- Confirm `total` reflects the allocation-row count (not the transaction
+  count).
+- Confirm date range filters and pagination work.
+- Confirm `_strict_params` rejects unknown parameters with HTTP 422.
 
 ### Done when
 
-- `ARCHITECTURE.md` repository layout includes `scripts/ledger-api`.
-- `RUNBOOK.md` documents the wrapper installation and operator cleanup steps.
-- `BUGS.md` has BUG-019 moved to resolved with the root-cause and fix summary.
-- `grep -r "\\bcurl\\b" skills/` returns no hits except prohibition text
-  ("Do not call `curl` directly" or similar).
+- `GET /transactions/splits` returns only rows for transactions with
+  multiple allocations.
+- All allocations of qualifying transactions appear in results.
+- Response shape matches `GET /transactions`.
 - Full quality gate passes.
 
 ---
 
-## Acceptance criteria for Sprint 26
+## Task 3: `POST /transactions/allocations/batch`
 
-- `scripts/ledger-api` exists, is executable, and correctly calls the ledger
-  API when `CLAW_API_SECRET` is set in `~/.openclaw/.env`.
-- `scripts/deploy-local.sh` installs `ledger-api` to `/usr/local/bin/`.
-- Both skill bundles declare `binaries: [ledger-api]` and
-  `doctor: 'ledger-api /health'`.
-- No skill file instructs agents to call `curl` directly.
-- BUGS.md has BUG-019 resolved.
-- RUNBOOK.md documents wrapper installation and operator cleanup
-  (stale allowlist entry removal, optional `openclaw.json` simplification).
+### What
+
+Add a batch endpoint that accepts an array of simple allocation updates
+for single-allocation transactions. This replaces Hestia's per-transaction
+PUT loop with a single request.
+
+### Request shape
+
+```json
+[
+  {
+    "transaction_id": "abc123",
+    "category": "groceries",
+    "tags": ["household", "recurring"],
+    "note": "weekly Costco run"
+  },
+  {
+    "transaction_id": "def456",
+    "category": "software"
+  }
+]
+```
+
+**Request model** (Pydantic):
+
+```python
+class BatchAllocationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    category: str | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+```
+
+- `transaction_id` is required.
+- `category`, `tags`, `note` are optional. **Omitted fields are set to NULL**
+  (replace semantics). This means sending `{"transaction_id": "x",
+  "category": "food"}` clears any existing `tags` and `note` on that
+  allocation.
+- `amount` is NOT in the request — it stays equal to the transaction amount.
+- The body is a JSON array of `BatchAllocationItem` (not wrapped in an
+  object). Reject an empty array with HTTP 422.
+
+### Response shape
+
+```json
+{
+  "succeeded": ["abc123", "def456"],
+  "failed": [
+    {
+      "transaction_id": "ghi789",
+      "error": "transaction not found"
+    },
+    {
+      "transaction_id": "jkl012",
+      "error": "split transaction (2 allocations); use PUT /transactions/{id}/allocations"
+    }
+  ]
+}
+```
+
+HTTP status: **200** always (even if some items failed). The caller inspects
+`failed` to determine per-item outcomes.
+
+### Processing rules (per item, independent commits)
+
+For each item in the array:
+
+1. **Look up the transaction.** If not found → add to `failed` with
+   `"transaction not found"`.
+2. **Fetch allocations.** If allocation count != 1 → add to `failed` with
+   `"split transaction (N allocations); use PUT /transactions/{id}/allocations"`.
+3. **Update the single allocation** — set `category`, `tags`, `note` to the
+   request values (NULL for omitted fields). `amount` stays unchanged.
+   `updated_at` is set to now. Do NOT use `replace_allocations` (that deletes
+   and reinserts, which is overkill for a field update). A simple UPDATE is
+   sufficient:
+   ```sql
+   UPDATE allocations
+   SET category = ?, tags = ?, note = ?, updated_at = ?
+   WHERE plaid_transaction_id = ?
+   ```
+4. Add to `succeeded`.
+
+Each item should commit independently. The simplest approach: process all
+items within a single `sqlite3.connect()` context, but call
+`connection.commit()` after each successful update (or use autocommit). If
+independent commits add undue complexity, an atomic approach (single
+transaction, fail-fast on first error) is acceptable as a fallback — but
+document the change from the spec.
+
+### Router (`routers/transactions.py`)
+
+```
+POST /transactions/allocations/batch
+```
+
+- **Auth:** `require_bearer_token` dependency.
+- **No query parameters** — no `_strict_params` needed.
+- **Request body:** `list[BatchAllocationItem]`.
+- **Response:** `{"succeeded": [...], "failed": [...]}`.
+
+### Tests
+
+- **Happy path:** batch of 3 valid single-allocation transactions. All appear
+  in `succeeded`.
+- **Mixed results:** batch with one valid, one not-found, one split. Confirm
+  correct placement in `succeeded` / `failed`.
+- **Replace semantics:** send an update with only `category` set. Confirm
+  that `tags` and `note` are NULL afterward (not preserved from prior state).
+- **Empty array:** returns HTTP 422.
+- **Split rejection:** transaction with 2 allocations → appears in `failed`
+  with message mentioning the allocation count and the alternative endpoint.
+
+### Done when
+
+- `POST /transactions/allocations/batch` processes each item independently.
+- Single-allocation transactions are updated; splits and not-found are
+  reported in `failed`.
+- Replace semantics: omitted fields become NULL.
+- Full quality gate passes.
+
+---
+
+## Task 4: Update skill bundles
+
+### What
+
+Update both `skills/hestia-ledger/SKILL.md` and
+`skills/athena-ledger/SKILL.md` with the three new endpoints.
+
+### Hestia skill updates
+
+Hestia is the primary consumer of `/transactions/uncategorized` and
+`/transactions/allocations/batch`.
+
+**Approved API calls section:** add:
+
+- `GET /transactions/uncategorized` — pre-filtered work queue; returns only
+  allocations with null category. Supports all `GET /transactions` filters.
+- `POST /transactions/allocations/batch` — batch-update allocations for
+  single-allocation transactions. Replaces the per-transaction PUT loop.
+
+**Making API calls section:** add examples:
+
+```bash
+# Uncategorized work queue
+ledger-api "/transactions/uncategorized?range=last_30_days&view=canonical"
+
+# Batch allocation update
+ledger-api /transactions/allocations/batch \
+  -X POST -H "Content-Type: application/json" \
+  -d '[
+    {"transaction_id": "abc123", "category": "groceries", "tags": ["household"], "note": "weekly shop"},
+    {"transaction_id": "def456", "category": "utilities", "tags": ["recurring"]}
+  ]'
+```
+
+**Ingestion loop guidance:** update to reflect the new workflow:
+
+1. Query `GET /transactions/uncategorized?range=last_30_days` (replaces the
+   full `GET /transactions` + client-side null-category filter).
+2. For each uncategorized allocation, determine category/tags/note.
+3. Re-fetch split candidates with `GET /transactions/{id}` if the same
+   transaction ID appears multiple times in results (it's a split with
+   multiple uncategorized allocations).
+4. Collect all single-allocation updates into a batch array.
+5. POST to `/transactions/allocations/batch`.
+6. Inspect `failed` array — log or escalate any failures.
+7. For splits: continue to use `PUT /transactions/{id}/allocations`
+   individually.
+
+**Batch replace-semantics warning:** Add a clear note in the skill:
+
+> **Batch updates use replace semantics.** Every field you omit is set to
+> NULL. If a transaction already has `tags: ["recurring"]` and you send
+> `{"transaction_id": "x", "category": "utilities"}`, the tags will be
+> cleared. Always include all fields you want to keep.
+
+### Athena skill updates
+
+Athena is the primary consumer of `/transactions/splits`.
+
+**Approved API calls section:** add:
+
+- `GET /transactions/uncategorized` — view uncategorized allocations across
+  the ledger. Supports all `GET /transactions` filters.
+- `GET /transactions/splits` — dedicated review queue for split transactions.
+  Returns all allocations for transactions with multiple allocations.
+- `POST /transactions/allocations/batch` — available but rarely needed;
+  prefer `PUT /transactions/{id}/allocations` for analyst-level corrections.
+
+**Query playbooks** (`checklists/query_playbooks.md`): add entries for:
+
+- "Uncategorized review" — `GET /transactions/uncategorized?range=last_30_days`
+- "Split transaction review" — `GET /transactions/splits?range=last_30_days`
+
+### Done when
+
+- Both SKILL.md files list all three new endpoints in their approved API
+  calls sections.
+- Hestia's skill includes batch usage examples, replace-semantics warning,
+  and updated ingestion loop guidance.
+- Athena's skill includes splits and uncategorized query playbooks.
+- `grep -r "allocations/batch" skills/` returns hits in both skill files.
+- Full quality gate passes.
+
+---
+
+## Acceptance criteria for Sprint 27
+
+- `GET /transactions/uncategorized` returns only allocation rows where
+  `category IS NULL`, including uncategorized allocations of split
+  transactions.
+- `GET /transactions/splits` returns all allocation rows for transactions
+  with multiple allocations.
+- Both new GET endpoints accept the full `GET /transactions` filter and
+  pagination set.
+- `POST /transactions/allocations/batch` accepts a JSON array of
+  `{transaction_id, category?, tags?, note?}` items and returns a
+  `{succeeded, failed}` summary.
+- Batch updates use replace semantics: omitted fields become NULL.
+- Batch rejects split transactions with a clear error message.
+- Both skill bundles updated with all new endpoints and guidance.
 - Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
   with no regressions.
-
----
-
-## Sprint closeout ✅ DONE
-
-- All three implementation tasks are marked complete.
-- BUG-019 is documented as resolved in `BUGS.md`.
-- Operator-facing docs (`ARCHITECTURE.md`, `RUNBOOK.md`) include wrapper
-  deployment and post-upgrade cleanup guidance.
-- Sprint outcomes are captured in `ROADMAP.md` under completed milestones.
