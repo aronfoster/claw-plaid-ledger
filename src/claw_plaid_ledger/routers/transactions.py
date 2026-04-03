@@ -265,6 +265,131 @@ class AllocationItem(BaseModel):
     note: str | None = None
 
 
+class BatchAllocationItem(BaseModel):
+    """One allocation update item in POST /transactions/allocations/batch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str
+    category: str | None = None
+    tags: list[str] | None = None
+    note: str | None = None
+
+
+class BatchAllocationFailedItem(BaseModel):
+    """One failed update entry in a batch-allocation response."""
+
+    transaction_id: str
+    error: str
+
+
+def _update_single_allocation_fields(
+    connection: sqlite3.Connection,
+    *,
+    transaction_id: str,
+    category: str | None,
+    tags: list[str] | None,
+    note: str | None,
+) -> None:
+    """Update category/tags/note on the single allocation for a transaction."""
+    now = datetime.now(tz=UTC).isoformat()
+    connection.execute(
+        "UPDATE allocations "
+        "SET category = ?, tags = ?, note = ?, updated_at = ? "
+        "WHERE plaid_transaction_id = ?",
+        (
+            category,
+            json.dumps(tags) if tags is not None else None,
+            note,
+            now,
+            transaction_id,
+        ),
+    )
+
+
+@router.post(
+    "/transactions/allocations/batch",
+    dependencies=[Depends(require_bearer_token)],
+)
+def post_transaction_allocations_batch(
+    body: list[BatchAllocationItem],
+) -> dict[str, object]:
+    """Batch update single-allocation transactions with collect-all-errors."""
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "at least one allocation update is required"},
+        )
+
+    succeeded: list[str] = []
+    failed: list[BatchAllocationFailedItem] = []
+    seen_transaction_ids: set[str] = set()
+
+    config = load_config()
+    with sqlite3.connect(config.db_path) as connection:
+        for item in body:
+            if item.transaction_id in seen_transaction_ids:
+                failed.append(
+                    BatchAllocationFailedItem(
+                        transaction_id=item.transaction_id,
+                        error="duplicate transaction_id in batch",
+                    )
+                )
+                continue
+            seen_transaction_ids.add(item.transaction_id)
+
+            try:
+                transaction = get_transaction(connection, item.transaction_id)
+                if transaction is None:
+                    failed.append(
+                        BatchAllocationFailedItem(
+                            transaction_id=item.transaction_id,
+                            error="transaction not found",
+                        )
+                    )
+                    continue
+
+                allocations = get_allocations_for_transaction(
+                    connection, item.transaction_id
+                )
+                allocation_count = len(allocations)
+                if allocation_count != 1:
+                    failed.append(
+                        BatchAllocationFailedItem(
+                            transaction_id=item.transaction_id,
+                            error=(
+                                "split transaction "
+                                f"({allocation_count} allocations); use "
+                                "PUT /transactions/{id}/allocations"
+                            ),
+                        )
+                    )
+                    continue
+
+                _update_single_allocation_fields(
+                    connection,
+                    transaction_id=item.transaction_id,
+                    category=item.category,
+                    tags=item.tags,
+                    note=item.note,
+                )
+                connection.commit()
+                succeeded.append(item.transaction_id)
+            except sqlite3.Error as exc:
+                connection.rollback()
+                failed.append(
+                    BatchAllocationFailedItem(
+                        transaction_id=item.transaction_id,
+                        error=f"database update failed: {exc}",
+                    )
+                )
+
+    response: dict[str, object] = {"succeeded": succeeded}
+    if failed:
+        response["failed"] = [entry.model_dump() for entry in failed]
+    return response
+
+
 @router.put(
     "/transactions/{transaction_id}/allocations",
     dependencies=[Depends(require_bearer_token)],
