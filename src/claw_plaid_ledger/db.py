@@ -426,6 +426,7 @@ class TransactionQuery:
     offset: int = 0
     tags: tuple[str, ...] = ()
     search_notes: bool = False
+    uncategorized_only: bool = False
 
 
 def _apply_tag_filters(
@@ -444,6 +445,16 @@ def _apply_tag_filters(
             "EXISTS (SELECT 1 FROM json_each(alloc.tags) WHERE value = ?)"
         )
         params.append(tag)
+
+
+def _apply_uncategorized_filter(
+    *,
+    uncategorized_only: bool,
+    where_parts: list[str],
+) -> None:
+    """Append uncategorized-only predicate when requested."""
+    if uncategorized_only:
+        where_parts.append("alloc.category IS NULL")
 
 
 def _allocation_from_joined_row(
@@ -534,6 +545,10 @@ def query_transactions(
         where_parts.append("a.canonical_account_id IS NULL")
 
     _apply_tag_filters(query.tags, where_parts, params)
+    _apply_uncategorized_filter(
+        uncategorized_only=query.uncategorized_only,
+        where_parts=where_parts,
+    )
 
     where_sql = " AND ".join(where_parts) if where_parts else "1=1"
     from_clause = f"FROM transactions t {accounts_join}{allocations_join}"

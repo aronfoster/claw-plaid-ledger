@@ -1204,6 +1204,190 @@ class TestListTransactionsTagsAndSearchNotes:
 
 
 # ---------------------------------------------------------------------------
+# Tests for GET /transactions/uncategorized (Sprint 27 Task 1)
+# ---------------------------------------------------------------------------
+
+
+def _seed_uncategorized_transactions(db_path: pathlib.Path) -> None:
+    """Seed mixed categorized/uncategorized transactions for endpoint tests."""
+    initialize_database(db_path)
+    now = "2026-01-01T00:00:00+00:00"
+    with sqlite3.connect(db_path) as connection:
+        connection.executemany(
+            (
+                "INSERT INTO accounts ("
+                "plaid_account_id, name, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?)"
+            ),
+            [
+                ("acct_u1", "Uncategorized A", now, now),
+                ("acct_u2", "Uncategorized B", now, now),
+            ],
+        )
+        connection.executemany(
+            (
+                "INSERT INTO transactions ("
+                "plaid_transaction_id, plaid_account_id, amount, "
+                "iso_currency_code, name, merchant_name, pending, "
+                "authorized_date, posted_date, raw_json, created_at, "
+                "updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            [
+                (
+                    "tx_uncat_single",
+                    "acct_u1",
+                    11.0,
+                    "USD",
+                    "Single No Category",
+                    None,
+                    0,
+                    None,
+                    "2026-01-10",
+                    None,
+                    now,
+                    now,
+                ),
+                (
+                    "tx_cat_single",
+                    "acct_u1",
+                    22.0,
+                    "USD",
+                    "Single Category",
+                    None,
+                    0,
+                    None,
+                    "2026-01-11",
+                    None,
+                    now,
+                    now,
+                ),
+                (
+                    "tx_split_mixed",
+                    "acct_u2",
+                    33.0,
+                    "USD",
+                    "Split Mixed",
+                    None,
+                    0,
+                    None,
+                    "2026-01-12",
+                    None,
+                    now,
+                    now,
+                ),
+                (
+                    "tx_split_categorized",
+                    "acct_u2",
+                    44.0,
+                    "USD",
+                    "Split Categorized",
+                    None,
+                    0,
+                    None,
+                    "2026-01-13",
+                    None,
+                    now,
+                    now,
+                ),
+            ],
+        )
+        connection.executemany(
+            (
+                "INSERT INTO allocations ("
+                "plaid_transaction_id, amount, category, "
+                "created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?)"
+            ),
+            [
+                ("tx_uncat_single", 11.0, None, now, now),
+                ("tx_cat_single", 22.0, "food", now, now),
+                ("tx_split_mixed", 10.0, "food", now, now),
+                ("tx_split_mixed", 23.0, None, now, now),
+                ("tx_split_categorized", 20.0, "food", now, now),
+                ("tx_split_categorized", 24.0, "transport", now, now),
+            ],
+        )
+
+
+class TestListUncategorizedTransactionsEndpoint:
+    """Tests for GET /transactions/uncategorized behavior."""
+
+    _UNCATEGORIZED_TOTAL = 2
+
+    def test_returns_only_uncategorized_rows(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Returns uncategorized single rows and uncategorized split rows."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/uncategorized",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._UNCATEGORIZED_TOTAL
+        ids = [row["id"] for row in body["transactions"]]
+        assert ids == ["tx_split_mixed", "tx_uncat_single"]
+        assert all(
+            row["allocation"]["category"] is None
+            for row in body["transactions"]
+        )
+
+    def test_filters_range_account_and_pagination(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Supports shared list filters for uncategorized rows."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/uncategorized",
+            params={
+                "start_date": "2026-01-11",
+                "end_date": "2026-01-12",
+                "account_id": "acct_u2",
+                "limit": "1",
+                "offset": "0",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == 1
+        assert body["limit"] == 1
+        assert body["offset"] == 0
+        assert [row["id"] for row in body["transactions"]] == [
+            "tx_split_mixed"
+        ]
+
+    def test_unknown_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Strict params rejects unsupported query keys."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/uncategorized",
+            params={"oops": "1"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
 # Tests for GET /transactions — strict query parameter enforcement (BUG-014)
 # ---------------------------------------------------------------------------
 
