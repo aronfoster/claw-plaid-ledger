@@ -80,6 +80,42 @@ def list_transactions(
     tags: Annotated[list[str] | None, Query()] = None,
     date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
+    """List transactions with optional filtering and pagination."""
+    return _list_transactions_response(
+        params=params,
+        tags=tags,
+        date_range=date_range,
+    )
+
+
+@router.get(
+    "/transactions/uncategorized",
+    dependencies=[
+        Depends(require_bearer_token),
+        Depends(_strict_params(_TRANSACTIONS_ALLOWED_PARAMS)),
+    ],
+)
+def list_uncategorized_transactions(
+    params: Annotated[TransactionListQuery, Depends()],
+    tags: Annotated[list[str] | None, Query()] = None,
+    date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
+) -> dict[str, object]:
+    """List transactions whose joined allocation row has no category."""
+    return _list_transactions_response(
+        params=params,
+        tags=tags,
+        date_range=date_range,
+        uncategorized_only=True,
+    )
+
+
+def _list_transactions_response(
+    *,
+    params: TransactionListQuery,
+    tags: list[str] | None,
+    date_range: _SpendRange | None,
+    uncategorized_only: bool = False,
+) -> dict[str, object]:
     """
     List transactions with optional filtering and pagination.
 
@@ -117,6 +153,7 @@ def list_transactions(
         offset=params.offset,
         tags=resolved_tags,
         search_notes=params.search_notes is True,
+        uncategorized_only=uncategorized_only,
     )
     with sqlite3.connect(config.db_path) as connection:
         rows, total = query_transactions(connection, query)

@@ -81,7 +81,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: `GET /transactions/uncategorized`
+## Task 1: `GET /transactions/uncategorized` ✅ DONE
 
 ### What
 
