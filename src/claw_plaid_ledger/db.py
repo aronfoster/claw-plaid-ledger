@@ -427,6 +427,7 @@ class TransactionQuery:
     tags: tuple[str, ...] = ()
     search_notes: bool = False
     uncategorized_only: bool = False
+    splits_only: bool = False
 
 
 def _apply_tag_filters(
@@ -455,6 +456,21 @@ def _apply_uncategorized_filter(
     """Append uncategorized-only predicate when requested."""
     if uncategorized_only:
         where_parts.append("alloc.category IS NULL")
+
+
+def _apply_splits_filter(
+    *,
+    splits_only: bool,
+    where_parts: list[str],
+) -> None:
+    """Append split-transaction-only predicate when requested."""
+    if splits_only:
+        where_parts.append(
+            "t.plaid_transaction_id IN ("
+            "SELECT plaid_transaction_id FROM allocations "
+            "GROUP BY plaid_transaction_id HAVING COUNT(*) > 1"
+            ")"
+        )
 
 
 def _allocation_from_joined_row(
@@ -547,6 +563,10 @@ def query_transactions(
     _apply_tag_filters(query.tags, where_parts, params)
     _apply_uncategorized_filter(
         uncategorized_only=query.uncategorized_only,
+        where_parts=where_parts,
+    )
+    _apply_splits_filter(
+        splits_only=query.splits_only,
         where_parts=where_parts,
     )
 

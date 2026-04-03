@@ -149,7 +149,7 @@ Add tests to the appropriate `test_server_transactions*.py` file:
 
 ---
 
-## Task 2: `GET /transactions/splits`
+## Task 2: `GET /transactions/splits` ✅ DONE
 
 ### What
 
