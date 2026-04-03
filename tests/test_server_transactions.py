@@ -1388,6 +1388,97 @@ class TestListUncategorizedTransactionsEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Tests for GET /transactions/splits (Sprint 27 Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestListSplitTransactionsEndpoint:
+    """Tests for GET /transactions/splits behavior."""
+
+    _SPLIT_ROW_TOTAL = 4
+    _PAGE_LIMIT = 3
+
+    def test_returns_only_split_transaction_allocation_rows(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Only split transactions appear, and all their allocations return."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/splits",
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._SPLIT_ROW_TOTAL
+        assert len(body["transactions"]) == self._SPLIT_ROW_TOTAL
+        ids = [row["id"] for row in body["transactions"]]
+        assert ids == [
+            "tx_split_categorized",
+            "tx_split_categorized",
+            "tx_split_mixed",
+            "tx_split_mixed",
+        ]
+        assert all(
+            row["allocation"] is not None for row in body["transactions"]
+        )
+
+    def test_filters_and_pagination_apply_to_split_rows(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Supports shared filters and allocation-row pagination."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/splits",
+            params={
+                "start_date": "2026-01-12",
+                "end_date": "2026-01-13",
+                "account_id": "acct_u2",
+                "limit": str(self._PAGE_LIMIT),
+                "offset": "1",
+            },
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._SPLIT_ROW_TOTAL
+        assert body["limit"] == self._PAGE_LIMIT
+        assert body["offset"] == 1
+        ids = [row["id"] for row in body["transactions"]]
+        assert ids == [
+            "tx_split_categorized",
+            "tx_split_mixed",
+            "tx_split_mixed",
+        ]
+
+    def test_unknown_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Strict params rejects unsupported query keys."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/splits",
+            params={"oops": "1"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
 # Tests for GET /transactions — strict query parameter enforcement (BUG-014)
 # ---------------------------------------------------------------------------
 
