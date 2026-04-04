@@ -1,77 +1,61 @@
-# Sprint 27 — Batch Allocation Updates & Uncategorized Transaction Query (M24)
+# Sprint 28 — Scheduled Sync (Webhook Retirement) (M25)
 
 ## Sprint goal
 
-Give Hestia a single batch-update command per ingestion run (replacing N
-individual PUT calls) and give both agents dedicated query endpoints for
-uncategorized and split transactions — eliminating client-side filtering.
+Replace inbound webhook infrastructure with a reliable outbound pull cadence.
+Promote `ledger sync --all` via systemd timer as the primary sync mechanism.
+Gate webhook code behind an opt-in flag. Add CLI-driven post-sync agent
+notification so the timer can wake Hestia after new transactions arrive.
 
 ## Background
 
-Today, Hestia's ingestion loop pages through `GET /transactions`, identifies
-uncategorized rows client-side, then issues one
-`PUT /transactions/{id}/allocations` per transaction. For a typical run of
-30–50 updates this is noisy and slow. The batch endpoint collapses that into
-a single POST.
+The Plaid webhook path (`POST /webhooks/plaid`) has never worked reliably in
+multi-item setups (BUG-018). The item-ID lookup compares Plaid-assigned item
+IDs against operator-assigned logical IDs, so it always misses, falls back to
+`PLAID_ACCESS_TOKEN`, and crashes. Rather than fix this, we are retiring
+webhooks in favor of scheduled sync via systemd timer.
 
-Athena currently identifies split transactions by scanning list results for
-duplicate transaction IDs. A dedicated `/transactions/splits` endpoint removes
-that heuristic. Similarly, `/transactions/uncategorized` gives Hestia a
-pre-filtered work queue.
+Today `ledger sync --all` runs a complete sync pass but does NOT notify
+OpenClaw agents. The server's `_background_sync()` is the only path that
+calls `notify_openclaw()`. This sprint adds a `--notify` flag to the CLI so
+the systemd timer can wake Hestia after syncing.
 
-Amount-range filters (`min_amount`, `max_amount`) and keyword search against
-`name`/`merchant_name` already exist on `GET /transactions`. Those M24 items
-are already delivered and are **not** included in this sprint.
+The in-process fallback loop (`CLAW_SCHEDULED_SYNC_ENABLED`) was designed as
+a safety net for missed webhooks. With webhooks retired, it is also
+deprecated in favor of the systemd timer.
 
 ## Design decisions
 
 The following decisions were made during sprint planning and must not be
 re-litigated during implementation:
 
-- **`GET /transactions/uncategorized` returns one row per uncategorized
-  allocation.** The endpoint uses the same transaction+allocation JOIN as
-  `GET /transactions` and adds `WHERE alloc.category IS NULL`. A split
-  transaction with two allocations — one categorized, one not — returns only
-  the uncategorized allocation row. Response shape is identical to
-  `GET /transactions`.
+- **`CLAW_WEBHOOK_ENABLED` env var** (default `false`). When `false`,
+  `POST /webhooks/plaid` returns HTTP 404 with
+  `{"detail": "Webhooks are disabled. Set CLAW_WEBHOOK_ENABLED=true to enable. See RUNBOOK.md for scheduled sync setup."}`.
+  When `true`, existing webhook behavior is preserved as-is (BUG-018 included).
 
-- **`GET /transactions/splits` returns one row per allocation for split
-  transactions.** A split transaction is one with more than one allocation.
-  All allocations of qualifying transactions are returned (not just
-  uncategorized ones). Response shape is identical to `GET /transactions`.
+- **`--notify` is a CLI flag on `ledger sync`**, orthogonal to `--all` /
+  `--item` / default mode. It calls the existing `notify_openclaw()` from
+  `notifier.py` after each successful sync that produces changes
+  (`added + modified + removed > 0`). When `OPENCLAW_HOOKS_TOKEN` is not set,
+  `notify_openclaw()` already logs a warning and returns — no special handling
+  needed.
 
-- **Both new endpoints accept the full `GET /transactions` filter set** —
-  `start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
-  `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`.
-  Parameter validation uses the same `_strict_params` mechanism.
+- **Systemd timer default is 4x/day** (`OnCalendar=*-*-* 00,06,12,18:00:00`).
+  Hourly override documented as a `systemctl edit` drop-in.
 
-- **`POST /transactions/allocations/batch` uses collect-all-errors semantics.**
-  Every item in the batch is processed independently. Failures do not abort
-  the remaining items. Each item commits independently (not atomic across the
-  batch).
+- **Systemd sync service ExecStart includes `--notify`.**
 
-- **Batch request items use replace semantics for semantic fields.** Omitted
-  fields (`category`, `tags`, `note`) are set to NULL — not preserved from
-  the existing allocation. The `amount` is not included in the request; it
-  remains equal to the transaction amount (single-allocation invariant).
+- **In-process fallback loop is deprecated**, not removed. Left functional
+  behind `CLAW_SCHEDULED_SYNC_ENABLED` for backward compatibility.
 
-- **Batch response is a summary, not full records:**
-  ```json
-  {
-    "succeeded": ["txn_id_1", "txn_id_2"],
-    "failed": [
-      {"transaction_id": "txn_id_3", "error": "transaction not found"},
-      {"transaction_id": "txn_id_4", "error": "split transaction (2 allocations); use PUT /transactions/{id}/allocations"}
-    ]
-  }
-  ```
+- **Doctor warns if both `CLAW_WEBHOOK_ENABLED=true` and
+  `CLAW_SCHEDULED_SYNC_ENABLED=true`** are set simultaneously. No systemd
+  timer detection — that is the operator's responsibility.
 
-- **Batch endpoint rejects split transactions.** If a transaction has more
-  than one allocation, it goes into the `failed` array with a message
-  directing the caller to `PUT /transactions/{id}/allocations`.
-
-- **Merchant text search is not included.** The existing `keyword` parameter
-  already searches `name` and `merchant_name`. Dropped from M24 scope.
+- **Deprecation documentation**: webhook code, DuckDNS, Caddy, and
+  port-forward sections in ARCHITECTURE.md and RUNBOOK.md are marked
+  deprecated with a note that BUG-018 is unresolved. Not removed.
 
 ## Working agreements
 
@@ -81,369 +65,345 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: `GET /transactions/uncategorized` ✅ DONE
+## Task 1: Gate webhooks behind `CLAW_WEBHOOK_ENABLED`
 
 ### What
 
-Add a new endpoint that returns the subset of transaction+allocation rows
-where the allocation has no category. This gives Hestia a focused work queue
-without client-side filtering.
+Add a new env var `CLAW_WEBHOOK_ENABLED` (default `false`) to the config
+layer. When disabled, the webhook endpoint returns 404. When enabled,
+existing behavior is unchanged. Update doctor to warn about dual enablement.
 
-### Database layer (`db.py`)
+### Config layer (`config.py`)
 
-Add a `uncategorized_only: bool = False` field to `TransactionQuery`.
+Add `webhook_enabled: bool = False` to the `Config` dataclass.
 
-When `uncategorized_only` is `True`, add `alloc.category IS NULL` to the
-WHERE clause in `query_transactions()`. No other changes to the query
-function are needed — the allocation LEFT JOIN is already in place.
+Parse `CLAW_WEBHOOK_ENABLED` the same way `CLAW_SCHEDULED_SYNC_ENABLED` is
+parsed (`.strip().lower() == "true"`). Place it near the existing
+scheduled-sync parsing block (around line 240).
 
-### Router (`routers/transactions.py`)
+### Webhook router (`routers/webhooks.py`)
 
-Add a new endpoint:
+At the top of the `POST /webhooks/plaid` handler, before signature
+verification, load config and check `webhook_enabled`. If `false`, return:
 
-```
-GET /transactions/uncategorized
-```
-
-- **Accepted query parameters:** identical to `GET /transactions`
-  (`start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
-  `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`).
-- **`_strict_params`:** use the same `_TRANSACTIONS_ALLOWED_PARAMS` frozenset.
-- **Auth:** `require_bearer_token` dependency.
-- **Implementation:** reuse the existing `list_transactions` logic (or factor
-  out a shared helper) with `uncategorized_only=True` on the
-  `TransactionQuery`.
-- **Response shape:** identical to `GET /transactions`:
-  ```json
-  {
-    "transactions": [...],
-    "total": <int>,
-    "limit": <int>,
-    "offset": <int>
-  }
-  ```
-  Each row contains a singular `"allocation"` object (same as list view).
-
-### Tests
-
-Add tests to the appropriate `test_server_transactions*.py` file:
-
-- Seed two transactions: one with a categorized allocation, one without.
-  Confirm the uncategorized endpoint returns only the uncategorized one.
-- Seed a split transaction (2 allocations: one categorized, one not).
-  Confirm only the uncategorized allocation row is returned.
-- Seed a split transaction where both allocations have categories. Confirm
-  it does NOT appear in results.
-- Confirm date range, pagination, and at least one other filter
-  (e.g. `account_id`) work correctly.
-- Confirm `_strict_params` rejects unknown parameters with HTTP 422.
-
-### Done when
-
-- `GET /transactions/uncategorized` returns only rows where
-  `alloc.category IS NULL`.
-- Split transactions with mixed categorization show only their uncategorized
-  allocation rows.
-- Full `GET /transactions` filter set works.
-- Full quality gate passes.
-
----
-
-## Task 2: `GET /transactions/splits` ✅ DONE
-
-### What
-
-Add a new endpoint that returns all allocations belonging to split
-transactions (those with more than one allocation). This gives Athena a
-dedicated review queue for split transactions.
-
-### Database layer (`db.py`)
-
-Add a `splits_only: bool = False` field to `TransactionQuery`.
-
-When `splits_only` is `True`, restrict results to transactions that have
-more than one allocation. The recommended approach is a subquery:
-
-```sql
-t.plaid_transaction_id IN (
-    SELECT plaid_transaction_id FROM allocations
-    GROUP BY plaid_transaction_id HAVING COUNT(*) > 1
+```python
+raise HTTPException(
+    status_code=404,
+    detail=(
+        "Webhooks are disabled. Set CLAW_WEBHOOK_ENABLED=true to enable."
+        " See RUNBOOK.md for scheduled sync setup."
+    ),
 )
 ```
 
-All allocations of qualifying transactions are returned (not just some).
-The existing LEFT JOIN on allocations provides one row per allocation, so a
-split transaction with 3 allocations produces 3 result rows.
+The config is already loaded during lifespan. Store `webhook_enabled` as
+module state (same pattern used for `_lifespan_config`) or pass it through
+the app state, so the handler can check it without re-loading config on
+every request.
 
-### Router (`routers/transactions.py`)
+### Doctor (`cli.py`)
 
-Add a new endpoint:
+Update `_doctor_scheduled_sync_check()` (or add a sibling function) to:
 
-```
-GET /transactions/splits
-```
+1. Report webhook status: `"doctor: webhooks: DISABLED (default)"` or
+   `"doctor: webhooks: ENABLED (CLAW_WEBHOOK_ENABLED=true)"`.
+2. If BOTH `webhook_enabled=True` AND `scheduled_sync_enabled=True`, emit
+   a warning: `"doctor: [WARN] both webhooks and scheduled-sync are enabled — this is unusual; see RUNBOOK.md"`.
 
-- **Accepted query parameters:** identical to `GET /transactions`.
-- **`_strict_params`:** same `_TRANSACTIONS_ALLOWED_PARAMS` frozenset.
-- **Auth:** `require_bearer_token` dependency.
-- **Implementation:** reuse the existing query infrastructure with
-  `splits_only=True`.
-- **Response shape:** identical to `GET /transactions`.
+The warning is informational — it does NOT affect the exit code.
 
 ### Tests
 
-- Seed one single-allocation transaction and one split (2 allocations).
-  Confirm only the split's rows are returned, and both allocation rows
-  appear.
-- Confirm `total` reflects the allocation-row count (not the transaction
-  count).
-- Confirm date range filters and pagination work.
-- Confirm `_strict_params` rejects unknown parameters with HTTP 422.
+- Webhook endpoint returns 404 when `CLAW_WEBHOOK_ENABLED` is unset/false.
+- Webhook endpoint processes normally when `CLAW_WEBHOOK_ENABLED=true`.
+- Doctor output includes webhook status line.
+- Doctor output includes dual-enablement warning when both are true.
+- Doctor output does NOT include dual-enablement warning when only one is
+  enabled.
 
 ### Done when
 
-- `GET /transactions/splits` returns only rows for transactions with
-  multiple allocations.
-- All allocations of qualifying transactions appear in results.
-- Response shape matches `GET /transactions`.
+- `POST /webhooks/plaid` returns 404 by default.
+- Setting `CLAW_WEBHOOK_ENABLED=true` restores existing behavior.
+- Doctor reports webhook and dual-enablement status.
 - Full quality gate passes.
 
 ---
 
-## Task 3: `POST /transactions/allocations/batch` ✅ DONE
+## Task 2: Add `--notify` flag to `ledger sync`
 
 ### What
 
-Add a batch endpoint that accepts an array of simple allocation updates
-for single-allocation transactions. This replaces Hestia's per-transaction
-PUT loop with a single request.
+Add a `--notify` flag to the `sync` CLI command. After each successful sync
+that produces changes, call `notify_openclaw()`. This works with all three
+sync modes: default (single-item), `--item <id>`, and `--all`.
 
-### Request shape
+### CLI changes (`cli.py`)
 
-```json
-[
-  {
-    "transaction_id": "abc123",
-    "category": "groceries",
-    "tags": ["household", "recurring"],
-    "note": "weekly Costco run"
-  },
-  {
-    "transaction_id": "def456",
-    "category": "software"
-  }
-]
-```
-
-**Request model** (Pydantic):
+Add `--notify` to the `sync` command signature:
 
 ```python
-class BatchAllocationItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    transaction_id: str
-    category: str | None = None
-    tags: list[str] | None = None
-    note: str | None = None
+notify: Annotated[
+    int,
+    typer.Option(
+        "--notify", count=True,
+        help="Notify OpenClaw agent after sync if new transactions arrived.",
+    ),
+] = 0,
 ```
 
-- `transaction_id` is required.
-- `category`, `tags`, `note` are optional. **Omitted fields are set to NULL**
-  (replace semantics). This means sending `{"transaction_id": "x",
-  "category": "food"}` clears any existing `tags` and `note` on that
-  allocation.
-- `amount` is NOT in the request — it stays equal to the transaction amount.
-- The body is a JSON array of `BatchAllocationItem` (not wrapped in an
-  object). Reject an empty array with HTTP 422.
+(Uses `count=True` + `int` per the project's FBT001/FBT002 convention —
+no boolean flags.)
 
-### Response shape
+Pass `notify > 0` down to each of the three internal helpers:
+`_sync_default_mode()`, `_sync_named_item()`, `_sync_all_items()`.
 
-```json
-{
-  "succeeded": ["abc123", "def456"],
-  "failed": [
-    {
-      "transaction_id": "ghi789",
-      "error": "transaction not found"
-    },
-    {
-      "transaction_id": "jkl012",
-      "error": "split transaction (2 allocations); use PUT /transactions/{id}/allocations"
-    }
-  ]
-}
+### Notification logic
+
+After each successful `run_sync()` call that returns a `SyncSummary` where
+`added + modified + removed > 0`:
+
+```python
+if notify and (summary.added + summary.modified + summary.removed > 0):
+    openclaw_cfg = OpenClawConfig(
+        url=config.openclaw_hooks_url,
+        token=config.openclaw_hooks_token,
+        agent=config.openclaw_hooks_agent,
+        wake_mode=config.openclaw_hooks_wake_mode,
+    )
+    notify_openclaw(summary, openclaw_cfg)
 ```
 
-HTTP status: **200** always (even if some items failed). The caller inspects
-`failed` to determine per-item outcomes.
+The `config` object is already loaded in each helper. `OpenClawConfig` and
+`notify_openclaw` are already importable from `config.py` and `notifier.py`.
 
-### Processing rules (per item, independent commits)
+For `_sync_all_items()`: notify after EACH item that has changes, not once
+at the end. This ensures Hestia is woken promptly even if a later item
+fails. (This matches the server's per-sync notification behavior.)
 
-For each item in the array:
+Print a confirmation line when notification fires:
+`"sync: notification sent"` (or `"sync[{item_id}]: notification sent"`).
 
-1. **Look up the transaction.** If not found → add to `failed` with
-   `"transaction not found"`.
-2. **Fetch allocations.** If allocation count != 1 → add to `failed` with
-   `"split transaction (N allocations); use PUT /transactions/{id}/allocations"`.
-3. **Update the single allocation** — set `category`, `tags`, `note` to the
-   request values (NULL for omitted fields). `amount` stays unchanged.
-   `updated_at` is set to now. Do NOT use `replace_allocations` (that deletes
-   and reinserts, which is overkill for a field update). A simple UPDATE is
-   sufficient:
-   ```sql
-   UPDATE allocations
-   SET category = ?, tags = ?, note = ?, updated_at = ?
-   WHERE plaid_transaction_id = ?
-   ```
-4. Add to `succeeded`.
-
-Each item should commit independently. The simplest approach: process all
-items within a single `sqlite3.connect()` context, but call
-`connection.commit()` after each successful update (or use autocommit). If
-independent commits add undue complexity, an atomic approach (single
-transaction, fail-fast on first error) is acceptable as a fallback — but
-document the change from the spec.
-
-### Router (`routers/transactions.py`)
-
-```
-POST /transactions/allocations/batch
-```
-
-- **Auth:** `require_bearer_token` dependency.
-- **No query parameters** — no `_strict_params` needed.
-- **Request body:** `list[BatchAllocationItem]`.
-- **Response:** `{"succeeded": [...], "failed": [...]}`.
+When `--notify` is set but `OPENCLAW_HOOKS_TOKEN` is not configured,
+`notify_openclaw()` already logs a warning and returns. No additional
+handling is needed — just let it happen silently.
 
 ### Tests
 
-- **Happy path:** batch of 3 valid single-allocation transactions. All appear
-  in `succeeded`.
-- **Mixed results:** batch with one valid, one not-found, one split. Confirm
-  correct placement in `succeeded` / `failed`.
-- **Replace semantics:** send an update with only `category` set. Confirm
-  that `tags` and `note` are NULL afterward (not preserved from prior state).
-- **Empty array:** returns HTTP 422.
-- **Split rejection:** transaction with 2 allocations → appears in `failed`
-  with message mentioning the allocation count and the alternative endpoint.
+Test the notification path in `tests/test_cli_sync.py`:
+
+- `--notify` with changes > 0: confirm `notify_openclaw` is called
+  (mock it; do not make real HTTP calls).
+- `--notify` with zero changes: confirm `notify_openclaw` is NOT called.
+- `--notify` with `--all` and two items (one with changes, one without):
+  confirm notification fires exactly once.
+- Without `--notify`: confirm `notify_openclaw` is never called regardless
+  of changes.
 
 ### Done when
 
-- `POST /transactions/allocations/batch` processes each item independently.
-- Single-allocation transactions are updated; splits and not-found are
-  reported in `failed`.
-- Replace semantics: omitted fields become NULL.
+- `ledger sync --notify` calls `notify_openclaw()` when changes > 0.
+- `ledger sync --all --notify` notifies per-item.
+- `ledger sync --item x --notify` notifies for that item.
+- No notification without `--notify`.
 - Full quality gate passes.
 
 ---
 
-## Task 4: Update skill bundles ✅ DONE
+## Task 3: Update systemd units for scheduled sync as primary
 
 ### What
 
-Update both `skills/hestia-ledger/SKILL.md` and
-`skills/athena-ledger/SKILL.md` with the three new endpoints.
+Update the systemd timer to 4x/day as the default. Update the sync service
+to include `--notify`. Add documentation comments reflecting the new role
+as the primary sync mechanism.
 
-### Hestia skill updates
+### Timer (`deploy/systemd/claw-plaid-ledger-sync.timer`)
 
-Hestia is the primary consumer of `/transactions/uncategorized` and
-`/transactions/allocations/batch`.
+Replace `OnCalendar=hourly` with `OnCalendar=*-*-* 00,06,12,18:00:00`.
 
-**Approved API calls section:** add:
+Update the `Description` to reflect the new default:
+`Run claw-plaid-ledger sync four times daily`.
 
-- `GET /transactions/uncategorized` — pre-filtered work queue; returns only
-  allocations with null category. Supports all `GET /transactions` filters.
-- `POST /transactions/allocations/batch` — batch-update allocations for
-  single-allocation transactions. Replaces the per-transaction PUT loop.
+Update the header comment to reflect that this is now the **primary** sync
+mechanism, not an alternative to webhooks.
 
-**Making API calls section:** add examples:
+Add a comment block documenting the hourly override:
 
-```bash
-# Uncategorized work queue
-ledger-api "/transactions/uncategorized?range=last_30_days&view=canonical"
-
-# Batch allocation update
-ledger-api /transactions/allocations/batch \
-  -X POST -H "Content-Type: application/json" \
-  -d '[
-    {"transaction_id": "abc123", "category": "groceries", "tags": ["household"], "note": "weekly shop"},
-    {"transaction_id": "def456", "category": "utilities", "tags": ["recurring"]}
-  ]'
+```ini
+# Default: four syncs per day (midnight, 06:00, noon, 18:00).
+# To sync hourly instead, create a drop-in override:
+#   systemctl edit claw-plaid-ledger-sync.timer
+# and add:
+#   [Timer]
+#   OnCalendar=
+#   OnCalendar=hourly
+# The first empty OnCalendar= clears the default before setting hourly.
 ```
 
-**Ingestion loop guidance:** update to reflect the new workflow:
+### Service (`deploy/systemd/claw-plaid-ledger-sync.service`)
 
-1. Query `GET /transactions/uncategorized?range=last_30_days` (replaces the
-   full `GET /transactions` + client-side null-category filter).
-2. For each uncategorized allocation, determine category/tags/note.
-3. Re-fetch split candidates with `GET /transactions/{id}` if the same
-   transaction ID appears multiple times in results (it's a split with
-   multiple uncategorized allocations).
-4. Collect all single-allocation updates into a batch array.
-5. POST to `/transactions/allocations/batch`.
-6. Inspect `failed` array — log or escalate any failures.
-7. For splits: continue to use `PUT /transactions/{id}/allocations`
-   individually.
+Change `ExecStart` from:
+```
+ExecStart=%h/.local/bin/ledger sync --all
+```
+to:
+```
+ExecStart=%h/.local/bin/ledger sync --all --notify
+```
 
-**Batch replace-semantics warning:** Add a clear note in the skill:
+Update the `Description` and header comment to reflect that this is the
+primary sync mechanism and now includes agent notification.
 
-> **Batch updates use replace semantics.** Every field you omit is set to
-> NULL. If a transaction already has `tags: ["recurring"]` and you send
-> `{"transaction_id": "x", "category": "utilities"}`, the tags will be
-> cleared. Always include all fields you want to keep.
+### Tests
 
-### Athena skill updates
-
-Athena is the primary consumer of `/transactions/splits`.
-
-**Approved API calls section:** add:
-
-- `GET /transactions/uncategorized` — view uncategorized allocations across
-  the ledger. Supports all `GET /transactions` filters.
-- `GET /transactions/splits` — dedicated review queue for split transactions.
-  Returns all allocations for transactions with multiple allocations.
-- `POST /transactions/allocations/batch` — available but rarely needed;
-  prefer `PUT /transactions/{id}/allocations` for analyst-level corrections.
-
-**Query playbooks** (`checklists/query_playbooks.md`): add entries for:
-
-- "Uncategorized review" — `GET /transactions/uncategorized?range=last_30_days`
-- "Split transaction review" — `GET /transactions/splits?range=last_30_days`
+No automated tests — these are static unit files. Verification is:
+- `OnCalendar` value is `*-*-* 00,06,12,18:00:00` in the timer.
+- `ExecStart` includes `--notify` in the service.
+- Comments reflect the new role.
 
 ### Done when
 
-- Both SKILL.md files list all three new endpoints in their approved API
-  calls sections.
-- Hestia's skill includes batch usage examples, replace-semantics warning,
-  and updated ingestion loop guidance.
-- Athena's skill includes splits and uncategorized query playbooks.
-- `grep -r "allocations/batch" skills/` returns hits in both skill files.
+- Timer defaults to 4x/day with documented hourly drop-in.
+- Service ExecStart includes `--notify`.
+- Comments updated.
 - Full quality gate passes.
 
 ---
 
-## Acceptance criteria for Sprint 27
+## Task 4: Deprecate webhook and DuckDNS/Caddy documentation
 
-- `GET /transactions/uncategorized` returns only allocation rows where
-  `category IS NULL`, including uncategorized allocations of split
-  transactions.
-- `GET /transactions/splits` returns all allocation rows for transactions
-  with multiple allocations.
-- Both new GET endpoints accept the full `GET /transactions` filter and
-  pagination set.
-- `POST /transactions/allocations/batch` accepts a JSON array of
-  `{transaction_id, category?, tags?, note?}` items and returns a
-  `{succeeded, failed}` summary.
-- Batch updates use replace semantics: omitted fields become NULL.
-- Batch rejects split transactions with a clear error message.
-- Both skill bundles updated with all new endpoints and guidance.
-- Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
-  with no regressions.
+### What
+
+Mark webhook infrastructure, DuckDNS, Caddy, and port-forward documentation
+as deprecated. Do NOT remove any code or documentation — mark it in place.
+
+### ARCHITECTURE.md
+
+Find the webhook-related sections (data flow webhook path, OpenClaw
+notification from webhooks). Add a deprecation notice at the top of each:
+
+```markdown
+> **Deprecated (M25).** Webhook-based sync is disabled by default as of M25.
+> The scheduled sync timer (`ledger sync --all --notify` via systemd) is now
+> the primary ingestion path. Webhook code remains for operators who set
+> `CLAW_WEBHOOK_ENABLED=true`, but BUG-018 (item-ID mismatch in multi-item
+> setups) is unresolved. See RUNBOOK.md for migration guidance.
+```
+
+In the data flow section, add a new subsection or update the existing
+scheduled-sync subsection to describe the systemd timer as the primary path.
+
+Mark the in-process `CLAW_SCHEDULED_SYNC_ENABLED` fallback loop as
+deprecated in the same section:
+
+```markdown
+> **Deprecated (M25).** The in-process fallback loop is superseded by the
+> systemd timer. It remains functional for backward compatibility but is no
+> longer the recommended approach.
+```
+
+### RUNBOOK.md
+
+**Section 10 (Stable Webhook URL with DuckDNS):** Add a deprecation notice
+at the top:
+
+```markdown
+> **Deprecated (M25).** This section applies only to webhook-based sync,
+> which is disabled by default as of M25. If you are using the recommended
+> scheduled sync timer, DuckDNS and a public URL are not required. Webhook
+> code remains available behind `CLAW_WEBHOOK_ENABLED=true`, but BUG-018
+> is unresolved in multi-item setups.
+```
+
+**Section 11 (Scheduled Sync Fallback):** Update to note that the in-process
+loop is deprecated in favor of the systemd timer. Point readers to
+Section 12.3.
+
+**Section 12.3 (Scheduled-Sync Timer):** Update to reflect that this is now
+the **primary** sync mechanism, not an alternative. Remove or soften the
+"don't enable both" warning since webhooks are off by default. Add the
+4x/day default and hourly drop-in instructions.
+
+**Any Caddy/port-forward sections** referenced in the RUNBOOK that relate
+to webhook ingress: add the same deprecation banner as Section 10.
+
+### BUGS.md
+
+No changes to BUG-018 itself — it remains active. Add a note at the top of
+the BUG-018 entry:
+
+```markdown
+> **Note (M25):** Webhooks are disabled by default as of M25. This bug
+> affects only operators who explicitly enable webhooks via
+> `CLAW_WEBHOOK_ENABLED=true`.
+```
+
+### Done when
+
+- ARCHITECTURE.md webhook and in-process fallback sections have deprecation
+  notices.
+- ARCHITECTURE.md describes systemd timer as primary sync path.
+- RUNBOOK.md Sections 10, 11, 12.3, and any Caddy/port-forward sections
+  have deprecation notices or are updated.
+- BUGS.md BUG-018 has M25 context note.
+- No code or documentation removed.
+- Full quality gate passes.
 
 ---
 
-## Sprint 27 closeout ✅ DONE
+## Task 5: Update ROADMAP.md and skill bundles
 
-- Sprint objectives delivered and verified against the acceptance criteria.
-- Project docs refreshed for M24 completion in `README.md`, `ARCHITECTURE.md`,
-  `RUNBOOK.md`, and `ROADMAP.md`.
+### What
+
+Mark M25 as completed in ROADMAP.md. Update both skill bundles to reflect
+that sync is now timer-driven and notification comes via `--notify`.
+
+### ROADMAP.md
+
+Move M25 from "Upcoming Milestones" to "Completed Milestones" with a
+summary matching the style of previous entries. Include the key deliverables:
+webhook gating, `--notify` flag, systemd timer as primary, doc deprecations.
+
+### Skill bundles
+
+**`skills/hestia-ledger/SKILL.md`:** Hestia's wake mechanism has changed.
+Previously, webhooks triggered sync which triggered notification. Now the
+systemd timer runs `ledger sync --all --notify`, which calls
+`notify_openclaw()` directly. Update any references to the wake/trigger
+mechanism. The notification payload and format are identical — only the
+trigger path changed.
+
+**`skills/athena-ledger/SKILL.md`:** Same treatment. Update any references
+to webhook-driven sync to reflect timer-driven sync. Athena's scheduled
+cadence is unaffected.
+
+For both skills: if any references to `POST /webhooks/plaid` exist as part
+of the data flow explanation, add a note that webhooks are deprecated and
+sync is now timer-driven.
+
+### Done when
+
+- ROADMAP.md M25 is in Completed Milestones.
+- Both skill bundles reflect timer-driven sync and `--notify` as the wake
+  mechanism.
+- No references to webhooks as the active/primary sync path in skill docs.
+- Full quality gate passes.
+
+---
+
+## Acceptance criteria for Sprint 28
+
+- `POST /webhooks/plaid` returns 404 by default; returns normal behavior
+  when `CLAW_WEBHOOK_ENABLED=true`.
+- `ledger sync --notify` (all three modes) calls `notify_openclaw()` when
+  changes > 0.
+- Systemd timer defaults to 4x/day; service ExecStart includes `--notify`.
+- Doctor reports webhook status and warns on dual enablement.
+- ARCHITECTURE.md, RUNBOOK.md, and BUGS.md have deprecation notices on
+  webhook/DuckDNS/Caddy sections.
+- In-process fallback loop marked deprecated in docs.
+- M25 marked complete in ROADMAP.md.
+- Skill bundles updated for timer-driven sync.
+- Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
+  with no regressions.
