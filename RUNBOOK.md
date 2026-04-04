@@ -2411,6 +2411,15 @@ transactions it has all allocations ordered by `id ASC`:
 The list endpoint (`GET /transactions`) returns a singular `"allocation": {...}`
 key per row (each row is one transaction–allocation pair).
 
+Two queue-specialized list variants are also available:
+
+- `GET /transactions/uncategorized` — same filter/pagination surface as
+  `GET /transactions`, pre-filtered to rows where `allocation.category` is
+  null.
+- `GET /transactions/splits` — same filter/pagination surface as
+  `GET /transactions`, pre-filtered to transactions with more than one
+  allocation (returns all allocations for each split transaction).
+
 `category`, `tags`, and `note` within each allocation element may be null for
 uncategorized transactions.
 
@@ -2439,6 +2448,31 @@ Amounts are auto-corrected if the sum differs from the transaction amount by
 ≤ $1.00 (last item silently adjusted). Returns HTTP 422 if the difference
 exceeds $1.00. The response contains the full transaction detail with
 `"allocations": [...]`.
+
+### Writing allocations (batch path for unsplit transactions)
+
+Use `POST /transactions/allocations/batch` when updating many
+single-allocation transactions in one request:
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer $CLAW_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"transaction_id": "txn_1", "category": "groceries", "tags": ["household"]},
+    {"transaction_id": "txn_2", "category": "utilities", "note": "monthly bill"}
+  ]' \
+  http://127.0.0.1:8000/transactions/allocations/batch | jq .
+```
+
+Batch responses are always HTTP 200 and return `{succeeded, failed}`.
+Processing is per-item (collect-all-errors semantics): one failed item does not
+abort later items.
+
+Important: batch updates use **replace semantics** for semantic fields. Omitted
+`category`, `tags`, or `note` fields are cleared (`NULL`) on success.
+Split transactions are rejected per item with guidance to use
+`PUT /transactions/{id}/allocations`.
 
 ### Filtering spend by allocation category or tag
 
