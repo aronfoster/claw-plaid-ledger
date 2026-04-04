@@ -201,11 +201,12 @@ For each run:
    overall confidence for the run. Do not abort — continue ingestion with
    reduced confidence and flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
-2. Query `GET /transactions/uncategorized?range=last_30_days&view=canonical`
-   and paginate to completion. This replaces the prior pattern of fetching all
-   transactions and filtering for null category client-side. Each row includes
-   a nested `allocation` field (singular, list-view shape) where
-   `allocation.category` is null. If the same transaction `id` appears in
+2. Query `GET /transactions/uncategorized?range=last_30_days` and paginate to
+   completion. This replaces the prior pattern of fetching all transactions and
+   filtering for null category client-side. Narrow with `account_id` or
+   `keyword` if needed.
+   Each row includes a nested `allocation` field (singular, list-view shape)
+   where `allocation.category` is null. If the same transaction `id` appears in
    multiple rows, it is a split transaction with multiple uncategorized
    allocations — drill down before writing.
 3. For each uncategorized allocation row, determine the appropriate

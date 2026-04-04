@@ -48,6 +48,28 @@ Reuse these values; do not create near-duplicates.
    If the same transaction `id` appears in multiple list rows, it has been
    split — drill down with `GET /transactions/{id}` before any write.
 
+### 1b) Uncategorized work queue + batch write
+
+Preferred pattern when the run goal is purely categorization (no stale-tag
+or re-review work). Use instead of — or after — playbook 1.
+
+Supported filters for `GET /transactions/uncategorized`:
+`start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
+`max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`.
+
+1. `GET /transactions/uncategorized?range=last_30_days` — paginate to
+   completion. Add `account_id=<id>` to scope to one account, `pending=true`
+   to include pending charges, or `keyword=<merchant>` to narrow by merchant.
+2. Classify each row. Check for split signals: if the same transaction `id`
+   appears more than once, it has multiple uncategorized allocations — move
+   it to the split path (step 4 below).
+3. Build a batch array of single-allocation updates and POST to
+   `POST /transactions/allocations/batch`. Inspect `failed` in the response
+   and log or escalate any failures.
+4. For splits: re-fetch with `GET /transactions/{id}` and use
+   `PUT /transactions/{id}/allocations` individually — do not include splits
+   in the batch.
+
 ### 2) Drill-down before write
 
 1. `GET /transactions/{id}` to verify current details. The response contains
