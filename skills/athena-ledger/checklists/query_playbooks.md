@@ -120,7 +120,50 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 4. Do not overwrite an operator-defined split unless explicitly instructed.
    Flag unusual splits for operator review.
 
-### 9) Ledger health check
+### 9) Uncategorized review
+
+Supported filters: `start_date`, `end_date`, `range`, `account_id`,
+`pending`, `min_amount`, `max_amount`, `keyword`, `view`, `limit`,
+`offset`, `search_notes`, `tags`.
+
+1. `GET /transactions/uncategorized?range=last_30_days`
+   Narrow with `account_id` to audit a single account; add `pending=true`
+   to include pending charges.
+2. Paginate to completion. Each row has `allocation.category == null`.
+3. Group rows by account or merchant to identify coverage gaps (e.g. a
+   recurring King Soopers charge that Hestia missed, or a new merchant
+   type without a matching rule). Use `keyword=<merchant>` to narrow to a
+   specific merchant if the list is long.
+4. Spot-check a sample with `GET /transactions/{id}` before quoting amounts.
+5. If the same transaction `id` appears in multiple rows, it is a split
+   transaction with multiple uncategorized allocations — review all
+   allocations together before annotating.
+6. Report coverage gap patterns to the operator; recommend Hestia rule
+   updates for recurring merchants with consistent classification.
+
+### 10) Split transaction review
+
+Supported filters: `start_date`, `end_date`, `range`, `account_id`,
+`pending`, `min_amount`, `max_amount`, `keyword`, `view`, `limit`,
+`offset`, `search_notes`, `tags`.
+
+1. `GET /transactions/splits?range=last_30_days`
+   Narrow with `account_id` to scope to one account; add `tags=needs-athena-review`
+   to focus on splits already flagged for review.
+2. Paginate to completion. Each row is one allocation of a split transaction;
+   the same transaction `id` appears once per allocation.
+3. Group rows by transaction `id` to see each split's full allocation
+   breakdown. Check that per-allocation amounts sum to the transaction total.
+4. Drill into `GET /transactions/{id}` for any split that looks unusual
+   (unexpected number of allocations, mismatched amounts, uncategorized
+   allocations remaining).
+5. Flag operator-defined splits that need correction with
+   `needs-athena-review` rather than overwriting silently.
+6. Use `PUT /transactions/{id}/allocations` when a targeted correction is
+   warranted — preserve all allocation amounts; they must sum to the
+   transaction total.
+
+### 11) Ledger health check
 
 1. `GET /errors?hours=24` — retrieve warnings and errors from the last 24h.
 2. If `total > 0`, group rows by `severity` and `logger_name`.

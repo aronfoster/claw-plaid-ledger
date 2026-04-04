@@ -56,6 +56,18 @@ ledger-api "/transactions?tags=needs-athena-review&start_date=2026-01-01&end_dat
 ledger-api /transactions/abc123/allocations \
   -X PUT -H "Content-Type: application/json" \
   -d '[{"amount": 12.34, "category": "groceries", "tags": ["household"]}]'
+
+# Uncategorized work queue
+ledger-api "/transactions/uncategorized?range=last_30_days&view=canonical"
+
+# Batch allocation update
+ledger-api /transactions/allocations/batch \
+  -X POST -H "Content-Type: application/json" \
+  -d '[
+    {"transaction_id": "Kp17MNczSqvhOQQi2y6WjFQ1reLsYyUkicO5s", "category": "groceries", "tags": ["household"], "note": "King Soopers weekly run"},
+    {"transaction_id": "MwQK6COw2liLwMbYwb5FjhMPPSOyaYXS8or15", "category": "dining"},
+    {"transaction_id": "Vz93RXab8yTpLqNnDc4eBhKmJ7wsFrYoGi01X", "category": "gas", "note": "King Soopers fuel"}
+  ]'
 ```
 
 Do not call `curl` directly. Do not use `source`, env-var expansion, or shell
@@ -66,19 +78,27 @@ pipes in API calls.
 Hestia may call only:
 
 1. `GET /transactions`
-2. `GET /transactions/{id}`
-3. `GET /categories` — discover existing category vocabulary before writing
-4. `GET /tags` — discover existing tag vocabulary before writing
-5. `PUT /transactions/{transaction_id}/allocations` — **primary write surface
+2. `GET /transactions/uncategorized` — pre-filtered work queue; returns only
+   allocation rows where `category IS NULL`. Supports all `GET /transactions`
+   filters. Use this instead of fetching all transactions and filtering
+   client-side.
+3. `GET /transactions/{id}`
+4. `GET /categories` — discover existing category vocabulary before writing
+5. `GET /tags` — discover existing tag vocabulary before writing
+6. `PUT /transactions/{transaction_id}/allocations` — **primary write surface
    for category/tags/note.** Atomically replaces all allocations. Works for
    both unsplit and split transactions. Request body is a JSON array of
    `{amount, category?, tags?, note?}` items. Response is the full transaction
    detail with `"allocations": [...]` — no follow-up GET needed to confirm
    written state.
-6. `GET /accounts` — retrieve all known accounts with human-readable labels
-7. `PUT /accounts/{account_id}` — write or update a label for an account
-8. `GET /errors` — recent ledger warnings and errors; use as a pre-run
-   health check before each ingestion run
+7. `POST /transactions/allocations/batch` — batch-update allocations for
+   single-allocation transactions. Replaces the per-transaction PUT loop for
+   straightforward categorizations. See **Batch replace semantics** warning
+   below before using.
+8. `GET /accounts` — retrieve all known accounts with human-readable labels
+9. `PUT /accounts/{account_id}` — write or update a label for an account
+10. `GET /errors` — recent ledger warnings and errors; use as a pre-run
+    health check before each ingestion run
 
 `GET /spend` is Athena-owned unless an operator explicitly asks Hestia to run
 one-off diagnostics.
@@ -163,6 +183,13 @@ Equivalently: stop when the number of rows returned is less than `limit`
 **If pagination is interrupted** (call fails or run is aborted mid-way),
 report partial coverage and avoid definitive completeness claims.
 
+## Batch replace semantics
+
+> **Batch updates use replace semantics.** Every field you omit is set to
+> NULL. If a transaction already has `tags: ["recurring"]` and you send
+> `{"transaction_id": "x", "category": "utilities"}`, the tags will be
+> cleared. Always include all fields you want to keep.
+
 ## Deterministic ingestion loop
 
 For each run:
@@ -174,24 +201,48 @@ For each run:
    overall confidence for the run. Do not abort — continue ingestion with
    reduced confidence and flag any affected results.
 1. Pin a deterministic query frame (`start_date`, `end_date`, fixed page size).
-2. Query `GET /transactions` in `view=canonical` and paginate to completion.
-   Each row includes a nested `allocation` field (singular, list-view shape).
-   Use `allocation.category`, `allocation.tags`, and `allocation.note` to
-   screen for missing or stale categorization. The `allocation` object is
-   always present (never null); `category`, `tags`, and `note` within it may
-   be null for uncategorized transactions. If the same transaction `id` appears
-   in multiple rows, it has been split — drill down before writing.
-3. Identify candidates that are pending, missing expected tags/notes, or marked
-   for re-review.
-4. Re-fetch each candidate with `GET /transactions/{id}` before any write.
-   The detail response contains `"allocations": [...]`. Check
-   `allocations.length`: if `> 1`, the transaction has been split by an
-   operator — **do not overwrite the split; send a Discord message to your human flagging it instead.**
-5. Write `PUT /transactions/{transaction_id}/allocations` only when evidence
-   is specific. This endpoint works for both unsplit and split transactions.
-6. If confidence is low, do not write to the ledger. Send a Discord message
-   to your human with: merchant name, amount, date, account, and 2–3 candidate
-   categories with your reasoning. Skip the transaction for now and move on.
+2. Query `GET /transactions/uncategorized?range=last_30_days` and paginate to
+   completion. This replaces the prior pattern of fetching all transactions and
+   filtering for null category client-side. Narrow with `account_id` or
+   `keyword` if needed.
+   Each row includes a nested `allocation` field (singular, list-view shape)
+   where `allocation.category` is null. If the same transaction `id` appears in
+   multiple rows, it is a split transaction with multiple uncategorized
+   allocations — drill down before writing.
+3. For each uncategorized allocation row, determine the appropriate
+   `category`, `tags`, and `note` using merchant name, amount, and account
+   context. Example heuristics from live data:
+   - King Soopers / Target / Sam's Club → `groceries`, tag `household`
+   - McDonald's / restaurant names → `dining`
+   - King Soopers Fuel / gas stations → `gas`
+   - Amazon purchases → `amazon`
+   - Gym / camp / kids activities → `kids`
+4. **Split detection:** if the same transaction `id` appears more than once
+   in the uncategorized results, it is a split with multiple uncategorized
+   allocations. Re-fetch with `GET /transactions/{id}` to see all allocations
+   before deciding how to handle it. Do not include splits in the batch — use
+   `PUT /transactions/{id}/allocations` individually.
+5. Collect all single-allocation updates into a batch array and POST to
+   `POST /transactions/allocations/batch`. Review the response — inspect
+   `failed` for any items that could not be updated and log or escalate them.
+   Example batch call:
+   ```bash
+   ledger-api /transactions/allocations/batch \
+     -X POST -H "Content-Type: application/json" \
+     -d '[
+       {"transaction_id": "Kp17MNczSqvhOQQi2y6WjFQ1reLsYyUkicO5s", "category": "groceries", "tags": ["household"], "note": "King Soopers weekly run"},
+       {"transaction_id": "MwQK6COw2liLwMbYwb5FjhMPPSOyaYXS8or15", "category": "dining"},
+       {"transaction_id": "Vz93RXab8yTpLqNnDc4eBhKmJ7wsFrYoGi01X", "category": "gas", "note": "King Soopers fuel"}
+     ]'
+   ```
+6. For split transactions identified in step 4: use
+   `PUT /transactions/{id}/allocations` individually. The operator-defined
+   split amounts must be preserved — do not overwrite unless explicitly
+   instructed. If unclear, send a Discord message to your human.
+7. If confidence is low on any transaction, do not include it in the batch.
+   Send a Discord message to your human with: merchant name, amount, date,
+   account, and 2–3 candidate categories with your reasoning. Skip the
+   transaction for now and move on.
 
 ## API guardrails
 

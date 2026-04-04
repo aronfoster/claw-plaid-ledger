@@ -63,22 +63,33 @@ pipes in API calls.
 ## Approved API calls
 
 1. `GET /transactions`
-2. `GET /transactions/{id}`
-3. `GET /spend`
-4. `GET /categories` — discover the current allocation category vocabulary
-5. `GET /tags` — discover the current allocation tag vocabulary
-6. `GET /accounts` — retrieve all known accounts with human-readable labels
-7. `PUT /accounts/{account_id}` — write or update a label for an account
-8. `GET /spend/trends` — monthly spend buckets for a lookback window;
-   supports the same filters as `GET /spend`
-9. `GET /errors` — recent ledger warnings and errors; use for proactive
-   alerting and pre-analysis health checks
-10. `PUT /transactions/{id}/allocations` — **primary write surface for
+2. `GET /transactions/uncategorized` — view uncategorized allocations across
+   the ledger (where `category IS NULL`). Supports all `GET /transactions`
+   filters. Useful for auditing coverage gaps and identifying stale
+   categorization.
+3. `GET /transactions/splits` — dedicated review queue for split transactions.
+   Returns all allocation rows for transactions with more than one allocation.
+   Supports all `GET /transactions` filters.
+4. `GET /transactions/{id}`
+5. `GET /spend`
+6. `GET /categories` — discover the current allocation category vocabulary
+7. `GET /tags` — discover the current allocation tag vocabulary
+8. `GET /accounts` — retrieve all known accounts with human-readable labels
+9. `PUT /accounts/{account_id}` — write or update a label for an account
+10. `GET /spend/trends` — monthly spend buckets for a lookback window;
+    supports the same filters as `GET /spend`
+11. `GET /errors` — recent ledger warnings and errors; use for proactive
+    alerting and pre-analysis health checks
+12. `PUT /transactions/{id}/allocations` — **primary write surface for
     category/tags/note.** Atomically replaces all allocations for a transaction.
     Request body is a JSON array of `{amount, category?, tags?, note?}` items.
     Amounts must sum to the transaction total (auto-corrects within $1.00; returns
     422 with `transaction_amount`, `allocation_total`, `difference` if off by more).
     Response is the full transaction detail with `"allocations": [...]`.
+13. `POST /transactions/allocations/batch` — available but rarely needed for
+    analyst workflows; prefer `PUT /transactions/{id}/allocations` for
+    targeted analyst-level corrections. Batch updates use replace semantics:
+    omitted fields are set to NULL.
 
 ## Allocation response shapes
 

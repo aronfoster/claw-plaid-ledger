@@ -337,7 +337,7 @@ POST /transactions/allocations/batch
 
 ---
 
-## Task 4: Update skill bundles
+## Task 4: Update skill bundles ✅ DONE
 
 ### What
 
