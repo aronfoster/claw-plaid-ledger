@@ -1,17 +1,6 @@
 # Roadmap
 
 ## Upcoming Milestones
-
-### M24 — Batch Allocation Updates & Uncategorized Transaction Query
-
-Goal: Reduce Hestia's exec footprint to a single approved command per ingestion run, and give Athena richer query tools for analysis and review.
-
-- **`GET /transactions/uncategorized`** — returns transactions where the single allocation has null category. Includes split transactions (allocation count > 1). Supports standard date range filters and pagination. Goal: give Hestia a focused work queue without requiring her to filter client-side.
-- **`GET /transactions/splits`** — returns transactions that have more than one allocation. Supports standard date range filters and pagination. Goal: give Athena a dedicated review queue for split transactions without client-side filtering.
-- **`POST /transactions/allocations/batch`** — accepts an array of simple allocation updates (transaction ID + category/tags/note). Scoped to single-allocation transactions only; rejects or skips splits. Implementation detail TBD: whether to fail fast, skip-and-report, or collect all errors and return a summary. Response shape TBD: full records vs success/failure summary per ID. Document the tradeoffs as a design decision for the developer to resolve with PM input.
-- **Amount range filters on `GET /transactions`** — add `min_amount` and `max_amount` query parameters (inclusive bounds, matched against transaction amount). Useful for isolating large transactions for Athena review or finding small recurring charges.
-- **Merchant/name text search on `GET /transactions`** — add a `merchant` query parameter that performs a case-insensitive substring match against the transaction name/merchant name field. Complements the existing `search_notes` keyword filter.
-- Skill bundles for both agents updated with all new endpoints and filter parameters.
  
 ### M25 — Scheduled Sync (Webhook Retirement)
 
@@ -545,5 +534,27 @@ wrapper that is compatible with exec approvals:
 - **Operations docs updated** — RUNBOOK post-upgrade cleanup now documents
   removing stale `/usr/bin/curl` allowlist entries and optional
   `openclaw.json` simplification.
+
+### M24 — Batch Allocation Updates & Uncategorized Transaction Query (Sprint 27)
+
+Sprint 27 is complete. Hestia and Athena now have dedicated queue endpoints,
+and Hestia can update multiple single-allocation transactions in one request:
+
+- **`GET /transactions/uncategorized`** — returns only rows where
+  `allocation.category IS NULL`; supports the full `GET /transactions` filter
+  set and strict unknown-parameter rejection.
+- **`GET /transactions/splits`** — returns all allocation rows belonging to
+  split transactions (allocation count > 1), with the same filters and
+  pagination behavior as `GET /transactions`.
+- **`POST /transactions/allocations/batch`** — accepts a JSON array of
+  `{transaction_id, category?, tags?, note?}` items; processes each item
+  independently and returns `{succeeded, failed}` with collect-all-errors
+  semantics.
+- **Batch replace semantics** — omitted semantic fields are explicitly cleared
+  (`NULL`); callers must include all fields they want to retain.
+- **Split transaction handling** — split transactions are rejected in `failed`
+  with a directive to use `PUT /transactions/{id}/allocations`.
+- **Skill bundles updated** — both Hestia and Athena skills now document
+  uncategorized/split queue workflows and batch update usage.
 
 ---

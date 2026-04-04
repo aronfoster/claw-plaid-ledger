@@ -182,8 +182,11 @@ Notes:
 | `GET` | `/tags` | Distinct sorted tag values from all allocations |
 | `GET` | `/accounts` | All synced accounts with human-readable labels (`label`, `description`) from `account_labels`; use to discover account IDs |
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
+| `GET` | `/transactions/uncategorized` | Pre-filtered transaction queue where `allocation.category` is null; supports the same filters/pagination as `GET /transactions` |
+| `GET` | `/transactions/splits` | Pre-filtered transaction queue for split transactions (all allocation rows for transactions with allocation count > 1); supports the same filters/pagination as `GET /transactions` |
 | `GET` | `/transactions/{id}` | Single transaction detail; returns `"allocations": [...]` array (all allocations, ordered by `id`; single-element for unsplit transactions) |
 | `PUT` | `/transactions/{id}/allocations` | Atomically replace all allocations for a transaction; amounts auto-corrected within $1.00; returns 422 if off by more; primary write path for all allocation edits |
+| `POST` | `/transactions/allocations/batch` | Batch update allocation `category`/`tags`/`note` for single-allocation transactions; response is `{succeeded, failed}` and omitted fields are cleared (replace semantics) |
 | `GET` | `/errors` | Recent ledger warnings and errors; supports `hours`, `min_severity`, `limit`, `offset`; use for pre-run health checks and proactive alerting |
 | `GET` | `/openapi.json` | Auto-generated OpenAPI spec |
 | `GET` | `/docs` | Swagger UI |

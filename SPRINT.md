@@ -439,3 +439,11 @@ Athena is the primary consumer of `/transactions/splits`.
 - Both skill bundles updated with all new endpoints and guidance.
 - Full quality gate (`ruff format`, `ruff check`, `mypy`, `pytest`) passes
   with no regressions.
+
+---
+
+## Sprint 27 closeout ✅ DONE
+
+- Sprint objectives delivered and verified against the acceptance criteria.
+- Project docs refreshed for M24 completion in `README.md`, `ARCHITECTURE.md`,
+  `RUNBOOK.md`, and `ROADMAP.md`.

@@ -27,8 +27,10 @@
   (`WebhookIPAllowlistMiddleware`)
 - Router package (`routers/`) — domain-scoped `APIRouter` modules:
   `health.py` (`GET /health`, `GET /errors`), `transactions.py`
-  (`GET /transactions`, `GET /transactions/{id}`,
-  `PUT /transactions/{id}/allocations`),
+  (`GET /transactions`, `GET /transactions/uncategorized`,
+  `GET /transactions/splits`, `GET /transactions/{id}`,
+  `PUT /transactions/{id}/allocations`,
+  `POST /transactions/allocations/batch`),
   `spend.py` (`GET /spend`, `GET /spend/trends`), `accounts.py`
   (`GET /accounts`, `PUT /accounts/{id}`, `GET /categories`, `GET /tags`),
   `webhooks.py` (`POST /webhooks/plaid`, `_background_sync`, scheduled-sync
@@ -684,6 +686,21 @@ Returns HTTP 404 if not found.
 The list endpoint (`GET /transactions`) retains the singular `"allocation": {...}`
 key per row — each list row is one (transaction, allocation) pair.
 
+### `GET /transactions/uncategorized`
+
+Returns the same response shape and supports the same filters/pagination as
+`GET /transactions`, but includes only rows where `allocation.category IS NULL`.
+
+Split transactions are included when applicable, but only their uncategorized
+allocation rows appear.
+
+### `GET /transactions/splits`
+
+Returns the same response shape and supports the same filters/pagination as
+`GET /transactions`, but includes only transactions with multiple allocations.
+
+For each qualifying transaction, **all** allocation rows are returned.
+
 ### `PUT /transactions/{transaction_id}/allocations`
 
 Atomically replaces all allocations for a transaction with a new set.
@@ -709,6 +726,42 @@ Atomically replaces all allocations for a transaction with a new set.
   `GET /transactions/{transaction_id}`, including `"allocations": [...]`).
 - This is the **primary write surface** for allocation data (works for both
   split and unsplit transactions).
+
+### `POST /transactions/allocations/batch`
+
+Batch updates allocation semantic fields for **single-allocation**
+transactions.
+
+**Request body** — JSON array of items:
+
+```json
+[
+  {"transaction_id": "abc123", "category": "groceries", "tags": ["household"]},
+  {"transaction_id": "def456", "category": "utilities", "note": "monthly bill"}
+]
+```
+
+- `transaction_id` is required; `category`, `tags`, and `note` are optional.
+- Empty arrays are rejected with HTTP 422.
+- Replace semantics: omitted semantic fields are set to `NULL`.
+- Split transactions are rejected per item with an error directing callers to
+  `PUT /transactions/{transaction_id}/allocations`.
+
+**Response** (HTTP 200 always):
+
+```json
+{
+  "succeeded": ["abc123"],
+  "failed": [
+    {
+      "transaction_id": "def456",
+      "error": "split transaction (2 allocations); use PUT /transactions/{id}/allocations"
+    }
+  ]
+}
+```
+
+Each batch item is processed independently; failures do not abort later items.
 
 ### `GET /errors`
 
@@ -978,7 +1031,10 @@ src/claw_plaid_ledger/
                       # GET /categories, GET /tags
     health.py         # GET /health, GET /errors
     spend.py          # GET /spend, GET /spend/trends
-    transactions.py   # GET /transactions, GET /transactions/{id},
+    transactions.py   # GET /transactions, /transactions/uncategorized,
+                      # GET /transactions/splits, GET /transactions/{id},
+                      # PUT /transactions/{id}/allocations,
+                      # POST /transactions/allocations/batch
     utils.py          # _SpendRange, _today, _resolve_spend_dates,
                       # _strict_params (BUG-014 unknown-param enforcement)
     webhooks.py       # POST /webhooks/plaid, _WEBHOOK_PATH,
@@ -1001,6 +1057,8 @@ tests/
   test_cli_doctor.py           # ledger doctor, production-preflight (M18)
   test_cli_items.py            # ledger items, overlaps, apply-precedence (M18)
   test_cli_link.py             # ledger link (M18)
+  test_cli_allocations.py      # ledger allocations show/set (M21)
+  test_cli_refresh.py          # ledger refresh, refresh --item/--all (M22)
   test_cli_sync.py             # ledger sync, init-db, serve startup (M18)
   test_config.py
   test_db.py
@@ -1020,7 +1078,8 @@ tests/
   test_server_spend.py         # GET /spend (M18)
   test_server_spend_trends.py  # GET /spend/trends (M18)
   test_server_sync.py          # lifespan, scheduled sync, background sync (M18)
-  test_server_transactions.py  # GET /transactions, GET /transactions/{id} (M18)
+  test_server_transactions.py  # transactions list/detail + split/uncategorized
+                               # queues + allocations batch (M24)
   test_server_webhook.py       # POST /webhooks/plaid, item routing (M18)
   test_sync_engine.py
   test_webhook_auth.py
