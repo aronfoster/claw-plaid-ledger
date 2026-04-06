@@ -23,7 +23,7 @@ cp -R hestia-ledger "$OPENCLAW_SKILLS_DIR/hestia-ledger"
 
 ## Runtime profile
 
-- **Primary trigger:** event-driven (e.g., Plaid sync complete notification).
+- **Primary trigger:** event-driven via `ledger sync --all --notify` (systemd timer, 4x/day default).
 - **Expected cadence:** frequent / low-latency.
 - **Output style:** operational status and escalation tags.
 

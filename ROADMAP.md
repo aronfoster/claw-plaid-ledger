@@ -1,16 +1,6 @@
 # Roadmap
 
 ## Upcoming Milestones
- 
-### M25 — Scheduled Sync (Webhook Retirement)
-
-Goal: Replace inbound webhook infrastructure with a reliable outbound pull cadence.
-
-- Configurable systemd timer running `ledger sync --all` at operator-chosen frequency (4x/day default, hourly option).
-- Post-sync agent notification: if sync returns new transactions, poke the configured agent (same `OPENCLAW_HOOKS_*` env vars already in place). Enabled/disabled via new flag.
-- Webhook code remains in codebase but marked deprecated in ARCHITECTURE.md and RUNBOOK.md with a note that BUG-018 is unresolved. Not removed — leaves the door open for a future contributor.
-- DuckDNS, Caddy, and port-forward setup sections in RUNBOOK.md marked accordingly.
-- `doctor` reports scheduled sync status and warns if both webhook and scheduled sync are enabled simultaneously.
 
 ### M26 — Plaid Required Attestations (due 2026-09-07)
 
@@ -556,5 +546,27 @@ and Hestia can update multiple single-allocation transactions in one request:
   with a directive to use `PUT /transactions/{id}/allocations`.
 - **Skill bundles updated** — both Hestia and Athena skills now document
   uncategorized/split queue workflows and batch update usage.
+
+### M25 — Scheduled Sync (Webhook Retirement) (Sprint 28)
+
+Sprint 28 is complete. Inbound webhook infrastructure has been replaced by a
+reliable outbound pull cadence via systemd timer:
+
+- **Webhook gating** — new `CLAW_WEBHOOK_ENABLED` env var (default `false`).
+  `POST /webhooks/plaid` returns HTTP 404 when disabled; existing behaviour
+  preserved when enabled. `doctor` reports webhook status and warns if both
+  webhooks and scheduled sync are enabled simultaneously.
+- **`--notify` CLI flag** — `ledger sync --notify` (all three modes: default,
+  `--item`, `--all`) calls `notify_openclaw()` after each successful sync that
+  produces changes. This is now the primary agent-wake mechanism.
+- **Systemd timer as primary sync** — timer defaults to 4x/day
+  (`*-*-* 00,06,12,18:00:00`); service ExecStart includes `--all --notify`.
+  Hourly override documented as a `systemctl edit` drop-in.
+- **Deprecation documentation** — webhook, DuckDNS, Caddy, and port-forward
+  sections in ARCHITECTURE.md and RUNBOOK.md marked deprecated (M25). BUG-018
+  (item-ID mismatch) noted as unresolved. In-process fallback loop
+  (`CLAW_SCHEDULED_SYNC_ENABLED`) marked deprecated in favour of the timer.
+- **Skill bundles updated** — both Hestia and Athena skills reflect
+  timer-driven sync and `--notify` as the wake mechanism.
 
 ---

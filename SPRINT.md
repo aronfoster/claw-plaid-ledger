@@ -352,7 +352,7 @@ the BUG-018 entry:
 
 ---
 
-## Task 5: Update ROADMAP.md and skill bundles
+## Task 5: Update ROADMAP.md and skill bundles ✅ DONE
 
 ### What
 

@@ -303,13 +303,14 @@ uv run --locked ledger serve
 
 Recommended run pattern:
 
-- **Hestia**: event-driven on non-empty Plaid webhook syncs (default wake flow).
+- **Hestia**: event-driven; woken by `ledger sync --all --notify` via systemd
+  timer (4x/day default). See Section 12.3.
 - **Athena**: periodic review (daily/weekly) and targeted checks for
   `needs-athena-review` transactions.
 
 Operational check:
 
-- Ensure `OPENCLAW_HOOKS_AGENT=Hestia` so webhook sync wakes the ingestion
+- Ensure `OPENCLAW_HOOKS_AGENT=Hestia` so scheduled sync wakes the ingestion
   worker first; Athena should not be woken on every sync by default.
 
 ## 2. Plaid production-access prerequisites
