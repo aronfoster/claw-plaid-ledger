@@ -852,6 +852,10 @@ request correlation and sync correlation so operators can jump from `req-*` to
 
 ### 9.6 Webhook ingress security
 
+> **Deprecated (M25).** This section applies only when webhooks are enabled
+> via `CLAW_WEBHOOK_ENABLED=true`. Webhooks are disabled by default as of
+> M25 in favor of the systemd sync timer (Section 12.3).
+
 Plaid webhooks arrive at `POST /webhooks/plaid` from Plaid's published IP
 ranges.  Three complementary enforcement layers are available:
 
@@ -938,6 +942,12 @@ tampered or missing signature receives HTTP 400.
 ---
 
 ## 10. Stable webhook URL with DuckDNS
+
+> **Deprecated (M25).** This section applies only to webhook-based sync,
+> which is disabled by default as of M25. If you are using the recommended
+> scheduled sync timer, DuckDNS and a public URL are not required. Webhook
+> code remains available behind `CLAW_WEBHOOK_ENABLED=true`, but BUG-018
+> is unresolved in multi-item setups.
 
 ### 10.1 Why a stable public URL is needed
 
@@ -1105,10 +1115,15 @@ running.
 
 ## 11. Scheduled sync fallback
 
-The scheduled sync fallback is an optional background loop that
+> **Deprecated (M25).** The in-process fallback loop is superseded by the
+> systemd timer (`ledger sync --all --notify`), which is now the primary
+> sync mechanism. The fallback loop remains functional for backward
+> compatibility but is no longer the recommended approach. See
+> Section 12.3 for the recommended setup.
+
+The scheduled sync fallback is an optional in-process background loop that
 automatically triggers a sync for any configured item that has not been
-synced within a configurable window (default 24 hours).  It is the
-safety net for missed or delayed webhooks.
+synced within a configurable window (default 24 hours).
 
 Enable it by setting `CLAW_SCHEDULED_SYNC_ENABLED=true` in your `.env`
 before starting `ledger serve`.  The fallback window is controlled by
@@ -1186,17 +1201,31 @@ Expected output includes `Active: active (running)`.
 
 ### 12.3 Installing the scheduled-sync timer
 
-The sync timer runs `ledger sync --all` every hour.  This is an
-alternative to (or complement of) the built-in
-`CLAW_SCHEDULED_SYNC_ENABLED` fallback loop:
+The sync timer is the **primary sync mechanism** as of M25. It runs
+`ledger sync --all --notify` four times daily (midnight, 06:00, noon,
+18:00) and notifies the OpenClaw agent (Hestia) after each item that
+produces changes.
 
-| Approach | Best for |
-|---|---|
-| `CLAW_SCHEDULED_SYNC_ENABLED=true` | Simple setups; sync tied to the server process |
-| `claw-plaid-ledger-sync.timer` | Operators who prefer systemd for all scheduling; allows sync to run independently of the server |
+To sync more frequently, create a drop-in override:
 
-Both approaches are valid; do not enable both simultaneously for the
-same set of items unless you intend the double-run behavior.
+```bash
+sudo systemctl edit claw-plaid-ledger-sync.timer
+```
+
+and add:
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=hourly
+```
+
+The first empty `OnCalendar=` clears the default before setting hourly.
+
+The in-process `CLAW_SCHEDULED_SYNC_ENABLED` fallback loop is deprecated
+but remains functional for backward compatibility. Webhooks are disabled
+by default (`CLAW_WEBHOOK_ENABLED=false`). Neither needs to be enabled
+when using the systemd timer.
 
 Install the service and timer:
 
@@ -1223,6 +1252,10 @@ systemctl list-timers claw-plaid-ledger-sync.timer
 ```
 
 ### 12.4 Installing the DuckDNS timer
+
+> **Deprecated (M25).** The DuckDNS timer is only needed for webhook-based
+> sync, which is disabled by default as of M25. Skip this section if you
+> are using the recommended systemd sync timer (Section 12.3).
 
 The DuckDNS update script and credentials are installed system-wide
 (see Section 10.4).  Create the following unit files:

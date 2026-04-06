@@ -271,7 +271,7 @@ No automated tests — these are static unit files. Verification is:
 
 ---
 
-## Task 4: Deprecate webhook and DuckDNS/Caddy documentation
+## Task 4: Deprecate webhook and DuckDNS/Caddy documentation ✅ DONE
 
 ### What
 
