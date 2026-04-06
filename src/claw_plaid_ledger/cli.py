@@ -398,8 +398,11 @@ def _maybe_notify(
     """Send an OpenClaw notification if notify is set and changes exist."""
     if notify <= 0:
         return
-    if summary.added + summary.modified + summary.removed <= 0:
+    changes = summary.added + summary.modified + summary.removed
+    if changes <= 0:
+        _sync_logger.debug("%s: skipping notification, no changes", prefix)
         return
+    _sync_logger.info("%s: notifying OpenClaw (%d changes)", prefix, changes)
     openclaw_cfg = OpenClawConfig(
         url=config.openclaw_hooks_url,
         token=config.openclaw_hooks_token,
