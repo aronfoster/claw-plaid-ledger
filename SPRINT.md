@@ -130,7 +130,7 @@ The warning is informational — it does NOT affect the exit code.
 
 ---
 
-## Task 2: Add `--notify` flag to `ledger sync`
+## Task 2: Add `--notify` flag to `ledger sync` ✅ DONE
 
 ### What
 
