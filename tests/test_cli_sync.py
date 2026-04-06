@@ -358,3 +358,172 @@ def test_sync_item_and_all_are_mutually_exclusive() -> None:
 
     assert exit_code == INIT_DB_CONFIG_ERROR_EXIT_CODE
     assert "sync: --item and --all are mutually exclusive" in output
+
+
+# ------------------------------------------------------------------
+# --notify tests
+# ------------------------------------------------------------------
+
+
+def _setup_default_sync_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> str:
+    """Set env vars for a default-mode sync and return the access token."""
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setenv("PLAID_CLIENT_ID", "id")
+    monkeypatch.setenv("PLAID_SECRET", "secret")
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    access_token = secrets.token_urlsafe(12)
+    monkeypatch.setenv("PLAID_ACCESS_TOKEN", access_token)
+    return access_token
+
+
+def _patch_adapter(monkeypatch: MonkeyPatch) -> None:
+    """Replace PlaidClientAdapter.from_config with a no-op stub."""
+
+    class DummyAdapter:
+        pass
+
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.PlaidClientAdapter.from_config",
+        lambda _config: DummyAdapter(),
+    )
+
+
+def _patch_run_sync(
+    monkeypatch: MonkeyPatch,
+    *,
+    added: int = 0,
+    modified: int = 0,
+    removed: int = 0,
+) -> None:
+    """Replace run_sync with a stub returning the given counts."""
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.run_sync",
+        lambda **_kw: SimpleNamespace(
+            added=added,
+            modified=modified,
+            removed=removed,
+            accounts=1,
+            next_cursor="c",
+        ),
+    )
+
+
+def test_notify_called_when_changes_exist(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`--notify` with changes > 0 calls notify_openclaw."""
+    _setup_default_sync_env(monkeypatch, tmp_path)
+    _patch_adapter(monkeypatch)
+    _patch_run_sync(monkeypatch, added=3)
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.notify_openclaw",
+        lambda summary, cfg: calls.append((summary, cfg)),
+    )
+
+    exit_code, output = run_main(["sync", "--notify"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert "notification sent" in output
+
+
+def test_notify_not_called_when_zero_changes(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`--notify` with zero changes does NOT call notify_openclaw."""
+    _setup_default_sync_env(monkeypatch, tmp_path)
+    _patch_adapter(monkeypatch)
+    _patch_run_sync(monkeypatch, added=0, modified=0, removed=0)
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.notify_openclaw",
+        lambda summary, cfg: calls.append((summary, cfg)),
+    )
+
+    exit_code, output = run_main(["sync", "--notify"])
+
+    assert exit_code == 0
+    assert len(calls) == 0
+    assert "notification sent" not in output
+
+
+def test_notify_all_fires_per_item(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`--notify --all` with two items (one with changes) notifies once."""
+    monkeypatch.setenv(
+        "CLAW_PLAID_LEDGER_DB_PATH", str(tmp_path / "ledger.db")
+    )
+    monkeypatch.setenv("PLAID_CLIENT_ID", "id")
+    monkeypatch.setenv("PLAID_SECRET", "secret")
+    monkeypatch.setenv("PLAID_ENV", "sandbox")
+    env_var_alice = "PLAID_ACCESS_TOKEN_BANK_ALICE"
+    monkeypatch.setenv(env_var_alice, secrets.token_urlsafe(12))
+    env_var_bob = "PLAID_ACCESS_TOKEN_BANK_BOB"
+    monkeypatch.setenv(env_var_bob, secrets.token_urlsafe(12))
+
+    _patch_adapter(monkeypatch)
+
+    def fake_run_sync(**kwargs: object) -> object:
+        if kwargs["item_id"] == "bank-alice":
+            return SimpleNamespace(
+                added=5, modified=0, removed=0, accounts=1, next_cursor="c"
+            )
+        return SimpleNamespace(
+            added=0, modified=0, removed=0, accounts=1, next_cursor="c"
+        )
+
+    monkeypatch.setattr("claw_plaid_ledger.cli.run_sync", fake_run_sync)
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.load_items_config",
+        lambda: [
+            ItemConfig(
+                id="bank-alice",
+                access_token_env=env_var_alice,
+                owner="alice",
+            ),
+            ItemConfig(
+                id="bank-bob",
+                access_token_env=env_var_bob,
+                owner="bob",
+            ),
+        ],
+    )
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.notify_openclaw",
+        lambda summary, cfg: calls.append((summary, cfg)),
+    )
+
+    exit_code, output = run_main(["sync", "--all", "--notify"])
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert "sync[bank-alice]: notification sent" in output
+    assert "sync[bank-bob]: notification sent" not in output
+
+
+def test_no_notify_without_flag(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Without `--notify`, notify_openclaw is never called."""
+    _setup_default_sync_env(monkeypatch, tmp_path)
+    _patch_adapter(monkeypatch)
+    _patch_run_sync(monkeypatch, added=10, modified=5, removed=2)
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "claw_plaid_ledger.cli.notify_openclaw",
+        lambda summary, cfg: calls.append((summary, cfg)),
+    )
+
+    exit_code, _output = run_main(["sync"])
+
+    assert exit_code == 0
+    assert len(calls) == 0

@@ -24,6 +24,7 @@ from claw_plaid_ledger.config import (
     _VALID_LOG_LEVELS,
     Config,
     ConfigError,
+    OpenClawConfig,
     load_api_secret,
     load_config,
     load_merged_env,
@@ -47,6 +48,7 @@ from claw_plaid_ledger.logging_utils import (
     CorrelationIdFilter,
     set_correlation_id,
 )
+from claw_plaid_ledger.notifier import notify_openclaw
 from claw_plaid_ledger.plaid_adapter import PlaidClientAdapter
 from claw_plaid_ledger.preflight import (
     CheckSeverity,
@@ -390,7 +392,25 @@ def _sync_summary(prefix: str, summary: SyncSummary) -> None:
     )
 
 
-def _sync_default_mode() -> None:
+def _maybe_notify(
+    prefix: str, summary: SyncSummary, config: Config, *, notify: int
+) -> None:
+    """Send an OpenClaw notification if notify is set and changes exist."""
+    if notify <= 0:
+        return
+    if summary.added + summary.modified + summary.removed <= 0:
+        return
+    openclaw_cfg = OpenClawConfig(
+        url=config.openclaw_hooks_url,
+        token=config.openclaw_hooks_token,
+        agent=config.openclaw_hooks_agent,
+        wake_mode=config.openclaw_hooks_wake_mode,
+    )
+    notify_openclaw(summary, openclaw_cfg)
+    typer.echo(f"{prefix}: notification sent")
+
+
+def _sync_default_mode(*, notify: int = 0) -> None:
     """Run legacy single-item sync using PLAID_ACCESS_TOKEN."""
     _setup_sync_logging()
     sync_run_id = "sync-" + uuid.uuid4().hex[:8]
@@ -417,6 +437,7 @@ def _sync_default_mode() -> None:
         item_id=config.item_id,
     )
     _sync_summary("sync", summary)
+    _maybe_notify("sync", summary, config, notify=notify)
 
 
 def _load_client_config_for_sync() -> Config:
@@ -428,7 +449,7 @@ def _load_client_config_for_sync() -> Config:
         raise SystemExit(2) from error
 
 
-def _sync_named_item(item_id: str) -> None:
+def _sync_named_item(item_id: str, *, notify: int = 0) -> None:
     """Run sync for exactly one item from items.toml."""
     _setup_sync_logging()
     sync_run_id = "sync-" + uuid.uuid4().hex[:8]
@@ -457,10 +478,12 @@ def _sync_named_item(item_id: str) -> None:
         item_id=item_cfg.id,
         owner=item_cfg.owner,
     )
-    _sync_summary(f"sync[{item_cfg.id}]", summary)
+    prefix = f"sync[{item_cfg.id}]"
+    _sync_summary(prefix, summary)
+    _maybe_notify(prefix, summary, config, notify=notify)
 
 
-def _sync_all_items() -> None:
+def _sync_all_items(*, notify: int = 0) -> None:
     """Run sync sequentially for all items in items.toml."""
     _setup_sync_logging()
     items_config = load_items_config()
@@ -506,7 +529,9 @@ def _sync_all_items() -> None:
             failure_count += 1
             continue
 
-        _sync_summary(f"sync[{item_cfg.id}]", summary)
+        prefix = f"sync[{item_cfg.id}]"
+        _sync_summary(prefix, summary)
+        _maybe_notify(prefix, summary, config, notify=notify)
         success_count += 1
 
     typer.echo(
@@ -530,6 +555,15 @@ def sync(
             "--all", count=True, help="Sync all items listed in items.toml."
         ),
     ] = 0,
+    notify: Annotated[
+        int,
+        typer.Option(
+            "--notify",
+            count=True,
+            help="Notify OpenClaw agent after sync "
+            "if new transactions arrived.",
+        ),
+    ] = 0,
 ) -> None:
     """Sync transactions from Plaid into the local SQLite ledger."""
     if item is not None and all_items > 0:
@@ -537,14 +571,14 @@ def sync(
         raise SystemExit(2)
 
     if item is None and all_items == 0:
-        _sync_default_mode()
+        _sync_default_mode(notify=notify)
         return
 
     if item is not None:
-        _sync_named_item(item)
+        _sync_named_item(item, notify=notify)
         return
 
-    _sync_all_items()
+    _sync_all_items(notify=notify)
 
 
 def _refresh_default_mode() -> None:
