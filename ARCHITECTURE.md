@@ -122,7 +122,20 @@ items.toml ─┐
             │                    -> [card-alice] run_sync -> SQLite
 PLAID_ENV  ─┘
 
-Webhook-first ingestion:
+Primary ingestion path (M25+):
+
+systemd timer (4x/day default)
+  └─ ledger sync --all --notify
+       ├─ per-item run_sync → SQLite
+       └─ changes > 0 → notify_openclaw (Hestia wake)
+
+> **Deprecated (M25).** Webhook-based sync is disabled by default as of M25.
+> The scheduled sync timer (`ledger sync --all --notify` via systemd) is now
+> the primary ingestion path. Webhook code remains for operators who set
+> `CLAW_WEBHOOK_ENABLED=true`, but BUG-018 (item-ID mismatch in multi-item
+> setups) is unresolved. See RUNBOOK.md for migration guidance.
+
+Webhook ingestion (deprecated, opt-in via CLAW_WEBHOOK_ENABLED=true):
 
 POST /webhooks/plaid (SYNC_UPDATES_AVAILABLE)
   └─ extract item_id from payload
@@ -130,7 +143,11 @@ POST /webhooks/plaid (SYNC_UPDATES_AVAILABLE)
        ├─ item_id not in items.toml ────> WARNING + _background_sync() [legacy]
        └─ no item_id / no items.toml ──> _background_sync() [legacy]
 
-Scheduled sync fallback (opt-in):
+> **Deprecated (M25).** The in-process fallback loop is superseded by the
+> systemd timer. It remains functional for backward compatibility but is no
+> longer the recommended approach.
+
+In-process scheduled sync fallback (deprecated, opt-in via CLAW_SCHEDULED_SYNC_ENABLED=true):
 
 _scheduled_sync_loop (every 60 min)
   └─ _check_and_sync_overdue_items
@@ -816,15 +833,20 @@ reading the source code.
 
 ## OpenClaw notification
 
-After a webhook-triggered sync, `_background_sync` in `routers/webhooks.py`
-calls `notify_openclaw` from `notifier.py` when
-`summary.added + summary.modified + summary.removed > 0`.
+Notification fires after any sync path that produces changes
+(`summary.added + summary.modified + summary.removed > 0`).
+
+### Trigger paths
+
+- **Primary (M25+):** `ledger sync --all --notify` via systemd timer calls
+  `notify_openclaw` directly from the CLI after each item with changes.
+- **Legacy (deprecated):** `_background_sync` in `routers/webhooks.py` calls
+  `notify_openclaw` after a webhook-triggered sync with changes.
 
 ### When notification fires
 
-- A Plaid `SYNC_UPDATES_AVAILABLE` webhook triggers a background sync.
-- The sync returns a non-zero change count (at least one added, modified, or
-  removed transaction).
+- A sync (CLI with `--notify`, or webhook-triggered background sync) returns a
+  non-zero change count (at least one added, modified, or removed transaction).
 - `OPENCLAW_HOOKS_TOKEN` is set to a non-empty value.
 
 ### When notification is skipped
@@ -984,7 +1006,8 @@ Key variables:
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; if unset, notification is skipped with a warning |
 | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw ingestion agent to wake (Hestia in the two-agent flow) |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw (`now` is the only supported value) |
-| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
+| `CLAW_WEBHOOK_ENABLED` | no | `false` | Enable the webhook endpoint (`POST /webhooks/plaid`); disabled by default as of M25 |
+| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the in-process scheduled sync fallback loop (deprecated in favor of systemd timer); set to `true` to activate |
 | `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1; values ≤ 0 cause a startup error |
 | `CLAW_WEBHOOK_ALLOWED_IPS` | no | — | Comma-separated IPv4/IPv6 CIDRs allowed to POST to `/webhooks/plaid`; unset = no IP filtering |
 | `CLAW_TRUSTED_PROXIES` | no | `127.0.0.1` | Comma-separated IPs of trusted reverse proxies for `X-Forwarded-For` resolution; used only when `CLAW_WEBHOOK_ALLOWED_IPS` is set |

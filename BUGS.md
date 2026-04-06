@@ -44,6 +44,10 @@ the wrapper is auto-approved without operator intervention.
 
 ### BUG-018 — Webhook handler falls back to `PLAID_ACCESS_TOKEN` when item_id is not in items.toml, crashing all multi-item syncs
 
+> **Note (M25):** Webhooks are disabled by default as of M25. This bug
+> affects only operators who explicitly enable webhooks via
+> `CLAW_WEBHOOK_ENABLED=true`.
+
 **Status:** Active
 **Severity:** High (all webhook-triggered syncs fail silently in multi-item setups; transactions accumulate unsynced)
 **Area:** `src/claw_plaid_ledger/routers/webhooks.py` — `SYNC_UPDATES_AVAILABLE` handler
