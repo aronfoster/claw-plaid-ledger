@@ -1,16 +1,6 @@
 # Roadmap
 
 ## Upcoming Milestones
- 
-### M25 — Scheduled Sync (Webhook Retirement)
-
-Goal: Replace inbound webhook infrastructure with a reliable outbound pull cadence.
-
-- Configurable systemd timer running `ledger sync --all` at operator-chosen frequency (4x/day default, hourly option).
-- Post-sync agent notification: if sync returns new transactions, poke the configured agent (same `OPENCLAW_HOOKS_*` env vars already in place). Enabled/disabled via new flag.
-- Webhook code remains in codebase but marked deprecated in ARCHITECTURE.md and RUNBOOK.md with a note that BUG-018 is unresolved. Not removed — leaves the door open for a future contributor.
-- DuckDNS, Caddy, and port-forward setup sections in RUNBOOK.md marked accordingly.
-- `doctor` reports scheduled sync status and warns if both webhook and scheduled sync are enabled simultaneously.
 
 ### M26 — Plaid Required Attestations (due 2026-09-07)
 
@@ -534,6 +524,29 @@ wrapper that is compatible with exec approvals:
 - **Operations docs updated** — RUNBOOK post-upgrade cleanup now documents
   removing stale `/usr/bin/curl` allowlist entries and optional
   `openclaw.json` simplification.
+
+### M25 — Scheduled Sync / Webhook Retirement (Sprint 28)
+
+Sprint 28 is complete. Inbound webhook infrastructure is retired in favor of
+a reliable outbound pull cadence:
+
+- **Webhook gating** — `CLAW_WEBHOOK_ENABLED` env var (default `false`); when
+  disabled, `POST /webhooks/plaid` returns HTTP 404. Existing webhook behavior
+  preserved behind the flag for operators who opt in.
+- **`--notify` CLI flag** — `ledger sync --notify` (compatible with `--all` and
+  `--item`) calls `notify_openclaw()` after each successful sync that produces
+  changes. This is now the primary agent-wake mechanism.
+- **Systemd timer as primary sync** — timer defaults to 4×/day; service
+  ExecStart includes `--all --notify`. Hourly override documented as a
+  `systemctl edit` drop-in.
+- **Doctor dual-enablement warning** — `ledger doctor` reports webhook status
+  and warns when both `CLAW_WEBHOOK_ENABLED` and `CLAW_SCHEDULED_SYNC_ENABLED`
+  are true simultaneously.
+- **Deprecation notices** — webhook, DuckDNS, Caddy, and port-forward sections
+  in ARCHITECTURE.md and RUNBOOK.md marked deprecated with BUG-018 context.
+  In-process fallback loop (`CLAW_SCHEDULED_SYNC_ENABLED`) marked deprecated.
+- **Skill bundles updated** — both Hestia and Athena skill docs reflect
+  timer-driven sync and `--notify` as the wake mechanism.
 
 ### M24 — Batch Allocation Updates & Uncategorized Transaction Query (Sprint 27)
 
