@@ -45,7 +45,7 @@ bash scripts/deploy-local.sh
 
 Recommended operating cadence:
 
-- **Hestia (bookkeeper)**: event-driven; wake on non-empty Plaid webhook syncs.
+- **Hestia (bookkeeper)**: event-driven; woken by `ledger sync --all --notify` via systemd timer (4x/day default).
 - **Athena (analyst)**: periodic (daily/weekly) plus targeted review of
   `needs-athena-review` tagged transactions.
 
@@ -135,7 +135,8 @@ The template file `.env.example` includes all supported keys. Key variables:
 | `OPENCLAW_HOOKS_TOKEN` | no | — | Bearer token for OpenClaw; leave unset to disable notifications |
 | `OPENCLAW_HOOKS_AGENT` | no | `Hestia` | Name of the OpenClaw ingestion agent to wake after a sync |
 | `OPENCLAW_HOOKS_WAKE_MODE` | no | `now` | Wake mode passed to OpenClaw |
-| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | Enable the scheduled sync fallback loop; set to `true` to activate |
+| `CLAW_WEBHOOK_ENABLED` | no | `false` | Enable the deprecated webhook endpoint; set to `true` to restore `POST /webhooks/plaid` |
+| `CLAW_SCHEDULED_SYNC_ENABLED` | no | `false` | *Deprecated (M25).* Enable the in-process scheduled sync fallback loop; superseded by the systemd timer |
 | `CLAW_SCHEDULED_SYNC_FALLBACK_HOURS` | no | `24` | Hours of sync silence before an item is treated as overdue; minimum 1 |
 
 Notes:
@@ -162,7 +163,7 @@ Notes:
 | `ledger link` | Connects a Plaid institution via browser and prints the resulting `access_token` and `items.toml` snippet |
 | `ledger apply-precedence` | Applies source-precedence mappings from `items.toml` (`suppressed_accounts`) into the DB and clears stale mappings |
 | `ledger overlaps` | Shows configured source-precedence status and potential unconfirmed overlaps across items |
-| `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path |
+| `ledger sync` | Fetches transactions from Plaid and persists them to SQLite; `sync --all` is the standard household path; `--notify` wakes the OpenClaw agent when changes are detected |
 | `ledger refresh` | Asks Plaid to re-check the institution and fire `SYNC_UPDATES_AVAILABLE`; `--all` covers every item in `items.toml`; `--item <id>` targets a single named item |
 | `ledger serve` | Starts the FastAPI/uvicorn HTTP server; binds to `CLAW_SERVER_HOST:CLAW_SERVER_PORT` (default `127.0.0.1:8000`) |
 | `ledger allocations show <id>` | Display current allocation state for a transaction (amounts, categories, tags, notes, balance check) |
@@ -175,7 +176,7 @@ Notes:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
-| `POST` | `/webhooks/plaid` | Receives Plaid webhook events; triggers background sync on `SYNC_UPDATES_AVAILABLE` |
+| `POST` | `/webhooks/plaid` | *Deprecated (M25).* Receives Plaid webhook events; disabled by default (`CLAW_WEBHOOK_ENABLED=false`); returns 404 unless explicitly enabled |
 | `GET` | `/transactions` | Paginated, filterable transaction list; includes `allocation` per row (never null; `category`, `tags`, `note` within it may be null); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
 | `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters; response uses `allocation_count` |
 | `GET` | `/categories` | Distinct sorted category values from all allocations |
@@ -194,11 +195,13 @@ Notes:
 All endpoints except `/health`, `/openapi.json`, and `/docs` require
 `Authorization: Bearer <CLAW_API_SECRET>`.
 
-After a webhook-triggered sync that adds, modifies, or removes at least one
-transaction, the server sends a `POST` to the OpenClaw `/hooks/agent` endpoint
-to wake the configured ingestion agent (Hestia by default). Athena analysis
-runs later on schedule or anomaly-triggered follow-up. Set
-`OPENCLAW_HOOKS_TOKEN` to enable this; leave it unset to disable silently.
+The primary sync mechanism is the systemd timer running
+`ledger sync --all --notify` (4x/day by default). When `--notify` is set and
+a sync produces changes, the CLI sends a `POST` to the OpenClaw `/hooks/agent`
+endpoint to wake the configured ingestion agent (Hestia by default). Athena
+analysis runs later on schedule or anomaly-triggered follow-up. Set
+`OPENCLAW_HOOKS_TOKEN` to enable notifications; leave it unset to disable
+silently. Webhook-based sync is deprecated (M25) and disabled by default.
 
 ## Observability and tracing
 

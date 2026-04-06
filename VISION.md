@@ -14,9 +14,9 @@ direct database access creates safety and correctness risks.
 ## Goal
 
 Run a persistent local server that ingests transaction data from Plaid via
-webhooks, exposes a typed API for OpenClaw agents to query and annotate,
-and wakes OpenClaw only when there is new or uncertain information worth
-interpreting.
+scheduled sync (systemd timer), exposes a typed API for OpenClaw agents to
+query and annotate, and wakes OpenClaw only when there is new or uncertain
+information worth interpreting.
 
 ## Principles
 

@@ -570,4 +570,5 @@ and Hestia can update multiple single-allocation transactions in one request:
 - **Skill bundles updated** — both Hestia and Athena skills now document
   uncategorized/split queue workflows and batch update usage.
 
+
 ---
