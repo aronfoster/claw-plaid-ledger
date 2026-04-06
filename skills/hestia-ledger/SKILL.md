@@ -282,7 +282,12 @@ For each run:
 
 ## Ingestion playbooks
 
-### 1) Scheduled sync notification intake
+### 1) Sync notification intake
+
+The systemd timer runs `ledger sync --all --notify` on a scheduled cadence
+(4×/day by default). When new transactions arrive, `--notify` calls
+`notify_openclaw()` which wakes Hestia. The notification payload and format
+are identical to the previous webhook-driven path — only the trigger changed.
 
 1. Run `GET /transactions` with a fixed recent window and deterministic paging.
 2. Focus on newest records first.

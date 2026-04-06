@@ -21,7 +21,9 @@ cp -R athena-ledger "$OPENCLAW_SKILLS_DIR/athena-ledger"
 ## Trigger modes
 
 1. **Scheduled cadence (recommended):** run daily/weekly/monthly for spend
-   rollups and anomaly review.
+   rollups and anomaly review. Sync data arrives via systemd timer
+   (`ledger sync --all --notify`, 4×/day by default); Athena's own cadence
+   is independent and typically lower-frequency.
 2. **Optional handoff mode:** run after Hestia escalates records with
    `needs-athena-review` where agent-to-agent routing is available.
 

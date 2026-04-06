@@ -525,6 +525,29 @@ wrapper that is compatible with exec approvals:
   removing stale `/usr/bin/curl` allowlist entries and optional
   `openclaw.json` simplification.
 
+### M25 — Scheduled Sync / Webhook Retirement (Sprint 28)
+
+Sprint 28 is complete. Inbound webhook infrastructure is retired in favor of
+a reliable outbound pull cadence:
+
+- **Webhook gating** — `CLAW_WEBHOOK_ENABLED` env var (default `false`); when
+  disabled, `POST /webhooks/plaid` returns HTTP 404. Existing webhook behavior
+  preserved behind the flag for operators who opt in.
+- **`--notify` CLI flag** — `ledger sync --notify` (compatible with `--all` and
+  `--item`) calls `notify_openclaw()` after each successful sync that produces
+  changes. This is now the primary agent-wake mechanism.
+- **Systemd timer as primary sync** — timer defaults to 4×/day; service
+  ExecStart includes `--all --notify`. Hourly override documented as a
+  `systemctl edit` drop-in.
+- **Doctor dual-enablement warning** — `ledger doctor` reports webhook status
+  and warns when both `CLAW_WEBHOOK_ENABLED` and `CLAW_SCHEDULED_SYNC_ENABLED`
+  are true simultaneously.
+- **Deprecation notices** — webhook, DuckDNS, Caddy, and port-forward sections
+  in ARCHITECTURE.md and RUNBOOK.md marked deprecated with BUG-018 context.
+  In-process fallback loop (`CLAW_SCHEDULED_SYNC_ENABLED`) marked deprecated.
+- **Skill bundles updated** — both Hestia and Athena skill docs reflect
+  timer-driven sync and `--notify` as the wake mechanism.
+
 ### M24 — Batch Allocation Updates & Uncategorized Transaction Query (Sprint 27)
 
 Sprint 27 is complete. Hestia and Athena now have dedicated queue endpoints,
@@ -547,26 +570,5 @@ and Hestia can update multiple single-allocation transactions in one request:
 - **Skill bundles updated** — both Hestia and Athena skills now document
   uncategorized/split queue workflows and batch update usage.
 
-### M25 — Scheduled Sync (Webhook Retirement) (Sprint 28)
-
-Sprint 28 is complete. Inbound webhook infrastructure has been replaced by a
-reliable outbound pull cadence via systemd timer:
-
-- **Webhook gating** — new `CLAW_WEBHOOK_ENABLED` env var (default `false`).
-  `POST /webhooks/plaid` returns HTTP 404 when disabled; existing behaviour
-  preserved when enabled. `doctor` reports webhook status and warns if both
-  webhooks and scheduled sync are enabled simultaneously.
-- **`--notify` CLI flag** — `ledger sync --notify` (all three modes: default,
-  `--item`, `--all`) calls `notify_openclaw()` after each successful sync that
-  produces changes. This is now the primary agent-wake mechanism.
-- **Systemd timer as primary sync** — timer defaults to 4x/day
-  (`*-*-* 00,06,12,18:00:00`); service ExecStart includes `--all --notify`.
-  Hourly override documented as a `systemctl edit` drop-in.
-- **Deprecation documentation** — webhook, DuckDNS, Caddy, and port-forward
-  sections in ARCHITECTURE.md and RUNBOOK.md marked deprecated (M25). BUG-018
-  (item-ID mismatch) noted as unresolved. In-process fallback loop
-  (`CLAW_SCHEDULED_SYNC_ENABLED`) marked deprecated in favour of the timer.
-- **Skill bundles updated** — both Hestia and Athena skills reflect
-  timer-driven sync and `--notify` as the wake mechanism.
 
 ---

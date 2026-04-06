@@ -23,8 +23,10 @@ cp -R hestia-ledger "$OPENCLAW_SKILLS_DIR/hestia-ledger"
 
 ## Runtime profile
 
-- **Primary trigger:** event-driven via `ledger sync --all --notify` (systemd timer, 4x/day default).
-- **Expected cadence:** frequent / low-latency.
+- **Primary trigger:** systemd timer runs `ledger sync --all --notify` (4×/day
+  default); `--notify` calls `notify_openclaw()` when new transactions arrive,
+  waking Hestia for ingestion.
+- **Expected cadence:** up to 4× daily (or hourly with timer override).
 - **Output style:** operational status and escalation tags.
 
 ## Minimum environment assumptions
