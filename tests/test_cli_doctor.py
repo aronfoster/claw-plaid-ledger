@@ -615,3 +615,65 @@ def test_doctor_without_preflight_flag_omits_preflight_output(
     assert exit_code == 0
     assert "doctor: all checks passed" in output
     assert "preflight:" not in output
+
+
+def test_doctor_webhooks_disabled_by_default(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports webhooks DISABLED when env var is absent."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.delenv("CLAW_WEBHOOK_ENABLED", raising=False)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "webhooks: DISABLED (default)" in output
+
+
+def test_doctor_webhooks_enabled(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` reports webhooks ENABLED when CLAW_WEBHOOK_ENABLED=true."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "webhooks: ENABLED (CLAW_WEBHOOK_ENABLED=true)" in output
+
+
+def test_doctor_dual_enablement_warning(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` warns when both webhooks and scheduled-sync are enabled."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("CLAW_SCHEDULED_SYNC_ENABLED", "true")
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "both webhooks and scheduled-sync are enabled" in output
+
+
+def test_doctor_no_dual_enablement_warning_when_only_one_enabled(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """`doctor` does NOT warn when only webhooks or only sync is enabled."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+    monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+    monkeypatch.delenv("CLAW_SCHEDULED_SYNC_ENABLED", raising=False)
+
+    exit_code, output = run_main(["doctor"])
+
+    assert exit_code == 0
+    assert "both webhooks and scheduled-sync are enabled" not in output

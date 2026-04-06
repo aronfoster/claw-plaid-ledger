@@ -82,6 +82,7 @@ class Config:
     openclaw_hooks_token: str | None = None
     openclaw_hooks_agent: str = "Hestia"
     openclaw_hooks_wake_mode: str = "now"
+    webhook_enabled: bool = False
     scheduled_sync_enabled: bool = False
     scheduled_sync_fallback_hours: int = 24
     webhook_allowed_ips: list[
@@ -237,6 +238,9 @@ def load_config(
         )
         raise ConfigError(msg)
 
+    webhook_enabled = (
+        values.get("CLAW_WEBHOOK_ENABLED", "").strip().lower() == "true"
+    )
     scheduled_sync_enabled = (
         values.get("CLAW_SCHEDULED_SYNC_ENABLED", "").strip().lower() == "true"
     )
@@ -299,6 +303,7 @@ def load_config(
         openclaw_hooks_token=openclaw_hooks_token,
         openclaw_hooks_agent=openclaw_hooks_agent,
         openclaw_hooks_wake_mode=openclaw_hooks_wake_mode,
+        webhook_enabled=webhook_enabled,
         scheduled_sync_enabled=scheduled_sync_enabled,
         scheduled_sync_fallback_hours=scheduled_sync_fallback_hours,
         webhook_allowed_ips=webhook_allowed_ips,

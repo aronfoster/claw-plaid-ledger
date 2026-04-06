@@ -65,7 +65,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: Gate webhooks behind `CLAW_WEBHOOK_ENABLED`
+## Task 1: Gate webhooks behind `CLAW_WEBHOOK_ENABLED` ✅ DONE
 
 ### What
 

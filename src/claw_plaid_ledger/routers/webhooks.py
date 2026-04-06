@@ -47,6 +47,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SYNC_UPDATES_AVAILABLE = "SYNC_UPDATES_AVAILABLE"
+
+_webhook_enabled: bool = False
 _WEBHOOK_PATH = "/webhooks/plaid"
 
 # Poll interval for the scheduled sync loop.  This is the check frequency,
@@ -315,7 +317,10 @@ async def lifespan(
         )
         cfg = None
 
+    global _webhook_enabled  # noqa: PLW0603
     if cfg is not None:
+        _webhook_enabled = cfg.webhook_enabled
+
         db_handler = LedgerDbHandler(cfg.db_path)
         logging.getLogger().addHandler(db_handler)
 
@@ -458,6 +463,15 @@ async def webhook_plaid(
     background_tasks: BackgroundTasks,
 ) -> dict[str, str]:
     """Handle Plaid webhook events."""
+    if not _webhook_enabled:
+        raise fastapi.HTTPException(
+            status_code=404,
+            detail=(
+                "Webhooks are disabled. Set CLAW_WEBHOOK_ENABLED=true to"
+                " enable. See RUNBOOK.md for scheduled sync setup."
+            ),
+        )
+
     body = await request.body()
     headers = dict(request.headers)
 

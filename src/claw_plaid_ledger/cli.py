@@ -106,6 +106,19 @@ def _doctor_verbose_config(config: Config) -> None:
     )
 
 
+def _doctor_webhook_check(config: Config) -> None:
+    """Report webhook and dual-enablement status (informational only)."""
+    if config.webhook_enabled:
+        typer.echo("doctor: webhooks: ENABLED (CLAW_WEBHOOK_ENABLED=true)")
+    else:
+        typer.echo("doctor: webhooks: DISABLED (default)")
+    if config.webhook_enabled and config.scheduled_sync_enabled:
+        typer.echo(
+            "doctor: [WARN] both webhooks and scheduled-sync are enabled"
+            " — this is unusual; see RUNBOOK.md"
+        )
+
+
 def _doctor_scheduled_sync_check(config: Config) -> None:
     """Report scheduled sync configuration status (informational only)."""
     if config.scheduled_sync_enabled:
@@ -347,6 +360,7 @@ def doctor(
         typer.echo("doctor: CLAW_API_SECRET [FAIL] not set")
 
     _doctor_openclaw_check(config)
+    _doctor_webhook_check(config)
     _doctor_scheduled_sync_check(config)
 
     typer.echo("doctor: all checks passed")
