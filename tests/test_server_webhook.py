@@ -9,6 +9,7 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.items_config import ItemConfig
@@ -17,9 +18,14 @@ from claw_plaid_ledger.server import app
 if TYPE_CHECKING:
     import pathlib
 
-    import pytest
-
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _enable_webhooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable webhooks for all tests (mirrors pre-gating behavior)."""
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+
 
 # Short name so S105 ("hardcoded password") does not fire; this value carries
 # no real security significance — it is only used as a test fixture.
@@ -685,3 +691,53 @@ class TestWebhookIPAllowlistMiddleware:
             )
 
         assert any("webhook IP blocked" in r.message for r in caplog.records)
+
+
+class TestWebhookEnabledGating:
+    """Tests for CLAW_WEBHOOK_ENABLED gating."""
+
+    def test_webhook_returns_404_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POST /webhooks/plaid returns 404 when webhooks are disabled."""
+        monkeypatch.delenv("CLAW_WEBHOOK_ENABLED", raising=False)
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=_SYNC_BODY,
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == http.HTTPStatus.NOT_FOUND
+        body = response.json()
+        assert "Webhooks are disabled" in body["detail"]
+        assert "CLAW_WEBHOOK_ENABLED=true" in body["detail"]
+
+    def test_webhook_processes_normally_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """POST /webhooks/plaid processes normally when enabled."""
+        monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+        monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+
+        body = _SYNC_BODY
+        sig = _make_plaid_sig(body)
+
+        mock_bg = MagicMock()
+        monkeypatch.setattr(
+            "claw_plaid_ledger.routers.webhooks._background_sync", mock_bg
+        )
+
+        response = client.post(
+            "/webhooks/plaid",
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_TOKEN}",
+                "Plaid-Verification": sig,
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        mock_bg.assert_called_once()

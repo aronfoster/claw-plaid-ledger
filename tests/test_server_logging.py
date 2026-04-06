@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from claw_plaid_ledger.db import initialize_database
@@ -20,9 +21,14 @@ from claw_plaid_ledger.sync_engine import SyncSummary
 if TYPE_CHECKING:
     import pathlib
 
-    import pytest
-
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _enable_webhooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enable webhooks for all tests (mirrors pre-gating behavior)."""
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
+
 
 # Short name so S105 ("hardcoded password") does not fire; this value carries
 # no real security significance — it is only used as a test fixture.

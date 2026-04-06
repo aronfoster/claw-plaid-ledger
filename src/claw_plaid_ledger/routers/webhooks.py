@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SYNC_UPDATES_AVAILABLE = "SYNC_UPDATES_AVAILABLE"
+
 _WEBHOOK_PATH = "/webhooks/plaid"
 
 # Poll interval for the scheduled sync loop.  This is the check frequency,
@@ -458,6 +460,15 @@ async def webhook_plaid(
     background_tasks: BackgroundTasks,
 ) -> dict[str, str]:
     """Handle Plaid webhook events."""
+    if os.environ.get("CLAW_WEBHOOK_ENABLED", "").strip().lower() != "true":
+        raise fastapi.HTTPException(
+            status_code=404,
+            detail=(
+                "Webhooks are disabled. Set CLAW_WEBHOOK_ENABLED=true to"
+                " enable. See RUNBOOK.md for scheduled sync setup."
+            ),
+        )
+
     body = await request.body()
     headers = dict(request.headers)
 
