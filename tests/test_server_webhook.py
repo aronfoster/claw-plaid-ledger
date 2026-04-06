@@ -24,9 +24,7 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _enable_webhooks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Enable webhooks for all tests (mirrors pre-gating behavior)."""
-    monkeypatch.setattr(
-        "claw_plaid_ledger.routers.webhooks._webhook_enabled", True
-    )
+    monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
 
 
 # Short name so S105 ("hardcoded password") does not fire; this value carries
@@ -702,9 +700,7 @@ class TestWebhookEnabledGating:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """POST /webhooks/plaid returns 404 when webhooks are disabled."""
-        monkeypatch.setattr(
-            "claw_plaid_ledger.routers.webhooks._webhook_enabled", False
-        )
+        monkeypatch.delenv("CLAW_WEBHOOK_ENABLED", raising=False)
 
         response = client.post(
             "/webhooks/plaid",
@@ -721,9 +717,7 @@ class TestWebhookEnabledGating:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """POST /webhooks/plaid processes normally when enabled."""
-        monkeypatch.setattr(
-            "claw_plaid_ledger.routers.webhooks._webhook_enabled", True
-        )
+        monkeypatch.setenv("CLAW_WEBHOOK_ENABLED", "true")
         monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
         monkeypatch.setenv("PLAID_WEBHOOK_SECRET", _WEBHOOK_SECRET)
 

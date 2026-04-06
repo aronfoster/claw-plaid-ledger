@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
@@ -48,7 +49,6 @@ logger = logging.getLogger(__name__)
 
 _SYNC_UPDATES_AVAILABLE = "SYNC_UPDATES_AVAILABLE"
 
-_webhook_enabled: bool = False
 _WEBHOOK_PATH = "/webhooks/plaid"
 
 # Poll interval for the scheduled sync loop.  This is the check frequency,
@@ -317,10 +317,7 @@ async def lifespan(
         )
         cfg = None
 
-    global _webhook_enabled  # noqa: PLW0603
     if cfg is not None:
-        _webhook_enabled = cfg.webhook_enabled
-
         db_handler = LedgerDbHandler(cfg.db_path)
         logging.getLogger().addHandler(db_handler)
 
@@ -463,7 +460,7 @@ async def webhook_plaid(
     background_tasks: BackgroundTasks,
 ) -> dict[str, str]:
     """Handle Plaid webhook events."""
-    if not _webhook_enabled:
+    if os.environ.get("CLAW_WEBHOOK_ENABLED", "").strip().lower() != "true":
         raise fastapi.HTTPException(
             status_code=404,
             detail=(
