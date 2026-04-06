@@ -282,7 +282,12 @@ For each run:
 
 ## Ingestion playbooks
 
-### 1) Plaid sync notification intake
+### 1) Sync notification intake
+
+The systemd timer runs `ledger sync --all --notify` on a scheduled cadence
+(4×/day by default). When new transactions arrive, `--notify` calls
+`notify_openclaw()` which wakes Hestia. The notification payload and format
+are identical to the previous webhook-driven path — only the trigger changed.
 
 1. Run `GET /transactions` with a fixed recent window and deterministic paging.
 2. Focus on newest records first.
@@ -368,7 +373,7 @@ log file at:
 ```
 
 Use today's date in the filename. Create the file if it doesn't exist;
-append if it does (multiple webhook syncs may fire in one day).
+append if it does (multiple scheduled syncs may fire in one day).
 
 ### Format
 
