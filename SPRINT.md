@@ -210,7 +210,7 @@ Test the notification path in `tests/test_cli_sync.py`:
 
 ---
 
-## Task 3: Update systemd units for scheduled sync as primary
+## Task 3: Update systemd units for scheduled sync as primary ✅ DONE
 
 ### What
 

@@ -1,8 +1,10 @@
-# claw-plaid-ledger-sync.service — oneshot unit for "ledger sync --all"
+# claw-plaid-ledger-sync.service — primary scheduled sync ("ledger sync --all --notify")
 #
-# This unit is meant to be triggered by claw-plaid-ledger-sync.timer rather
-# than started directly.  It runs a single synchronisation pass across all
-# configured items and then exits.
+# This unit is the PRIMARY sync mechanism for claw-plaid-ledger, replacing
+# the former webhook-based sync path (disabled by default as of M25).  It is
+# triggered by claw-plaid-ledger-sync.timer rather than started directly.
+# It runs a single synchronisation pass across all configured items, notifies
+# the OpenClaw agent (Hestia) if new transactions arrived, and then exits.
 #
 # Installation:
 #   cp deploy/systemd/claw-plaid-ledger-sync.service /etc/systemd/system/
@@ -10,11 +12,10 @@
 #   systemctl daemon-reload
 #   systemctl enable --now claw-plaid-ledger-sync.timer
 #
-# See RUNBOOK.md Section 12 for the trade-offs between this timer and the
-# CLAW_SCHEDULED_SYNC_ENABLED built-in fallback.
+# See RUNBOOK.md Section 12 for details.
 
 [Unit]
-Description=claw-plaid-ledger scheduled sync (ledger sync --all)
+Description=claw-plaid-ledger primary sync (ledger sync --all --notify)
 Documentation=https://github.com/aronfoster/claw-plaid-ledger
 # Only run when the main server is active — avoids syncing while the DB
 # is being initialised or the server is deliberately stopped.
@@ -43,7 +44,7 @@ EnvironmentFile=/home/alice/.config/claw-plaid-ledger/.env
 # at ~/.local/bin/ledger, which is what %h/.local/bin/ledger resolves to.
 # If you installed ledger system-wide (e.g. /usr/local/bin/ledger), replace
 # %h/.local/bin with the appropriate absolute path.
-ExecStart=%h/.local/bin/ledger sync --all
+ExecStart=%h/.local/bin/ledger sync --all --notify
 
 # --- Logging ------------------------------------------------------------
 StandardOutput=journal

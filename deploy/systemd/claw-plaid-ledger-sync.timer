@@ -1,9 +1,8 @@
-# claw-plaid-ledger-sync.timer — hourly trigger for claw-plaid-ledger-sync.service
+# claw-plaid-ledger-sync.timer — primary sync trigger for claw-plaid-ledger-sync.service
 #
-# This timer fires the sync service once per hour.  It is intended as the
-# systemd-managed alternative for operators who prefer not to use the built-in
-# CLAW_SCHEDULED_SYNC_ENABLED fallback loop.  Both approaches are valid; see
-# RUNBOOK.md Section 12.3 for trade-offs.
+# This timer is the PRIMARY sync mechanism for claw-plaid-ledger.  It replaces
+# the former webhook-based sync path (disabled by default as of M25).
+# See RUNBOOK.md Section 12.3 for details.
 #
 # Activation:
 #   systemctl enable --now claw-plaid-ledger-sync.timer
@@ -12,16 +11,19 @@
 #   systemctl list-timers claw-plaid-ledger-sync.timer
 
 [Unit]
-Description=Run claw-plaid-ledger sync hourly
+Description=Run claw-plaid-ledger sync four times daily
 Documentation=https://github.com/aronfoster/claw-plaid-ledger
 
 [Timer]
-# OnCalendar=hourly fires at the top of each hour (00:00, 01:00, …).
-# To change the frequency, replace "hourly" with any valid calendar
-# expression, e.g.:
-#   every 30 minutes: *:0/30
-#   twice a day:      00,12:00
-OnCalendar=hourly
+# Default: four syncs per day (midnight, 06:00, noon, 18:00).
+# To sync hourly instead, create a drop-in override:
+#   systemctl edit claw-plaid-ledger-sync.timer
+# and add:
+#   [Timer]
+#   OnCalendar=
+#   OnCalendar=hourly
+# The first empty OnCalendar= clears the default before setting hourly.
+OnCalendar=*-*-* 00,06,12,18:00:00
 
 # Persistent=true means the timer will catch up a missed run (e.g. after
 # the host was powered off) as soon as it boots rather than waiting for the
