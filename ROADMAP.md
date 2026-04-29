@@ -2,7 +2,46 @@
 
 ## Upcoming Milestones
 
-### M26 — Plaid Required Attestations (due 2026-09-07)
+### M26 — Multi-category Filtering
+
+**Goal:** Let agents and operators narrow category-aware read queries to one or
+more allocation categories, so household spend questions can distinguish exact
+combinations of categorized activity without extra client-side filtering.
+
+**Rationale:** The ledger's budgeting model is allocation-first. Category
+filters should follow that same mental model: every returned row should be an
+allocation that matches the requested category criteria. This keeps split
+transactions understandable and prevents unrelated portions of a transaction
+from appearing just because another allocation matched.
+
+#### Scope
+
+- Add category filtering consistently across all category-aware read surfaces.
+- Preserve existing single-category query behavior.
+- Support multiple requested categories using OR semantics.
+- Apply filtering per allocation: if part of a split transaction does not match
+  the requested categories, that allocation is not returned.
+- Keep uncategorized allocations excluded from category-filtered results unless
+  the caller is using an explicitly uncategorized workflow.
+- Update user-facing API documentation and agent skill guidance so Hestia and
+  Athena understand when and how to use multi-category filters.
+
+#### Acceptance criteria
+
+- A caller can ask for one category and receives the same kind of results as
+  before.
+- A caller can ask for multiple categories and receives only allocations whose
+  category matches one of the requested categories.
+- Split transactions never cause unrelated allocations to appear in filtered
+  results.
+- Category-aware summaries and trends use the same filtering rules as
+  transaction-style reads.
+- Documentation explains the user-visible behavior without requiring agents to
+  do their own post-filtering.
+
+---
+
+### M27 — Plaid Required Attestations (due 2026-09-07)
 
 **Goal:** Complete all eleven Plaid compliance attestations before the
 2026-09-07 deadline to maintain production API access.
