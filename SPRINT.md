@@ -57,7 +57,7 @@ re-litigated during implementation:
 
 ---
 
-## Task 1: Add allocation-category filter support in the DB layer
+## Task 1: Add allocation-category filter support in the DB layer ✅ DONE
 
 ### What
 

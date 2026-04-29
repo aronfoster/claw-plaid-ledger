@@ -116,6 +116,9 @@ def get_spend(
     resolved_tags: list[str] = tags or []
     include_pending = params.include_pending is True
     config = load_config()
+    categories: tuple[str, ...] = (
+        (params.category,) if params.category is not None else ()
+    )
     spend_query = SpendQuery(
         start_date=resolved_start.isoformat(),
         end_date=resolved_end.isoformat(),
@@ -124,7 +127,7 @@ def get_spend(
         include_pending=include_pending,
         canonical_only=params.view == "canonical",
         account_id=params.account_id,
-        category=params.category,
+        categories=categories,
         tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:
@@ -185,6 +188,9 @@ def get_spend_trends(
     resolved_tags: list[str] = tags or []
     include_pending = params.include_pending is True
     config = load_config()
+    categories: tuple[str, ...] = (
+        (params.category,) if params.category is not None else ()
+    )
     trends_query = SpendTrendsQuery(
         months=params.months,
         owner=params.owner,
@@ -192,7 +198,7 @@ def get_spend_trends(
         include_pending=include_pending,
         canonical_only=params.view == "canonical",
         account_id=params.account_id,
-        category=params.category,
+        categories=categories,
         tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:
