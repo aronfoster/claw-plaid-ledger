@@ -2154,6 +2154,19 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend?range=last_month&category=software" | jq .
 ```
 
+**By multiple allocation categories (OR semantics across categories):**
+
+```bash
+# Sum allocations whose category is groceries OR dining.
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_month&category=groceries&category=dining" \
+  | jq .
+```
+
+Repeated `?category=...` params filter per allocation row, so split
+transactions contribute only the matching allocation amounts (not the full
+transaction amount). NULL-category allocations are excluded.
+
 **By allocation tag (case-insensitive, singular):**
 
 ```bash
@@ -2161,16 +2174,17 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend?range=last_30_days&tag=recurring" | jq .
 ```
 
-**Combined filters (AND semantics):**
+**Combined filters (AND semantics outside the category OR group):**
 
 ```bash
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
-  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123&category=software&tag=recurring" \
+  "http://127.0.0.1:8000/spend?range=this_month&account_id=acc_abc123&category=software&category=saas&tag=recurring" \
   | jq .
 ```
 
-All four filter keys (`owner`, `tags`, `account_id`, `category`, `tag`) are
-always present in the `filters` object of the response, even when not supplied:
+All filter keys (`owner`, `tags`, `account_id`, `category`, `categories`,
+`tag`) are always present in the `filters` object of the response, even when
+not supplied:
 
 ```json
 {
@@ -2179,10 +2193,16 @@ always present in the `filters` object of the response, even when not supplied:
     "tags": [],
     "account_id": "acc_abc123",
     "category": "software",
+    "categories": ["software"],
     "tag": null
   }
 }
 ```
+
+`filters.categories` always echoes the full requested list (empty when none
+supplied). `filters.category` preserves the legacy scalar — populated only
+when exactly one category was requested. Prefer `filters.categories` for new
+clients.
 
 ### Updating skill bundles
 
@@ -2248,11 +2268,18 @@ curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend/trends?months=6&account_id=acc_abc123" | jq .
 ```
 
-**By allocation category (case-insensitive):**
+**By allocation category (case-insensitive; repeatable):**
 
 ```bash
+# Single category (legacy, identical to prior behavior).
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend/trends?months=6&category=software" | jq .
+
+# Multiple categories — OR semantics across categories. Each monthly bucket
+# sums allocation rows whose category is software OR saas.
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend/trends?months=6&category=software&category=saas" \
+  | jq .
 ```
 
 **By allocation tag (case-insensitive, singular):**
@@ -2514,17 +2541,30 @@ Split transactions are rejected per item with guidance to use
 
 ### Filtering spend by allocation category or tag
 
-`GET /spend` and `GET /spend/trends` filter against allocation fields:
+`GET /spend` and `GET /spend/trends` filter against allocation fields. The
+`category` filter is repeatable on both endpoints — multiple values use OR
+semantics across categories, and filtering happens per allocation row so
+split transactions contribute only the matching allocation amounts:
 
 ```bash
 # Spend for a specific allocation category this month
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend?range=this_month&category=groceries" | jq .
 
+# Spend across multiple categories (OR)
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=this_month&category=groceries&category=dining" \
+  | jq .
+
 # Trends filtered to a single allocation tag
 curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
   "http://127.0.0.1:8000/spend/trends?months=6&tag=recurring" | jq .
 ```
+
+The same repeated `?category=` parameter is accepted by `GET /transactions`
+and `GET /transactions/splits`. `GET /transactions/uncategorized` rejects
+named `category` filters (HTTP 422); use it as the dedicated workflow for
+allocations where `category IS NULL`.
 
 ### Notes
 
@@ -2593,7 +2633,20 @@ transaction rows, so `offset`/`limit` pagination works correctly.
 
 `GET /spend?category=groceries` sums only the grocery allocation amounts —
 not the full transaction amount — so split-category filtering is always
-accurate.
+accurate. Multiple categories use OR semantics across categories, still
+allocation-row scoped:
+
+```bash
+# Sums only allocation rows whose category is groceries OR dining.
+curl -s -H "Authorization: Bearer $CLAW_API_SECRET" \
+  "http://127.0.0.1:8000/spend?range=last_month&category=groceries&category=dining" \
+  | jq .
+```
+
+For the transaction list, the same semantics apply: a split transaction with
+allocations in `groceries` and `dining` returns only the matching allocation
+row(s) when `?category=...` is supplied. Unrelated allocation rows from the
+same transaction never appear in filtered list results.
 
 ---
 

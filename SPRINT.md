@@ -208,7 +208,7 @@ category filtering with identical OR semantics.
 
 ---
 
-## Task 4: Update API documentation and skill guidance
+## Task 4: Update API documentation and skill guidance ✅ DONE
 
 ### What
 

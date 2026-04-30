@@ -444,6 +444,7 @@ Returns a paginated, filtered list of transactions.
 | `max_amount` | float | — | Filter: amount ≤ max_amount (inclusive) |
 | `keyword` | string | — | Filter: case-insensitive substring match on `name` and `merchant_name`; also matches `allocations.note` when `search_notes=true` |
 | `tags` | list[string] | `[]` | Filter: transaction allocation must include **all** listed tags (AND semantics); pass `?tags=a&tags=b` |
+| `category` | list[string] | `[]` | Filter: allocation row's `category` must equal one of the listed values (case-insensitive, OR semantics across categories); pass `?category=a&category=b`. Filters per allocation row, so split transactions return only the matching allocation row(s). NULL categories never match a named-category filter. |
 | `search_notes` | bool | `false` | If true and `keyword` is set, include allocation `note` in keyword search |
 | `limit` | int | `100` | Maximum rows to return; max `500`; `limit > 500` returns HTTP 422 |
 | `offset` | int | `0` | Number of matching rows to skip (for pagination) |
@@ -582,7 +583,7 @@ supplied either as explicit ISO dates or as a named range shorthand.
 | `owner` | string | — | Restrict to accounts tagged with this owner (`accounts.owner`). |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics (`?tags=a&tags=b`). |
 | `account_id` | string | — | Restrict to a single Plaid account (use `GET /accounts` to discover IDs). |
-| `category` | string | — | Restrict to one allocation category (case-insensitive; use `GET /categories` for vocabulary). |
+| `category` | list[string] | `[]` | Restrict to allocation rows whose `category` equals one of the listed values (case-insensitive; OR semantics across repeated `?category=a&category=b`). One value preserves the legacy single-category behavior. NULL categories never match. Use `GET /categories` for vocabulary. |
 | `tag` | string | — | Restrict to one allocation tag (case-insensitive, singular; use `GET /tags` for vocabulary). |
 | `include_pending` | bool | `false` | Include pending transactions when true; otherwise only posted rows are summed. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
@@ -610,6 +611,7 @@ supplied either as explicit ISO dates or as a named range shorthand.
     "tags": ["groceries"],
     "account_id": null,
     "category": null,
+    "categories": [],
     "tag": null
   }
 }
@@ -618,6 +620,9 @@ supplied either as explicit ISO dates or as a named range shorthand.
 - `total_spend` is the arithmetic sum of `amount` (Plaid sign convention is preserved).
 - `allocation_count` is the number of matching allocation rows before aggregation.
 - Empty windows return zeros (`total_spend=0`, `allocation_count=0`) not `null`.
+- `filters.categories` always echoes the full requested category list (empty list when none supplied; one item for single-category calls; multiple items for repeated `?category=` params).
+- `filters.category` preserves the legacy scalar field — populated only when exactly one category was requested, `null` otherwise. Prefer `filters.categories` for new clients.
+- All filters combine with AND semantics (e.g. `owner` AND `tags` AND `categories`); within `categories` the matches are OR.
 
 ### `GET /spend/trends`
 
@@ -633,7 +638,7 @@ month with no qualifying transactions.
 | `owner` | string | — | Restrict to accounts tagged with this owner. |
 | `tags` | list[string] | `[]` | Annotation tags filter with AND semantics. |
 | `account_id` | string | — | Restrict to a single Plaid account. |
-| `category` | string | — | Restrict to one allocation category (case-insensitive). |
+| `category` | list[string] | `[]` | Restrict to allocation rows whose `category` equals one of the listed values (case-insensitive; OR semantics across repeated `?category=a&category=b`). NULL categories never match. |
 | `tag` | string | — | Restrict to one allocation tag (case-insensitive, singular). |
 | `include_pending` | bool | `false` | Include pending transactions when true. |
 | `view` | `canonical` \| `raw` | `canonical` | Canonical excludes suppressed-account rows; raw includes all rows. |
@@ -711,12 +716,20 @@ Returns the same response shape and supports the same filters/pagination as
 Split transactions are included when applicable, but only their uncategorized
 allocation rows appear.
 
+This endpoint **rejects** the `category` query parameter — passing
+`?category=<name>` returns HTTP 422 with the `unrecognized` /
+`valid_parameters` error shape, because "uncategorized" (`category IS NULL`)
+and a named category cannot both match the same allocation row.
+
 ### `GET /transactions/splits`
 
 Returns the same response shape and supports the same filters/pagination as
 `GET /transactions`, but includes only transactions with multiple allocations.
 
-For each qualifying transaction, **all** allocation rows are returned.
+For each qualifying transaction, **all** allocation rows are returned by
+default. When `?category=<name>` is supplied (repeatable; OR semantics),
+filtering is per allocation row — only the split's allocation rows whose
+category matches a requested value are returned.
 
 ### `PUT /transactions/{transaction_id}/allocations`
 

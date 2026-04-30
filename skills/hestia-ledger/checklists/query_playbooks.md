@@ -38,7 +38,13 @@ Reuse these values; do not create near-duplicates.
 
 ### 1) Sync intake and candidate detection
 
-1. `GET /transactions` with fixed window + `view=canonical`.
+1. `GET /transactions` with fixed window + `view=canonical`. To re-review
+   allocations already assigned to named categories (e.g. cleaning up
+   `dining` and `groceries` rules), pass repeated `?category=` params:
+   `GET /transactions?range=last_30_days&category=dining&category=groceries`
+   uses OR semantics across categories and returns only the matching
+   allocation rows — split transactions contribute only their matching
+   allocation rows. Do not post-filter categories client-side.
 2. Paginate to completion.
 3. Each row includes an `allocation` field (singular, list-view shape). Use
    `allocation.category`, `allocation.tags`, and `allocation.note` to screen
@@ -56,6 +62,12 @@ or re-review work). Use instead of — or after — playbook 1.
 Supported filters for `GET /transactions/uncategorized`:
 `start_date`, `end_date`, `range`, `account_id`, `pending`, `min_amount`,
 `max_amount`, `keyword`, `view`, `limit`, `offset`, `search_notes`, `tags`.
+
+`GET /transactions/uncategorized` does **not** accept named `category`
+filters — `?category=<name>` returns HTTP 422 because the queue means
+`allocation.category IS NULL`. To re-review allocations already assigned
+to one or more named categories, use `GET /transactions?category=...`
+(repeatable; OR semantics across categories) instead.
 
 1. `GET /transactions/uncategorized?range=last_30_days` — paginate to
    completion. Add `account_id=<id>` to scope to one account, `pending=true`

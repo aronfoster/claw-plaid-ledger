@@ -209,20 +209,25 @@ Use `GET /spend` with either:
 
 Optional narrowing filters (AND-combined with each other and with owner/tags):
 - `account_id` — restrict to one account (use `GET /accounts` to discover IDs)
-- `category` — restrict to one allocation category (case-insensitive;
-  use `GET /categories` for vocabulary)
+- `category` — restrict to one or more allocation categories
+  (case-insensitive; **repeatable**, OR semantics across categories). Single
+  value: `?category=groceries`. Multiple values:
+  `?category=groceries&category=dining`. Use `GET /categories` for vocabulary.
 - `tag` — restrict to one allocation tag (case-insensitive, singular;
   use `GET /tags` for vocabulary)
 
 Then run matching `GET /transactions` for representative evidence.
-`GET /transactions` accepts the same `range` shorthands, so the evidence
-query can use `range=last_month` to mirror the spend call without computing
-explicit dates. List results include `allocation` data directly (no
-drill-down required for initial evidence scanning).
-`GET /spend` sums allocation amounts. For split transactions filtered by
-category, only the matching allocation amount is summed — not the full
-transaction amount. This gives accurate per-category totals even when a
-single transaction is split across multiple categories.
+`GET /transactions` accepts the same `range` shorthands **and** the same
+repeated `category` filters, so the evidence query can use
+`range=last_month&category=groceries&category=dining` to mirror the spend
+call without computing explicit dates or filtering categories client-side.
+List results include `allocation` data directly (no drill-down required for
+initial evidence scanning).
+`GET /spend` sums allocation amounts. Category filtering is per allocation
+row, so for split transactions only the matching allocation amounts are
+summed — not the full transaction amount. This gives accurate per-category
+totals even when a single transaction is split across multiple categories,
+including when multiple categories are requested at once.
 
 `GET /spend` and `GET /spend/trends` responses include `allocation_count`
 (not `transaction_count`) — the count reflects allocation rows, not
@@ -246,7 +251,8 @@ Use `GET /spend/trends` when the question involves change over time
 - The current month is flagged `partial: true` — treat it as incomplete
   and avoid direct comparison against prior complete months.
 - Supports the same filters as `GET /spend`: `owner`, `account_id`,
-  `category`, `tag`, `tags`, `view`, `include_pending`.
+  `category` (repeatable; OR across categories), `tag`, `tags`, `view`,
+  `include_pending`.
 
 ### 5) Anomaly narrative workflow
 
@@ -301,8 +307,15 @@ A transaction split by an operator appears once per allocation in
    `"allocations": [...]` array.
 3. For spend rollups: `GET /spend?category=groceries` correctly sums only
    grocery allocation amounts — not the full transaction amount — so category
-   totals are accurate even for split transactions.
-4. Do not attempt to overwrite an operator-defined split unless explicitly
+   totals are accurate even for split transactions. To compare or combine
+   adjacent categories in one call, repeat the parameter:
+   `GET /spend?category=groceries&category=dining` (OR across categories).
+4. For list-shaped split review with category filters:
+   `GET /transactions/splits?category=groceries&category=dining` returns only
+   the matching allocation rows of split transactions — unrelated allocation
+   rows from the same transaction are not included. Do not post-filter
+   categories client-side.
+5. Do not attempt to overwrite an operator-defined split unless explicitly
    instructed. Flag unusual splits for operator review.
 
 ## Output contract

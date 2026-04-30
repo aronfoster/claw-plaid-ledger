@@ -61,6 +61,12 @@ Option B — range shorthand (interactive / quick queries):
    triage.
 
 Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
+`category` is repeatable on `GET /spend`, `GET /spend/trends`,
+`GET /transactions`, and `GET /transactions/splits`:
+`?category=groceries&category=dining` returns rows or sums for allocations
+whose category is groceries OR dining. Filtering is per allocation row, so
+split transactions contribute only the matching allocation rows. Do not
+post-filter categories client-side — let the server do it.
 
 ### 2) Owner-aware rollup
 
@@ -91,7 +97,8 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 1. `GET /accounts` to list all known accounts with labels.
 2. Identify the target `account_id` from the response.
 3. `GET /spend` with `account_id=<id>` and desired date window.
-4. Optionally narrow further with `category` or `tag` filters.
+4. Optionally narrow further with `category` (repeatable; OR across
+   categories) or `tag` filters.
 
 ### 7) Month-over-month trends
 
@@ -102,7 +109,8 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
    reflects allocation rows. For split transactions, one transaction contributes
    multiple allocation rows.
 4. To narrow the trend to a subset, add the same filters used in
-   `GET /spend`: `owner`, `account_id`, `category`, `tag`.
+   `GET /spend`: `owner`, `account_id`, `category` (repeatable, OR across
+   categories), `tag`.
 5. To validate a specific month's total, cross-check with
    `GET /spend?start_date=<YYYY-MM-01>&end_date=<YYYY-MM-last-day>`
    using matching filters — the numbers must agree.
@@ -117,7 +125,13 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 3. For spend rollups filtered by category: `GET /spend?category=groceries`
    correctly sums only the grocery allocation amounts — not full transaction
    amounts — so per-category totals are accurate even for split transactions.
-4. Do not overwrite an operator-defined split unless explicitly instructed.
+   For multiple categories, repeat the param:
+   `GET /spend?category=groceries&category=dining` (OR across categories).
+4. For a list-shaped view of split allocations filtered by category:
+   `GET /transactions/splits?category=groceries&category=dining`. Only the
+   matching allocation rows are returned — unrelated allocation rows of the
+   same transaction are excluded. Do not post-filter categories client-side.
+5. Do not overwrite an operator-defined split unless explicitly instructed.
    Flag unusual splits for operator review.
 
 ### 9) Uncategorized review
@@ -125,6 +139,11 @@ Optional: add `account_id`, `category`, or `tag` to narrow the aggregation.
 Supported filters: `start_date`, `end_date`, `range`, `account_id`,
 `pending`, `min_amount`, `max_amount`, `keyword`, `view`, `limit`,
 `offset`, `search_notes`, `tags`.
+
+`GET /transactions/uncategorized` is the dedicated workflow for allocations
+where `category IS NULL`; named `category` filters are **not** accepted —
+`?category=<name>` returns HTTP 422. Use `GET /transactions?category=<name>`
+when you need to filter by a named category instead.
 
 1. `GET /transactions/uncategorized?range=last_30_days`
    Narrow with `account_id` to audit a single account; add `pending=true`
@@ -145,7 +164,8 @@ Supported filters: `start_date`, `end_date`, `range`, `account_id`,
 
 Supported filters: `start_date`, `end_date`, `range`, `account_id`,
 `pending`, `min_amount`, `max_amount`, `keyword`, `view`, `limit`,
-`offset`, `search_notes`, `tags`.
+`offset`, `search_notes`, `tags`, `category` (repeatable; OR across
+categories — only matching allocation rows are returned).
 
 1. `GET /transactions/splits?range=last_30_days`
    Narrow with `account_id` to scope to one account; add `tags=needs-athena-review`
