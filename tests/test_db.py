@@ -13,6 +13,8 @@ from claw_plaid_ledger.db import (
     LedgerErrorQuery,
     LedgerErrorRow,
     NormalizedAccountRow,
+    SpendQuery,
+    SpendTrendsQuery,
     SyncStateRow,
     TransactionQuery,
     apply_account_precedence,
@@ -26,6 +28,8 @@ from claw_plaid_ledger.db import (
     normalize_account_for_db,
     normalize_transaction_for_db,
     query_ledger_errors,
+    query_spend,
+    query_spend_trends,
     query_transactions,
     replace_allocations,
     update_plaid_item_id,
@@ -1626,6 +1630,391 @@ def test_query_transactions_total_counts_allocation_rows(
     assert len(rows) == expected_alloc_count
     ids = {r["id"] for r in rows}
     assert ids == {"tx-split"}
+
+
+# ---------------------------------------------------------------------------
+# Multi-category filtering — DB layer (Sprint 29 / M26)
+# ---------------------------------------------------------------------------
+
+
+_NOW = "2024-01-01T00:00:00+00:00"
+
+
+def _seed_account(
+    conn: sqlite3.Connection, account_id: str = "acct_a"
+) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO accounts "
+        "(plaid_account_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (account_id, f"Account {account_id}", _NOW, _NOW),
+    )
+
+
+def _seed_transaction(
+    conn: sqlite3.Connection,
+    *,
+    tx_id: str,
+    amount: float,
+    posted_date: str,
+    account_id: str = "acct_a",
+) -> None:
+    _seed_account(conn, account_id)
+    conn.execute(
+        "INSERT INTO transactions "
+        "(plaid_transaction_id, plaid_account_id, amount, name, "
+        "pending, posted_date, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (tx_id, account_id, amount, tx_id, 0, posted_date, _NOW, _NOW),
+    )
+
+
+def _seed_allocation(
+    conn: sqlite3.Connection,
+    *,
+    tx_id: str,
+    amount: float,
+    category: str | None,
+) -> None:
+    conn.execute(
+        "INSERT INTO allocations "
+        "(plaid_transaction_id, amount, category, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (tx_id, amount, category, _NOW, _NOW),
+    )
+
+
+def _seed_split_fixture(conn: sqlite3.Connection) -> None:
+    """
+    Create a fixture with a split transaction and two single-allocation peers.
+
+    - tx-split-1: $100 split into groceries=$60 and dining=$40
+    - tx-single-groceries: $25 single allocation, category=groceries
+    - tx-single-utilities: $90 single allocation, category=utilities
+    - tx-uncategorized: $10 single allocation, category=NULL
+    """
+    _seed_transaction(
+        conn, tx_id="tx-split-1", amount=100.0, posted_date="2024-01-15"
+    )
+    _seed_allocation(
+        conn, tx_id="tx-split-1", amount=60.0, category="groceries"
+    )
+    _seed_allocation(conn, tx_id="tx-split-1", amount=40.0, category="dining")
+    _seed_transaction(
+        conn,
+        tx_id="tx-single-groceries",
+        amount=25.0,
+        posted_date="2024-01-20",
+    )
+    _seed_allocation(
+        conn, tx_id="tx-single-groceries", amount=25.0, category="groceries"
+    )
+    _seed_transaction(
+        conn,
+        tx_id="tx-single-utilities",
+        amount=90.0,
+        posted_date="2024-01-22",
+    )
+    _seed_allocation(
+        conn, tx_id="tx-single-utilities", amount=90.0, category="utilities"
+    )
+    _seed_transaction(
+        conn,
+        tx_id="tx-uncategorized",
+        amount=10.0,
+        posted_date="2024-01-25",
+    )
+    _seed_allocation(
+        conn, tx_id="tx-uncategorized", amount=10.0, category=None
+    )
+
+
+def test_query_transactions_single_category_returns_only_matching_alloc_row(
+    tmp_path: Path,
+) -> None:
+    """A single category filter returns only matching allocation rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        rows, total = query_transactions(
+            conn,
+            TransactionQuery(canonical_only=False, categories=("groceries",)),
+        )
+
+    expected_total = 2
+    assert total == expected_total
+    ids_and_amounts = sorted(
+        (str(r["id"]), float(r["allocation"]["amount"]))  # type: ignore[index]
+        for r in rows
+    )
+    assert ids_and_amounts == [
+        ("tx-single-groceries", 25.0),
+        ("tx-split-1", 60.0),
+    ]
+
+
+def test_query_transactions_multiple_categories_or_semantics(
+    tmp_path: Path,
+) -> None:
+    """Repeated categories return the union of matching allocation rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        rows, total = query_transactions(
+            conn,
+            TransactionQuery(
+                canonical_only=False,
+                categories=("groceries", "dining"),
+            ),
+        )
+
+    expected_total = 3
+    assert total == expected_total
+    rows_by_alloc = sorted(
+        (str(r["id"]), float(r["allocation"]["amount"]))  # type: ignore[index]
+        for r in rows
+    )
+    assert rows_by_alloc == [
+        ("tx-single-groceries", 25.0),
+        ("tx-split-1", 40.0),
+        ("tx-split-1", 60.0),
+    ]
+
+
+def test_query_transactions_unknown_category_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """A category that no allocation has returns zero rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        rows, total = query_transactions(
+            conn,
+            TransactionQuery(
+                canonical_only=False, categories=("transportation",)
+            ),
+        )
+
+    assert total == 0
+    assert rows == []
+
+
+def test_query_transactions_category_excludes_uncategorized_rows(
+    tmp_path: Path,
+) -> None:
+    """A named-category filter never matches NULL-category allocations."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        rows, total = query_transactions(
+            conn,
+            TransactionQuery(
+                canonical_only=False,
+                categories=("groceries", "dining", "utilities"),
+            ),
+        )
+
+    expected_total = 4
+    assert total == expected_total
+    assert len(rows) == expected_total
+    assert "tx-uncategorized" not in {str(r["id"]) for r in rows}
+
+
+def test_query_transactions_category_filter_is_case_insensitive(
+    tmp_path: Path,
+) -> None:
+    """Category matching ignores case on both stored and requested values."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        rows, total = query_transactions(
+            conn,
+            TransactionQuery(canonical_only=False, categories=("GROCERIES",)),
+        )
+
+    expected_total = 2
+    assert total == expected_total
+    assert len(rows) == expected_total
+
+
+def test_query_spend_single_category_matches_legacy_behavior(
+    tmp_path: Path,
+) -> None:
+    """One requested category sums only that category's allocations."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        total_spend, count = query_spend(
+            conn,
+            SpendQuery(
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                canonical_only=False,
+                categories=("groceries",),
+            ),
+        )
+
+    expected_count = 2
+    assert count == expected_count
+    assert total_spend == pytest.approx(85.0)
+
+
+def test_query_spend_multiple_categories_or_semantics(
+    tmp_path: Path,
+) -> None:
+    """Multiple categories sum the union of matching allocation rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        total_spend, count = query_spend(
+            conn,
+            SpendQuery(
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                canonical_only=False,
+                categories=("groceries", "dining"),
+            ),
+        )
+
+    expected_count = 3
+    assert count == expected_count
+    assert total_spend == pytest.approx(125.0)
+
+
+def test_query_spend_no_categories_returns_all_allocations(
+    tmp_path: Path,
+) -> None:
+    """An empty categories tuple does not constrain the query."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        total_spend, count = query_spend(
+            conn,
+            SpendQuery(
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                canonical_only=False,
+                categories=(),
+            ),
+        )
+
+    expected_count = 5
+    assert count == expected_count
+    assert total_spend == pytest.approx(225.0)
+
+
+def test_query_spend_trends_multi_category_groups_only_matching_allocs(
+    tmp_path: Path,
+) -> None:
+    """Monthly trend buckets sum only matching allocation rows."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        # Add an entry from December for zero-fill behavior.
+        _seed_transaction(
+            conn,
+            tx_id="tx-dec-groceries",
+            amount=15.0,
+            posted_date="2023-12-10",
+        )
+        _seed_allocation(
+            conn,
+            tx_id="tx-dec-groceries",
+            amount=15.0,
+            category="groceries",
+        )
+
+        results = query_spend_trends(
+            conn,
+            SpendTrendsQuery(
+                months=2,
+                canonical_only=False,
+                categories=("groceries", "dining"),
+            ),
+            today=datetime.date(2024, 1, 31),
+        )
+
+    expected_buckets = 2
+    assert len(results) == expected_buckets
+    by_month = {str(row["month"]): row for row in results}
+    assert by_month["2023-12"]["total_spend"] == pytest.approx(15.0)
+    assert by_month["2023-12"]["allocation_count"] == 1
+    assert by_month["2024-01"]["total_spend"] == pytest.approx(125.0)
+    expected_jan_count = 3
+    assert by_month["2024-01"]["allocation_count"] == expected_jan_count
+
+
+def test_query_spend_trends_zero_fill_preserved_with_categories(
+    tmp_path: Path,
+) -> None:
+    """Months with no matching allocations still appear as zero buckets."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        results = query_spend_trends(
+            conn,
+            SpendTrendsQuery(
+                months=3,
+                canonical_only=False,
+                categories=("groceries",),
+            ),
+            today=datetime.date(2024, 1, 31),
+        )
+
+    expected_buckets = 3
+    assert len(results) == expected_buckets
+    by_month = {str(row["month"]): row for row in results}
+    assert by_month["2023-11"]["total_spend"] == pytest.approx(0.0)
+    assert by_month["2023-11"]["allocation_count"] == 0
+    assert by_month["2023-12"]["total_spend"] == pytest.approx(0.0)
+    assert by_month["2023-12"]["allocation_count"] == 0
+    assert by_month["2024-01"]["total_spend"] == pytest.approx(85.0)
+    expected_jan_count = 2
+    assert by_month["2024-01"]["allocation_count"] == expected_jan_count
+
+
+def test_query_spend_single_category_regression_matches_prior_scalar(
+    tmp_path: Path,
+) -> None:
+    """A 1-tuple category produces the same result as the prior scalar API."""
+    db_path = tmp_path / "ledger.db"
+    initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        _seed_split_fixture(conn)
+        # Equivalent to the pre-Sprint-29 scalar `category="dining"` call:
+        # only the dining portion of the split transaction should be summed.
+        total_spend, count = query_spend(
+            conn,
+            SpendQuery(
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                canonical_only=False,
+                categories=("dining",),
+            ),
+        )
+
+    assert count == 1
+    assert total_spend == pytest.approx(40.0)
 
 
 # ---------------------------------------------------------------------------
