@@ -177,14 +177,14 @@ Notes:
 |---|---|---|
 | `GET` | `/health` | Liveness check; no auth required |
 | `POST` | `/webhooks/plaid` | *Deprecated (M25).* Receives Plaid webhook events; disabled by default (`CLAW_WEBHOOK_ENABLED=false`); returns 404 unless explicitly enabled |
-| `GET` | `/transactions` | Paginated, filterable transaction list; includes `allocation` per row (never null; `category`, `tags`, `note` within it may be null); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; defaults to canonical view |
-| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category`, `tag`, `include_pending`, and `view` filters; response uses `allocation_count` |
+| `GET` | `/transactions` | Paginated, filterable transaction list; includes `allocation` per row (never null; `category`, `tags`, `note` within it may be null); accepts `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) or explicit `start_date`/`end_date`; supports repeated `category` filters (allocation-row OR semantics); defaults to canonical view |
+| `GET` | `/spend` | Aggregate spend total/count for a date window or named `range` shorthand (`last_month`, `this_month`, `last_30_days`, `last_7_days`) with optional `owner`, `tags`, `account_id`, `category` (repeatable; OR semantics across categories), `tag`, `include_pending`, and `view` filters; response uses `allocation_count` |
 | `GET` | `/categories` | Distinct sorted category values from all allocations |
 | `GET` | `/tags` | Distinct sorted tag values from all allocations |
 | `GET` | `/accounts` | All synced accounts with human-readable labels (`label`, `description`) from `account_labels`; use to discover account IDs |
 | `PUT` | `/accounts/{id}` | Upsert a label/description for an account; returns full account record; 404 for unknown IDs |
-| `GET` | `/transactions/uncategorized` | Pre-filtered transaction queue where `allocation.category` is null; supports the same filters/pagination as `GET /transactions` |
-| `GET` | `/transactions/splits` | Pre-filtered transaction queue for split transactions (all allocation rows for transactions with allocation count > 1); supports the same filters/pagination as `GET /transactions` |
+| `GET` | `/transactions/uncategorized` | Pre-filtered transaction queue where `allocation.category` is null; supports the same filters/pagination as `GET /transactions` **except** named `category` filters, which return HTTP 422 |
+| `GET` | `/transactions/splits` | Pre-filtered transaction queue for split transactions (all allocation rows for transactions with allocation count > 1); supports the same filters/pagination as `GET /transactions`, including repeated `category` filters (only matching allocation rows are returned) |
 | `GET` | `/transactions/{id}` | Single transaction detail; returns `"allocations": [...]` array (all allocations, ordered by `id`; single-element for unsplit transactions) |
 | `PUT` | `/transactions/{id}/allocations` | Atomically replace all allocations for a transaction; amounts auto-corrected within $1.00; returns 422 if off by more; primary write path for all allocation edits |
 | `POST` | `/transactions/allocations/batch` | Batch update allocation `category`/`tags`/`note` for single-allocation transactions; response is `{succeeded, failed}` and omitted fields are cleared (replace semantics) |

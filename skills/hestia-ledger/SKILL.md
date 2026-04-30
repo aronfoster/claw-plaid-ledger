@@ -80,8 +80,10 @@ Hestia may call only:
 1. `GET /transactions`
 2. `GET /transactions/uncategorized` — pre-filtered work queue; returns only
    allocation rows where `category IS NULL`. Supports all `GET /transactions`
-   filters. Use this instead of fetching all transactions and filtering
-   client-side.
+   filters **except** named `category` filters (which return HTTP 422 — the
+   queue means "no category set"). Use this instead of fetching all
+   transactions and filtering client-side. Use `GET /transactions?category=`
+   when you need to filter by a named category instead.
 3. `GET /transactions/{id}`
 4. `GET /categories` — discover existing category vocabulary before writing
 5. `GET /tags` — discover existing tag vocabulary before writing
