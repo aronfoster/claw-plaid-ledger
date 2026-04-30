@@ -66,8 +66,8 @@ class SpendListQuery(BaseModel):
     """
     Scalar query parameters for GET /spend.
 
-    List-typed params (tags) and bool params (include_pending) are declared
-    separately on the endpoint to satisfy FastAPI's multi-value and
+    List-typed params (tags, category) and bool params (include_pending) are
+    declared separately on the endpoint to satisfy FastAPI's multi-value and
     FBT001/FBT002 constraints.  ``start_date`` and ``end_date`` are optional
     because they may be derived from the ``range`` shorthand parameter.
     """
@@ -80,7 +80,6 @@ class SpendListQuery(BaseModel):
     include_pending: bool | None = None
     view: Literal["canonical", "raw"] = "canonical"
     account_id: str | None = None
-    category: str | None = None
     tag: str | None = None
 
 
@@ -94,6 +93,7 @@ class SpendListQuery(BaseModel):
 def get_spend(
     params: Annotated[SpendListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    category: Annotated[list[str] | None, Query()] = None,
     date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
     """
@@ -114,11 +114,9 @@ def get_spend(
         date_range, params.start_date, params.end_date
     )
     resolved_tags: list[str] = tags or []
+    resolved_categories: list[str] = category or []
     include_pending = params.include_pending is True
     config = load_config()
-    categories: tuple[str, ...] = (
-        (params.category,) if params.category is not None else ()
-    )
     spend_query = SpendQuery(
         start_date=resolved_start.isoformat(),
         end_date=resolved_end.isoformat(),
@@ -127,11 +125,14 @@ def get_spend(
         include_pending=include_pending,
         canonical_only=params.view == "canonical",
         account_id=params.account_id,
-        categories=categories,
+        categories=tuple(resolved_categories),
         tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:
         total_spend, allocation_count = query_spend(connection, spend_query)
+    legacy_category = (
+        resolved_categories[0] if len(resolved_categories) == 1 else None
+    )
     return {
         "start_date": resolved_start.isoformat(),
         "end_date": resolved_end.isoformat(),
@@ -142,7 +143,8 @@ def get_spend(
             "owner": params.owner,
             "tags": resolved_tags,
             "account_id": params.account_id,
-            "category": params.category,
+            "category": legacy_category,
+            "categories": resolved_categories,
             "tag": params.tag,
         },
     }
@@ -158,7 +160,6 @@ class SpendTrendsListQuery(BaseModel):
     include_pending: bool | None = None
     view: Literal["canonical", "raw"] = "canonical"
     account_id: str | None = None
-    category: str | None = None
     tag: str | None = None
 
 
@@ -172,6 +173,7 @@ class SpendTrendsListQuery(BaseModel):
 def get_spend_trends(
     params: Annotated[SpendTrendsListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    category: Annotated[list[str] | None, Query()] = None,
 ) -> list[dict[str, object]]:
     """
     Return spend aggregated by calendar month for a lookback window.
@@ -186,11 +188,9 @@ def get_spend_trends(
     ``include_pending``) for direct comparability.
     """
     resolved_tags: list[str] = tags or []
+    resolved_categories: list[str] = category or []
     include_pending = params.include_pending is True
     config = load_config()
-    categories: tuple[str, ...] = (
-        (params.category,) if params.category is not None else ()
-    )
     trends_query = SpendTrendsQuery(
         months=params.months,
         owner=params.owner,
@@ -198,7 +198,7 @@ def get_spend_trends(
         include_pending=include_pending,
         canonical_only=params.view == "canonical",
         account_id=params.account_id,
-        categories=categories,
+        categories=tuple(resolved_categories),
         tag=params.tag,
     )
     with sqlite3.connect(config.db_path) as connection:

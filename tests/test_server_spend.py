@@ -956,6 +956,167 @@ class TestGetSpendEnrichedFilters:
 
 
 # ---------------------------------------------------------------------------
+# Tests for GET /spend — repeated `category` filtering (M26)
+# ---------------------------------------------------------------------------
+
+
+_SPEND_JAN_FOOD_OR_TRANSPORT_TOTAL = 350.0
+_SPEND_JAN_FOOD_OR_TRANSPORT_COUNT = 3
+
+
+class TestGetSpendMultiCategory:
+    """GET /spend supports repeated ``category`` (OR semantics)."""
+
+    def _setup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        db_path = tmp_path / "db.sqlite"
+        _seed_spend_data(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+    def test_single_category_matches_existing_behavior(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """One ``category`` value behaves like the previous scalar filter."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("category", "food"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_CATEGORY_FOOD_TOTAL
+        )
+        assert body["allocation_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+        filters = cast("dict[str, object]", body["filters"])
+        assert filters["category"] == "food"
+        assert filters["categories"] == ["food"]
+
+    def test_two_categories_or_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Two ``category`` values OR the matching allocation rows."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("category", "food"),
+                ("category", "transport"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_FOOD_OR_TRANSPORT_TOTAL
+        )
+        assert body["allocation_count"] == _SPEND_JAN_FOOD_OR_TRANSPORT_COUNT
+        filters = cast("dict[str, object]", body["filters"])
+        assert filters["categories"] == ["food", "transport"]
+        # Single ``category`` legacy field is None when more than one
+        # category is requested, since the value is no longer scalar.
+        assert filters["category"] is None
+
+    def test_two_categories_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Mixed-case ``category`` values still match stored lowercase."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("category", "Food"),
+                ("category", "TRANSPORT"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_FOOD_OR_TRANSPORT_TOTAL
+        )
+        assert body["allocation_count"] == _SPEND_JAN_FOOD_OR_TRANSPORT_COUNT
+
+    def test_categories_excludes_uncategorized(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Named-category filters never match NULL allocation categories."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("category", "food"),
+                ("category", "transport"),
+                ("include_pending", "true"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        # tx_ap (uncategorized pending) MUST NOT appear even though
+        # include_pending=true; it has no category, so a named-category
+        # filter excludes it.
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_FOOD_OR_TRANSPORT_TOTAL
+        )
+        assert body["allocation_count"] == _SPEND_JAN_FOOD_OR_TRANSPORT_COUNT
+
+    def test_categories_and_owner_combine_with_and(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """``owner`` AND-combines with the category OR group."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params=[
+                ("start_date", "2025-01-01"),
+                ("end_date", "2025-01-31"),
+                ("category", "food"),
+                ("category", "transport"),
+                ("owner", "alice"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        # Alice has food allocations only (tx_a1=100, tx_a2=50). Even
+        # though transport is in the OR group, Bob's tx_b1 is excluded
+        # by the owner=alice filter.
+        assert body["total_spend"] == pytest.approx(
+            _SPEND_JAN_CATEGORY_FOOD_TOTAL
+        )
+        assert body["allocation_count"] == _SPEND_JAN_CATEGORY_FOOD_COUNT
+
+    def test_no_categories_filters_categories_is_empty_list(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Response always echoes ``filters.categories`` as a list."""
+        self._setup(monkeypatch, tmp_path)
+        response = client.get(
+            "/spend",
+            params={"start_date": "2025-01-01", "end_date": "2025-01-31"},
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        filters = cast("dict[str, object]", response.json()["filters"])
+        assert filters["categories"] == []
+        assert filters["category"] is None
+
+
+# ---------------------------------------------------------------------------
 # Tests for GET /spend — allocation amount is used, not transaction amount
 # ---------------------------------------------------------------------------
 
