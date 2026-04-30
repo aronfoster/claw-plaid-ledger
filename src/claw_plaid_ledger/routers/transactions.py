@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_TRANSACTIONS_ALLOWED_PARAMS = frozenset(
+_TRANSACTIONS_BASE_ALLOWED_PARAMS = frozenset(
     {
         "start_date",
         "end_date",
@@ -48,6 +48,10 @@ _TRANSACTIONS_ALLOWED_PARAMS = frozenset(
         "range",
     }
 )
+
+_TRANSACTIONS_ALLOWED_PARAMS = _TRANSACTIONS_BASE_ALLOWED_PARAMS | {"category"}
+
+_UNCATEGORIZED_ALLOWED_PARAMS = _TRANSACTIONS_BASE_ALLOWED_PARAMS
 
 
 class TransactionListQuery(BaseModel):
@@ -78,13 +82,16 @@ class TransactionListQuery(BaseModel):
 def list_transactions(
     params: Annotated[TransactionListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    category: Annotated[list[str] | None, Query()] = None,
     date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
     """List transactions with optional filtering and pagination."""
     return _list_transactions_response(
         params=params,
         tags=tags,
+        categories=category,
         date_range=date_range,
+        mode="all",
     )
 
 
@@ -92,7 +99,7 @@ def list_transactions(
     "/transactions/uncategorized",
     dependencies=[
         Depends(require_bearer_token),
-        Depends(_strict_params(_TRANSACTIONS_ALLOWED_PARAMS)),
+        Depends(_strict_params(_UNCATEGORIZED_ALLOWED_PARAMS)),
     ],
 )
 def list_uncategorized_transactions(
@@ -104,8 +111,9 @@ def list_uncategorized_transactions(
     return _list_transactions_response(
         params=params,
         tags=tags,
+        categories=None,
         date_range=date_range,
-        uncategorized_only=True,
+        mode="uncategorized",
     )
 
 
@@ -119,14 +127,16 @@ def list_uncategorized_transactions(
 def list_split_transactions(
     params: Annotated[TransactionListQuery, Depends()],
     tags: Annotated[list[str] | None, Query()] = None,
+    category: Annotated[list[str] | None, Query()] = None,
     date_range: Annotated[_SpendRange | None, Query(alias="range")] = None,
 ) -> dict[str, object]:
     """List all allocation rows for split transactions only."""
     return _list_transactions_response(
         params=params,
         tags=tags,
+        categories=category,
         date_range=date_range,
-        splits_only=True,
+        mode="splits",
     )
 
 
@@ -134,9 +144,9 @@ def _list_transactions_response(
     *,
     params: TransactionListQuery,
     tags: list[str] | None,
+    categories: list[str] | None,
     date_range: _SpendRange | None,
-    uncategorized_only: bool = False,
-    splits_only: bool = False,
+    mode: Literal["all", "uncategorized", "splits"],
 ) -> dict[str, object]:
     """
     List transactions with optional filtering and pagination.
@@ -151,6 +161,9 @@ def _list_transactions_response(
     when both are provided together.
     """
     resolved_tags: tuple[str, ...] = tuple(tags) if tags else ()
+    resolved_categories: tuple[str, ...] = (
+        tuple(categories) if categories else ()
+    )
     start_date = params.start_date
     end_date = params.end_date
     if date_range is not None:
@@ -174,9 +187,10 @@ def _list_transactions_response(
         limit=params.limit,
         offset=params.offset,
         tags=resolved_tags,
+        categories=resolved_categories,
         search_notes=params.search_notes is True,
-        uncategorized_only=uncategorized_only,
-        splits_only=splits_only,
+        uncategorized_only=mode == "uncategorized",
+        splits_only=mode == "splits",
     )
     with sqlite3.connect(config.db_path) as connection:
         rows, total = query_transactions(connection, query)
