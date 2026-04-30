@@ -425,6 +425,7 @@ class TransactionQuery:
     limit: int = 100
     offset: int = 0
     tags: tuple[str, ...] = ()
+    categories: tuple[str, ...] = ()
     search_notes: bool = False
     uncategorized_only: bool = False
     splits_only: bool = False
@@ -471,6 +472,26 @@ def _apply_splits_filter(
             "GROUP BY plaid_transaction_id HAVING COUNT(*) > 1"
             ")"
         )
+
+
+def _apply_category_filters(
+    categories: tuple[str, ...],
+    where_parts: list[str],
+    params: list[object],
+) -> None:
+    """
+    Append a single OR-joined category predicate (case-insensitive).
+
+    Matches per allocation row against ``alloc.category``. NULL categories
+    never match a named-category filter. An empty tuple is a no-op.
+    """
+    if not categories:
+        return
+    or_parts = " OR ".join(
+        ["LOWER(alloc.category) = LOWER(?)"] * len(categories)
+    )
+    where_parts.append("(" + or_parts + ")")
+    params.extend(categories)
 
 
 def _allocation_from_joined_row(
@@ -561,6 +582,7 @@ def query_transactions(
         where_parts.append("a.canonical_account_id IS NULL")
 
     _apply_tag_filters(query.tags, where_parts, params)
+    _apply_category_filters(query.categories, where_parts, params)
     _apply_uncategorized_filter(
         uncategorized_only=query.uncategorized_only,
         where_parts=where_parts,
@@ -656,7 +678,7 @@ class SpendQuery:
     include_pending: bool = False
     canonical_only: bool = True
     account_id: str | None = None
-    category: str | None = None
+    categories: tuple[str, ...] = ()
     tag: str | None = None
 
 
@@ -704,9 +726,7 @@ def query_spend(
         where_parts.append("t.plaid_account_id = ?")
         params.append(query.account_id)
 
-    if query.category is not None:
-        where_parts.append("LOWER(alloc.category) = LOWER(?)")
-        params.append(query.category)
+    _apply_category_filters(query.categories, where_parts, params)
 
     if query.tag is not None:
         where_parts.append(
@@ -750,7 +770,7 @@ class SpendTrendsQuery:
     include_pending: bool = False
     canonical_only: bool = True
     account_id: str | None = None
-    category: str | None = None
+    categories: tuple[str, ...] = ()
     tag: str | None = None
 
 
@@ -812,9 +832,7 @@ def query_spend_trends(
         where_parts.append("t.plaid_account_id = ?")
         params.append(query.account_id)
 
-    if query.category is not None:
-        where_parts.append("LOWER(alloc.category) = LOWER(?)")
-        params.append(query.category)
+    _apply_category_filters(query.categories, where_parts, params)
 
     if query.tag is not None:
         where_parts.append(
