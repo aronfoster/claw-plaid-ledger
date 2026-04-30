@@ -112,7 +112,7 @@ Use generic, non-private fixture values only:
 
 ---
 
-## Task 2: Add repeated `category` filtering to transaction read endpoints
+## Task 2: Add repeated `category` filtering to transaction read endpoints ✅ DONE
 
 ### What
 

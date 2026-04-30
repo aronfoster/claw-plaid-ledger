@@ -1479,6 +1479,188 @@ class TestListSplitTransactionsEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Tests for repeated `category` query parameter (Sprint 29 Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestListTransactionsCategoryFilter:
+    """Tests for repeated `category` filter on GET /transactions."""
+
+    _FOOD_ROW_TOTAL = 3
+    _UNION_ROW_TOTAL = 4
+
+    def test_single_category_returns_only_matching_allocations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """One category filter returns only matching allocation rows."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params=[("category", "food")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._FOOD_ROW_TOTAL
+        ids = sorted(row["id"] for row in body["transactions"])
+        assert ids == [
+            "tx_cat_single",
+            "tx_split_categorized",
+            "tx_split_mixed",
+        ]
+        assert all(
+            row["allocation"]["category"] == "food"
+            for row in body["transactions"]
+        )
+
+    def test_multiple_categories_use_or_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Repeated category params return the union of matching rows."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params=[("category", "food"), ("category", "transport")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._UNION_ROW_TOTAL
+        categories = sorted(
+            row["allocation"]["category"] for row in body["transactions"]
+        )
+        assert categories == ["food", "food", "food", "transport"]
+
+    def test_category_is_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Category match is case-insensitive."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params=[("category", "FOOD")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._FOOD_ROW_TOTAL
+
+    def test_category_excludes_uncategorized_allocations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Named category filter must not match NULL-category allocations."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions",
+            params=[("category", "food")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        body = response.json()
+        for row in body["transactions"]:
+            assert row["allocation"]["category"] is not None
+
+
+class TestListSplitTransactionsCategoryFilter:
+    """Tests for repeated `category` filter on GET /transactions/splits."""
+
+    _FOOD_SPLIT_ROW_TOTAL = 2
+    _UNION_SPLIT_ROW_TOTAL = 3
+
+    def test_single_category_returns_only_matching_split_allocations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Split endpoint returns only matching allocation rows."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/splits",
+            params=[("category", "food")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._FOOD_SPLIT_ROW_TOTAL
+        ids = sorted(row["id"] for row in body["transactions"])
+        assert ids == ["tx_split_categorized", "tx_split_mixed"]
+        assert all(
+            row["allocation"]["category"] == "food"
+            for row in body["transactions"]
+        )
+
+    def test_multiple_categories_use_or_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Repeated category params on /splits return matching rows only."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/splits",
+            params=[("category", "food"), ("category", "transport")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.OK
+        body = response.json()
+        assert body["total"] == self._UNION_SPLIT_ROW_TOTAL
+        categories = sorted(
+            row["allocation"]["category"] for row in body["transactions"]
+        )
+        assert categories == ["food", "food", "transport"]
+
+
+class TestUncategorizedRejectsCategoryFilter:
+    """Tests that GET /transactions/uncategorized rejects category."""
+
+    def test_category_param_returns_422(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Passing category to /transactions/uncategorized returns 422."""
+        db_path = tmp_path / "db.sqlite"
+        _seed_uncategorized_transactions(db_path)
+        monkeypatch.setenv("CLAW_PLAID_LEDGER_DB_PATH", str(db_path))
+        monkeypatch.setenv("CLAW_API_SECRET", _TOKEN)
+
+        response = client.get(
+            "/transactions/uncategorized",
+            params=[("category", "groceries")],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+        assert response.status_code == http.HTTPStatus.UNPROCESSABLE_ENTITY
+        detail = response.json()["detail"]
+        assert "unrecognized" in detail
+        assert "valid_parameters" in detail
+        assert "category" in detail["unrecognized"]
+
+
+# ---------------------------------------------------------------------------
 # Tests for GET /transactions — strict query parameter enforcement (BUG-014)
 # ---------------------------------------------------------------------------
 
