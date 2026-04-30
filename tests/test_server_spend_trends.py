@@ -489,6 +489,76 @@ class TestGetSpendTrendsEndpoint:
             )
             assert buckets["2026-02"]["allocation_count"] == 1
 
+    def test_filter_repeated_category_or_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Repeated ``category`` query params union matching allocations."""
+        self._setup(monkeypatch, tmp_path)
+        # Add a second categorized allocation for OR coverage:
+        # tx_t6 was uncategorized; relabel it as 'coffee' for this test.
+        db_path = tmp_path / "db.sqlite"
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE allocations SET category = ? "
+                "WHERE plaid_transaction_id = ?",
+                ("coffee", "tx_t6"),
+            )
+            connection.commit()
+
+        response = client.get(
+            "/spend/trends",
+            params=[
+                ("category", "Software"),
+                ("category", "coffee"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        buckets = {b["month"]: b for b in response.json()}
+        # Feb-2026: tx_t4 (Software, 80) only
+        assert buckets["2026-02"]["total_spend"] == pytest.approx(80.0)
+        assert buckets["2026-02"]["allocation_count"] == 1
+        # Mar-2026: tx_t6 (coffee, 50) only
+        assert buckets["2026-03"]["total_spend"] == pytest.approx(50.0)
+        assert buckets["2026-03"]["allocation_count"] == 1
+        # Other months have no matching named-category allocations
+        assert buckets["2025-12"]["total_spend"] == 0.0
+        assert buckets["2025-12"]["allocation_count"] == 0
+        assert buckets["2026-01"]["total_spend"] == 0.0
+        assert buckets["2026-01"]["allocation_count"] == 0
+
+    def test_filter_repeated_category_and_owner_and_semantics(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """Category OR group ANDs with non-category filters like ``owner``."""
+        self._setup(monkeypatch, tmp_path)
+        db_path = tmp_path / "db.sqlite"
+        with sqlite3.connect(db_path) as connection:
+            # Make tx_t5 (acct_bob) categorized as 'transit' so an
+            # OR-group on Software+transit must still respect owner=alice.
+            connection.execute(
+                "UPDATE allocations SET category = ? "
+                "WHERE plaid_transaction_id = ?",
+                ("transit", "tx_t5"),
+            )
+            connection.commit()
+
+        response = client.get(
+            "/spend/trends",
+            params=[
+                ("category", "Software"),
+                ("category", "transit"),
+                ("owner", "alice"),
+            ],
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+        assert response.status_code == http.HTTPStatus.OK
+        buckets = {b["month"]: b for b in response.json()}
+        # tx_t4 (Software, alice, 80) matches; tx_t5 (transit, bob, 300)
+        # is excluded by owner=alice.
+        assert buckets["2026-02"]["total_spend"] == pytest.approx(80.0)
+        assert buckets["2026-02"]["allocation_count"] == 1
+
     def test_filter_tag_case_insensitive(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
     ) -> None:

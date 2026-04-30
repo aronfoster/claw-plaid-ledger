@@ -162,7 +162,7 @@ category filters on the dedicated uncategorized queue.
 
 ---
 
-## Task 3: Add repeated `category` filtering to spend endpoints
+## Task 3: Add repeated `category` filtering to spend endpoints ✅ DONE
 
 ### What
 
