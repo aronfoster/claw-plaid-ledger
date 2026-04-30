@@ -2,45 +2,6 @@
 
 ## Upcoming Milestones
 
-### M26 — Multi-category Filtering
-
-**Goal:** Let agents and operators narrow category-aware read queries to one or
-more allocation categories, so household spend questions can distinguish exact
-combinations of categorized activity without extra client-side filtering.
-
-**Rationale:** The ledger's budgeting model is allocation-first. Category
-filters should follow that same mental model: every returned row should be an
-allocation that matches the requested category criteria. This keeps split
-transactions understandable and prevents unrelated portions of a transaction
-from appearing just because another allocation matched.
-
-#### Scope
-
-- Add category filtering consistently across all category-aware read surfaces.
-- Preserve existing single-category query behavior.
-- Support multiple requested categories using OR semantics.
-- Apply filtering per allocation: if part of a split transaction does not match
-  the requested categories, that allocation is not returned.
-- Keep uncategorized allocations excluded from category-filtered results unless
-  the caller is using an explicitly uncategorized workflow.
-- Update user-facing API documentation and agent skill guidance so Hestia and
-  Athena understand when and how to use multi-category filters.
-
-#### Acceptance criteria
-
-- A caller can ask for one category and receives the same kind of results as
-  before.
-- A caller can ask for multiple categories and receives only allocations whose
-  category matches one of the requested categories.
-- Split transactions never cause unrelated allocations to appear in filtered
-  results.
-- Category-aware summaries and trends use the same filtering rules as
-  transaction-style reads.
-- Documentation explains the user-visible behavior without requiring agents to
-  do their own post-filtering.
-
----
-
 ### M27 — Plaid Required Attestations (due 2026-09-07)
 
 **Goal:** Complete all eleven Plaid compliance attestations before the
@@ -608,6 +569,37 @@ and Hestia can update multiple single-allocation transactions in one request:
   with a directive to use `PUT /transactions/{id}/allocations`.
 - **Skill bundles updated** — both Hestia and Athena skills now document
   uncategorized/split queue workflows and batch update usage.
+
+### M26 — Multi-category Filtering (Sprint 29)
+
+Sprint 29 is complete. Allocation-aware reads now accept repeated `category`
+query params with consistent semantics across every category-aware surface:
+
+- **Repeated `category` query params** — `GET /transactions`,
+  `GET /transactions/splits`, `GET /spend`, and `GET /spend/trends` all accept
+  one or more `category` values via repeated query params
+  (`?category=groceries&category=dining`). A single value preserves the
+  previous single-category behavior; multiple values use **OR semantics**
+  across the requested categories.
+- **Allocation-row filtering** — category predicates match `alloc.category`
+  case-insensitively, so split transactions only return or count the matching
+  allocation rows. Unrelated allocations from the same transaction are never
+  leaked into filtered results, and `total` / `allocation_count` reflect only
+  matching allocation rows.
+- **Uncategorized exclusion** — named category filters implicitly exclude
+  `NULL` categories. `GET /transactions/uncategorized` rejects `category` with
+  HTTP 422 (`unrecognized` / `valid_parameters`) since it means
+  `allocation.category IS NULL` and cannot also match named categories.
+- **Spend/trend parity** — `GET /spend` and `GET /spend/trends` apply the
+  same allocation-row OR predicate before aggregation; trend monthly buckets
+  preserve zero-fill behavior. Other filters (`range`, dates, `account_id`,
+  `owner`, `tag`, `tags`, `view`, `include_pending`, `months`) continue to
+  combine with the category group using AND semantics.
+- **Skill and doc updates** — README, RUNBOOK, ARCHITECTURE, and both
+  `skills/hestia-ledger/` and `skills/athena-ledger/` bundles document
+  repeated-category usage with copy-ready `ledger-api` examples; guidance
+  that previously instructed agents to post-filter categories client-side has
+  been removed.
 
 
 ---
