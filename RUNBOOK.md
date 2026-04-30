@@ -225,7 +225,10 @@ use `jq` — see the note below).
         "id": "hestia",
         "skills": [
           "hestia-ledger"
-        ]
+        ],
+        "tools": {
+          "allow": ["exec"]
+        }
       }
     ]
   },
@@ -275,7 +278,8 @@ literal string.
 >       apiKey: {source:"env",provider:"default",id:"CLAW_API_SECRET"},
 >       env: {CLAW_LEDGER_URL:"http://127.0.0.1:8000"}} |
 >     (.agents.list[] | select(.id == "main")).skills = ["athena-ledger"] |
->     (.agents.list[] | select(.id == "hestia")).skills = ["hestia-ledger"]' \
+>     (.agents.list[] | select(.id == "hestia")).skills = ["hestia-ledger"] |
+>     (.agents.list[] | select(.id == "hestia")).tools = {"allow":["exec"]}' \
 >    ~/.openclaw/openclaw.json > /tmp/openclaw.json \
 >    && mv /tmp/openclaw.json ~/.openclaw/openclaw.json
 > ```
@@ -2711,3 +2715,23 @@ should execute `ledger-api /health` with no approval prompts and return:
 ```json
 {"status":"ok"}
 ```
+
+## 24. Hestia "Tool exec not found" — two-layer exec security
+
+If Hestia reports `Tool exec not found` on `ledger-api` calls after a gateway
+update or config change, the fix is in `openclaw.json`.
+
+**How exec security works (two layers):**
+
+1. **Tool policy** (`agents.list[hestia].tools.allow`): must contain `"exec"` for the agent to invoke the exec tool at all. Secondary agents do not get exec by default.
+2. **Exec-approvals** (`~/.openclaw/exec-approvals.json`): restricts which binaries actually run. Hestia's allowlist has `security: "allowlist"` — only `/usr/local/bin/ledger-api`, `/usr/bin/head`, and `/usr/bin/ls` are permitted.
+
+**The correct config** in `~/.openclaw/openclaw.json` under the hestia agent:
+
+```json
+"tools": {
+  "allow": ["exec"]
+}
+```
+
+`["ledger-api"]` looks intuitive but is wrong — `ledger-api` is not a plugin tool ID. A non-empty allow list with only unrecognized entries blocks exec entirely. Layer 2 (exec-approvals allowlist) is what scopes Hestia to the ledger binary only.
