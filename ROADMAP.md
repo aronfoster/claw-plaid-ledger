@@ -1,5 +1,9 @@
 # Roadmap
 
+## Human Notes
+
+* I want to add --version and automatically have a version number set by the date the code was checked in. Maybe some github automation?
+
 ## Upcoming Milestones
 
 ### M27 — Plaid Required Attestations (due 2026-09-07)
