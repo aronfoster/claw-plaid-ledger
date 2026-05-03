@@ -10,7 +10,8 @@ an agent can act on it without needing to reconstruct the diagnosis.
 
 - [BUG-018](#bug-018--webhook-handler-falls-back-to-plaid_access_token-when-item_id-is-not-in-itemstoml-crashing-all-multi-item-syncs)
   remains open and is tracked below.
-- BUG-020: pending transactions are replaced with non-pending transactions that have a different transaction ID, date, and we should consider that amount could also change. Allocations and categorizations for pending transactions are orphaned as the old transactions are removed from the database. 
+- BUG-020: pending transactions are replaced with non-pending transactions that have a different transaction ID, date, and we should consider that amount could also change. Allocations and categorizations for pending transactions are orphaned as the old transactions are removed from the database.
+- BUG-021: poke after getting new transactions from ledger sync is not working to wake the OpenClaw agent.
 
 ---
 
