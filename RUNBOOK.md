@@ -672,11 +672,19 @@ curl http://127.0.0.1:8000/health
 ### 7.1 SQLite database backup
 
 The SQLite file at `CLAW_PLAID_LEDGER_DB_PATH` is the complete local
-ledger.  The default location (when `CLAW_PLAID_LEDGER_DB_PATH` is not
-set) is:
+ledger.  The conventional location used by `items.toml.example` and the
+.env template is:
 
 ```
 ~/.local/share/claw-plaid-ledger/ledger.db
+```
+
+`CLAW_PLAID_LEDGER_DB_PATH` is required (the code raises `ConfigError` if
+it is unset), so always confirm the actual path before backing up:
+
+```bash
+ledger doctor | grep CLAW_PLAID_LEDGER_DB_PATH
+# → doctor: config CLAW_PLAID_LEDGER_DB_PATH=/home/<user>/.local/share/claw-plaid-ledger/ledger.db
 ```
 
 Back it up with:
@@ -687,6 +695,20 @@ sqlite3 "$CLAW_PLAID_LEDGER_DB_PATH" ".backup $HOME/ledger-backup-$(date +%Y%m%d
 
 # Or simply copy the file when the server is not running:
 cp "$CLAW_PLAID_LEDGER_DB_PATH" "$HOME/ledger-backup-$(date +%Y%m%d).db"
+```
+
+If the `sqlite3` CLI is not installed, use Python's built-in `sqlite3`
+module — it exposes the same online-backup API and is always available
+because the project depends on Python:
+
+```bash
+python3 -c "
+import sqlite3, os
+src = sqlite3.connect(os.path.expanduser(os.environ['CLAW_PLAID_LEDGER_DB_PATH']))
+dst = sqlite3.connect(os.path.expanduser(f'~/ledger-backup-{__import__(\"datetime\").date.today():%Y%m%d}.db'))
+with dst: src.backup(dst)
+src.close(); dst.close()
+"
 ```
 
 Automate this with a cron job or systemd timer.  Daily backups are
@@ -1428,12 +1450,29 @@ The script:
    tree.  The `--reinstall` flag forces a rebuild even when the version
    number has not changed, which is the normal state during local
    development.
-2. Runs `sudo systemctl restart claw-plaid-ledger`.
-3. Prints `systemctl status` output to confirm the service came back up.
+2. Runs `sudo install -m 755 scripts/ledger-api /usr/local/bin/ledger-api`
+   to refresh the API wrapper.
+3. Runs `sudo systemctl restart claw-plaid-ledger`.
+4. Prints `systemctl status` output to confirm the service came back up.
 
-> **Note:** This script requires `sudo` for the `systemctl restart` step.
-> If your service is installed as a user unit (`systemctl --user`), remove
-> the `sudo` from the script and adjust the `systemctl` calls accordingly.
+> **Note:** This script requires `sudo` for the `ledger-api` install and
+> `systemctl restart` steps.  If your service is installed as a user unit
+> (`systemctl --user`), remove the `sudo` from the script and adjust the
+> `systemctl` calls accordingly.
+
+After the restart, verify the new build is actually serving traffic and
+that startup did not surface any errors:
+
+```bash
+ledger-api /health
+# → {"status":"ok"}
+
+ledger-api "/errors?limit=5"
+# → {"errors":[],"total":0,...} when clean
+```
+
+For a deeper post-deploy check (DB reachable, schema present, item tokens
+loaded), also run `ledger doctor`.
 
 ---
 
