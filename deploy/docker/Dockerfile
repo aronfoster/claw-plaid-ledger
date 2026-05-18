@@ -13,11 +13,11 @@
 # ---------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
-WORKDIR /build
+WORKDIR /app
 
 # Copy dependency manifests first.  Docker caches this layer; the expensive
 # `uv sync` only re-runs when pyproject.toml or uv.lock changes.
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 
 # Install production dependencies into .venv.
 # --frozen       : honor the exact versions in uv.lock
@@ -41,9 +41,10 @@ RUN groupadd --gid 1000 ledger \
 
 WORKDIR /app
 
-# Copy the fully-populated virtual environment from the builder stage.
-# Only the venv is copied — no source tree, no build tools.
-COPY --from=builder /build/.venv /app/.venv
+# Copy the fully-populated virtual environment and editable source from the
+# builder stage. Keeping the same /app path preserves venv entrypoint shebangs.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
 
 # Prepend the venv so `ledger` and `uvicorn` are found without activation.
 ENV PATH="/app/.venv/bin:$PATH"
@@ -52,7 +53,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 # env_file.  No tokens, secrets, or site-specific paths are baked in here.
 
 # The SQLite database lives on a named or bind-mounted volume at /data.
-# Set CLAW_DB_PATH=/data/ledger.db in your .env file.
+# Set CLAW_PLAID_LEDGER_DB_PATH=/data/ledger.db in your .env file.
 VOLUME ["/data"]
 
 # Drop to the non-root user for all subsequent commands.
